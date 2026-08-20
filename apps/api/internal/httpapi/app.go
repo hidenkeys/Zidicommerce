@@ -33,6 +33,8 @@ func New(deps Dependencies) *fiber.App {
 
 	v1 := app.Group("/v1")
 	v1.Post("/auth/login", loginHandler(deps.AuthService))
+	v1.Post("/auth/register", registerHandler(deps.AuthService))
+	deps.Commerce.RegisterPublic(v1)
 
 	protected := v1.Group("", auth.Middleware(deps.TokenManager))
 	protected.Get("/auth/me", meHandler)

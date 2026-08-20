@@ -123,7 +123,25 @@ Commerce domains are intentionally separated:
 - Fulfilment
 - Channel
 
-Phase 2 makes the commerce domains usable through API services. The future bot runtime should orchestrate these services instead of owning commerce business logic.
+Phase 2 makes the commerce domains usable through API services. Phase 3 adds organization onboarding, membership, invitation, store access, and audit foundations. The future bot runtime should orchestrate these services instead of owning commerce business logic.
+
+## Organization Membership
+
+The legacy `users.organization_id` remains for compatibility, but Phase 3 introduces `organization_memberships` as the forward path. Authentication prefers the first active membership, ordered by owner status and creation date. This supports future multi-organization membership without breaking existing JWT issuing.
+
+New merchants register first as unaffiliated users. They then create an organization through onboarding and become the owner `merchant_admin` through an organization membership.
+
+## Store Access
+
+`store_user_assignments` is the store boundary for `store_manager` and `store_staff`. Merchant admins keep organization-wide access. Store-scoped users only see and operate assigned stores through backend joins; frontend filtering is not considered an authorization boundary.
+
+## Invitations
+
+Organization invitations use cryptographically secure random tokens. Only a SHA-256 token hash is stored. Invitations expire, are single-use, and cannot grant `platform_admin`. Raw tokens are not serialized from invitation models or returned from invite API responses.
+
+## Audit Logs
+
+Phase 3 adds `audit_logs` for administrative actions such as organization creation/update, member invitations, member joins, role changes, deactivation, and store access updates. Audit metadata must not contain secrets.
 
 ## Commerce Flow
 
@@ -194,7 +212,7 @@ flowchart TD
     J --> K["Runtime"]
 ```
 
-No Bot Builder or runtime is implemented in Phase 1 or Phase 2.
+No Bot Builder or runtime is implemented in Phase 1, Phase 2, or Phase 3.
 
 ## Existing Zidi Reuse
 

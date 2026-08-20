@@ -2,7 +2,10 @@ package core
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
@@ -25,16 +28,20 @@ type commerceFixture struct {
 func newCommerceFixture(t *testing.T, inventory int) commerceFixture {
 	t.Helper()
 
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := db.AutoMigrate(
 		&organization.Organization{},
 		&organization.User{},
+		&organization.OrganizationMembership{},
+		&organization.OrganizationInvitation{},
+		&organization.AuditLog{},
 		&Store{},
 		&StoreHour{},
 		&StoreFulfilmentMode{},
+		&StoreUserAssignment{},
 		&Category{},
 		&Product{},
 		&Variant{},
@@ -213,5 +220,141 @@ func TestTenantIsolationPreventsCrossOrganizationStoreAccess(t *testing.T) {
 
 	if _, err := fx.service.GetStore(context.Background(), otherActor, fx.store.ID); err == nil {
 		t.Fatal("expected cross-organization store lookup to be rejected")
+	}
+}
+
+func TestOnboardOrganizationCreatesMerchantAdminMembership(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	userID := uuid.New()
+	if err := fx.db.Create(&organization.User{ID: userID, Email: "new@example.com", PasswordHash: "hash", Role: authz.Viewer, Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	org, membership, err := fx.service.OnboardOrganization(context.Background(), auth.CurrentUser{ID: userID, Role: authz.Viewer}, OrganizationInput{
+		Name:         "New Merchant",
+		Slug:         "new-merchant",
+		Country:      "GB",
+		Currency:     "GBP",
+		Timezone:     "Europe/London",
+		ContactEmail: "owner@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if org.ID == uuid.Nil || membership.Role != authz.MerchantAdmin || !membership.IsOwner {
+		t.Fatalf("unexpected onboarding output: %+v %+v", org, membership)
+	}
+
+	var user organization.User
+	if err := fx.db.First(&user, "id = ?", userID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if user.OrganizationID == nil || *user.OrganizationID != org.ID || user.Role != authz.MerchantAdmin {
+		t.Fatalf("expected user to become merchant admin for org, got %+v", user)
+	}
+}
+
+func TestInvitationAcceptanceIsSingleUse(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	invitation, token, err := fx.service.InviteMember(context.Background(), fx.actor, InviteInput{
+		Email:     "staff@example.com",
+		FirstName: "Store",
+		LastName:  "Staff",
+		Role:      authz.StoreStaff.String(),
+		StoreIDs:  []uuid.UUID{fx.store.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialized, err := json.Marshal(invitation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(serialized), invitation.TokenHash) {
+		t.Fatal("invitation token hash should not be serialized")
+	}
+
+	accepted, err := fx.service.AcceptInvitation(context.Background(), AcceptInvitationInput{Token: token, Password: "password123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted.Role != authz.StoreStaff.String() || accepted.OrganizationID != fx.actor.OrganizationID {
+		t.Fatalf("unexpected acceptance: %+v", accepted)
+	}
+	var assignments int64
+	if err := fx.db.Model(&StoreUserAssignment{}).Where("organization_id = ? AND store_id = ? AND user_id = ?", fx.actor.OrganizationID, fx.store.ID, accepted.UserID).Count(&assignments).Error; err != nil {
+		t.Fatal(err)
+	}
+	if assignments != 1 {
+		t.Fatalf("expected invitation store assignment to be created, got %d", assignments)
+	}
+	if _, err := fx.service.AcceptInvitation(context.Background(), AcceptInvitationInput{Token: token, Password: "password123"}); err == nil {
+		t.Fatal("expected second acceptance to be rejected")
+	}
+}
+
+func TestInvitationExpirationRejectsAcceptance(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	_, token, err := fx.service.InviteMember(context.Background(), fx.actor, InviteInput{Email: "expired@example.com", Role: authz.Viewer.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Model(&organization.OrganizationInvitation{}).Where("token_hash = ?", hashInvitationToken(token)).Update("expires_at", fx.service.now().Add(-time.Hour)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.AcceptInvitation(context.Background(), AcceptInvitationInput{Token: token, Password: "password123"}); err == nil {
+		t.Fatal("expected expired invitation to be rejected")
+	}
+}
+
+func TestInviteMemberRejectsPlatformAdminRole(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	if _, _, err := fx.service.InviteMember(context.Background(), fx.actor, InviteInput{Email: "bad@example.com", Role: authz.PlatformAdmin.String()}); err == nil {
+		t.Fatal("expected platform admin invitation to be rejected")
+	}
+}
+
+func TestStoreStaffSeesAssignedStoreOnly(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	otherStore, err := fx.service.CreateStore(context.Background(), fx.actor, StoreInput{Name: "Other Store", Code: "OTHER"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staffID := uuid.New()
+	orgID := fx.actor.OrganizationID
+	if err := fx.db.Create(&organization.User{ID: staffID, OrganizationID: &orgID, Email: "staff-scope@example.com", PasswordHash: "hash", Role: authz.StoreStaff, Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	membership := organization.OrganizationMembership{ID: uuid.New(), OrganizationID: orgID, UserID: staffID, Role: authz.StoreStaff, Status: "active"}
+	if err := fx.db.Create(&membership).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.AssignMemberStores(context.Background(), fx.actor, membership.ID, []uuid.UUID{otherStore.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	stores, err := fx.service.ListStores(context.Background(), auth.CurrentUser{ID: staffID, OrganizationID: orgID, Role: authz.StoreStaff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stores) != 1 || stores[0].ID != otherStore.ID {
+		t.Fatalf("expected only assigned store, got %+v", stores)
+	}
+}
+
+func TestDisabledMemberCannotAuthenticate(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	userID := uuid.New()
+	orgID := fx.actor.OrganizationID
+	if err := fx.db.Create(&organization.User{ID: userID, OrganizationID: &orgID, Email: "disabled@example.com", PasswordHash: "hash", Role: authz.StoreStaff, Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Create(&organization.OrganizationMembership{ID: uuid.New(), OrganizationID: orgID, UserID: userID, Role: authz.StoreStaff, Status: "disabled"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := organization.NewUserRepository(fx.db).FindByEmail(context.Background(), "disabled@example.com")
+	if err == nil || !strings.Contains(err.Error(), "active organization membership") {
+		t.Fatalf("expected disabled membership to block login, got %v", err)
 	}
 }

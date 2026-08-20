@@ -79,6 +79,18 @@ type StoreFulfilmentMode struct {
 
 func (StoreFulfilmentMode) TableName() string { return "store_fulfilment_modes" }
 
+type StoreUserAssignment struct {
+	ID             uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID uuid.UUID `gorm:"type:uuid;index" json:"organization_id"`
+	StoreID        uuid.UUID `gorm:"type:uuid;index" json:"store_id"`
+	UserID         uuid.UUID `gorm:"type:uuid;index" json:"user_id"`
+	Role           string    `json:"role"`
+	CreatedAt      time.Time `json:"created_at"`
+	Store          Store     `gorm:"foreignKey:StoreID" json:"store,omitempty"`
+}
+
+func (StoreUserAssignment) TableName() string { return "store_user_assignments" }
+
 type Category struct {
 	ID             uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
 	OrganizationID uuid.UUID `gorm:"type:uuid;index" json:"organization_id"`

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/email"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
 	"gorm.io/gorm"
@@ -44,11 +45,18 @@ type PaymentVerification struct {
 type Service struct {
 	db              *gorm.DB
 	paymentProvider PaymentProvider
+	mailer          email.Sender
+	appBaseURL      string
 	now             func() time.Time
 }
 
 func NewService(db *gorm.DB, provider PaymentProvider) *Service {
 	return &Service{db: db, paymentProvider: provider, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func (s *Service) ConfigureNotifications(mailer email.Sender, appBaseURL string) {
+	s.mailer = mailer
+	s.appBaseURL = strings.TrimRight(appBaseURL, "/")
 }
 
 func (s *Service) CreateOrganization(ctx context.Context, actor auth.CurrentUser, input OrganizationInput) (organization.Organization, error) {
@@ -61,15 +69,20 @@ func (s *Service) CreateOrganization(ctx context.Context, actor auth.CurrentUser
 	}
 
 	org := organization.Organization{
-		ID:          uuid.New(),
-		Name:        input.Name,
-		Slug:        input.Slug,
-		Description: input.Description,
-		LogoURL:     input.LogoURL,
-		Currency:    defaultString(input.Currency, "NGN"),
-		Timezone:    defaultString(input.Timezone, "Africa/Lagos"),
-		Status:      defaultString(input.Status, "active"),
-		Metadata:    jsonObject(input.Metadata),
+		ID:              uuid.New(),
+		Name:            input.Name,
+		Slug:            input.Slug,
+		Description:     input.Description,
+		LogoURL:         input.LogoURL,
+		Country:         input.Country,
+		ContactName:     input.ContactName,
+		ContactEmail:    input.ContactEmail,
+		ContactPhone:    input.ContactPhone,
+		OnboardingState: jsonObject(input.OnboardingState),
+		Currency:        defaultString(input.Currency, "NGN"),
+		Timezone:        defaultString(input.Timezone, "Africa/Lagos"),
+		Status:          defaultString(input.Status, "active"),
+		Metadata:        jsonObject(input.Metadata),
 	}
 	if err := s.db.WithContext(ctx).Create(&org).Error; err != nil {
 		return organization.Organization{}, err
@@ -122,11 +135,26 @@ func (s *Service) UpdateOrganization(ctx context.Context, actor auth.CurrentUser
 	if input.LogoURL != "" {
 		updates["logo_url"] = input.LogoURL
 	}
+	if input.Country != "" {
+		updates["country"] = input.Country
+	}
 	if input.Currency != "" {
 		updates["currency"] = input.Currency
 	}
 	if input.Timezone != "" {
 		updates["timezone"] = input.Timezone
+	}
+	if input.ContactName != "" {
+		updates["contact_name"] = input.ContactName
+	}
+	if input.ContactEmail != "" {
+		updates["contact_email"] = input.ContactEmail
+	}
+	if input.ContactPhone != "" {
+		updates["contact_phone"] = input.ContactPhone
+	}
+	if input.OnboardingState != "" {
+		updates["onboarding_state"] = jsonObject(input.OnboardingState)
 	}
 	if input.Status != "" {
 		updates["status"] = input.Status
@@ -137,6 +165,7 @@ func (s *Service) UpdateOrganization(ctx context.Context, actor auth.CurrentUser
 	if err := s.db.WithContext(ctx).Model(&org).Updates(updates).Error; err != nil {
 		return organization.Organization{}, err
 	}
+	_ = s.auditTx(s.db.WithContext(ctx), &id, &actor.ID, "organization", &id, "organization_updated", "{}")
 	return s.GetOrganization(ctx, actor, id)
 }
 
@@ -175,7 +204,7 @@ func (s *Service) CreateStore(ctx context.Context, actor auth.CurrentUser, input
 
 func (s *Service) ListStores(ctx context.Context, actor auth.CurrentUser) ([]Store, error) {
 	var stores []Store
-	query := s.storeQuery(s.db.WithContext(ctx), actor).Preload("Hours").Preload("FulfilmentModes").Order("created_at DESC")
+	query := s.storeQuery(s.db.WithContext(ctx), actor).Preload("Hours").Preload("FulfilmentModes").Order("stores.created_at DESC")
 	return stores, query.Find(&stores).Error
 }
 

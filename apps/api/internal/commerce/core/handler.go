@@ -10,17 +10,28 @@ import (
 
 type Handler struct {
 	service *Service
+	tokens  *auth.TokenManager
 }
 
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(service *Service, tokens *auth.TokenManager) *Handler {
+	return &Handler{service: service, tokens: tokens}
 }
 
 func (h *Handler) Register(router fiber.Router) {
+	router.Post("/onboarding/organization", h.onboardOrganization)
+	router.Patch("/onboarding/progress", h.updateOnboarding)
+
 	router.Get("/organizations", auth.RequireRole(authz.PlatformAdmin), h.listOrganizations)
 	router.Post("/organizations", auth.RequireRole(authz.PlatformAdmin), h.createOrganization)
 	router.Get("/organizations/:id", h.getOrganization)
 	router.Patch("/organizations/:id", h.updateOrganization)
+	router.Get("/organizations/current/members", h.listMembers)
+	router.Post("/organizations/current/invitations", h.inviteMember)
+	router.Get("/organizations/current/invitations", h.listInvitations)
+	router.Patch("/organizations/current/members/:id", h.updateMember)
+	router.Get("/organizations/current/members/:id/stores", h.listMemberStores)
+	router.Put("/organizations/current/members/:id/stores", h.assignMemberStores)
+	router.Get("/organizations/current/audit-logs", h.listAuditLogs)
 
 	router.Get("/stores", auth.RequireRole(authz.MerchantAdmin, authz.StoreManager, authz.StoreStaff, authz.Viewer), h.listStores)
 	router.Post("/stores", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.createStore)
@@ -66,6 +77,115 @@ func (h *Handler) Register(router fiber.Router) {
 
 	router.Get("/channels", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.listChannels)
 	router.Post("/channels", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.createChannel)
+}
+
+func (h *Handler) RegisterPublic(router fiber.Router) {
+	router.Post("/invitations/:token/accept", h.acceptInvitation)
+}
+
+func (h *Handler) onboardOrganization(c *fiber.Ctx) error {
+	var input OrganizationInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	org, membership, err := h.service.OnboardOrganization(c.UserContext(), mustUser(c), input)
+	if err != nil {
+		return err
+	}
+	token, err := h.tokens.Issue(membership.UserID, org.ID, membership.Role)
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"data": fiber.Map{"organization": org, "membership": membership, "access_token": token}})
+}
+
+func (h *Handler) updateOnboarding(c *fiber.Ctx) error {
+	var input struct {
+		OnboardingState string `json:"onboarding_state"`
+	}
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.UpdateOnboardingState(c.UserContext(), mustUser(c), input.OnboardingState)
+	return respond(c, data, err)
+}
+
+func (h *Handler) listMembers(c *fiber.Ctx) error {
+	data, err := h.service.ListMembers(c.UserContext(), mustUser(c))
+	return respond(c, data, err)
+}
+
+func (h *Handler) inviteMember(c *fiber.Ctx) error {
+	var input InviteInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	invitation, _, err := h.service.InviteMember(c.UserContext(), mustUser(c), input)
+	return respond(c, invitation, err)
+}
+
+func (h *Handler) listInvitations(c *fiber.Ctx) error {
+	data, err := h.service.ListInvitations(c.UserContext(), mustUser(c))
+	return respond(c, data, err)
+}
+
+func (h *Handler) acceptInvitation(c *fiber.Ctx) error {
+	var input AcceptInvitationInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	input.Token = c.Params("token")
+	accepted, err := h.service.AcceptInvitation(c.UserContext(), input)
+	if err != nil {
+		return err
+	}
+	token, err := h.tokens.Issue(accepted.UserID, accepted.OrganizationID, authz.Role(accepted.Role))
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"data": fiber.Map{"acceptance": accepted, "access_token": token}})
+}
+
+func (h *Handler) updateMember(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input MemberUpdateInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.UpdateMember(c.UserContext(), mustUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) listMemberStores(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.ListMemberStores(c.UserContext(), mustUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) assignMemberStores(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input struct {
+		StoreIDs []uuid.UUID `json:"store_ids"`
+	}
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.AssignMemberStores(c.UserContext(), mustUser(c), id, input.StoreIDs)
+	return respond(c, data, err)
+}
+
+func (h *Handler) listAuditLogs(c *fiber.Ctx) error {
+	data, err := h.service.ListAuditLogs(c.UserContext(), mustUser(c))
+	return respond(c, data, err)
 }
 
 func (h *Handler) createOrganization(c *fiber.Ctx) error {

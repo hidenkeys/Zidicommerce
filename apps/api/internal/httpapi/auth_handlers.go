@@ -37,6 +37,32 @@ func loginHandler(service *auth.Service) fiber.Handler {
 	}
 }
 
+func registerHandler(service *auth.Service) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		var req auth.RegisterInput
+		if err := c.BodyParser(&req); err != nil {
+			return httperror.BadRequest("Invalid registration payload")
+		}
+
+		token, user, err := service.Register(c.UserContext(), req)
+		if err != nil {
+			return err
+		}
+
+		return c.JSON(fiber.Map{
+			"data": fiber.Map{
+				"access_token": token,
+				"user": fiber.Map{
+					"id":              user.ID,
+					"organization_id": user.OrganizationID,
+					"email":           user.Email,
+					"role":            user.Role,
+				},
+			},
+		})
+	}
+}
+
 func meHandler(c *fiber.Ctx) error {
 	user, err := auth.GetCurrentUser(c)
 	if err != nil {

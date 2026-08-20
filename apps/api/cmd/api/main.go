@@ -9,6 +9,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/config"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/database"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/email"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httpapi"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/migrations"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
@@ -47,6 +48,11 @@ func main() {
 		provider = core.NewPaystackProvider(cfg.Payment.PaystackSecret)
 	}
 	commerceService := core.NewService(db, provider)
+	var mailer email.Sender = email.NewLogSender(log, cfg.Email.From)
+	if cfg.Email.Mode == "smtp" {
+		mailer = email.NewSMTPSender(cfg.Email.SMTPHost, cfg.Email.SMTPPort, cfg.Email.SMTPUser, cfg.Email.SMTPPass, cfg.Email.From)
+	}
+	commerceService.ConfigureNotifications(mailer, cfg.Email.AppBaseURL)
 
 	app := httpapi.New(httpapi.Dependencies{
 		Config:       cfg,
@@ -55,7 +61,7 @@ func main() {
 		TokenManager: tokenManager,
 		AuthService:  auth.NewService(userRepo, tokenManager),
 		OrgHandler:   organization.NewHandler(orgRepo),
-		Commerce:     core.NewHandler(commerceService),
+		Commerce:     core.NewHandler(commerceService, tokenManager),
 	})
 
 	log.Info("starting ZidiCommerce API", "port", cfg.ServerPort, "env", cfg.AppEnv)

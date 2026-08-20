@@ -1,9 +1,13 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Route, Routes } from "react-router-dom";
-import { API_BASE_URL, apiGet, apiPatch, apiPost } from "./api/client";
+import { API_BASE_URL, apiGet, apiPatch, apiPost, apiPut, setStoredToken } from "./api/client";
 import { Shell } from "./components/Shell";
 
 type Row = Record<string, unknown>;
+type ApiUser = { id: string; organization_id: string; email?: string; role: string };
+type Organization = Row & { id: string; name?: string; onboarding_state?: string };
+type Member = Row & { id: string; role?: string; status?: string; user?: Row };
+type Store = Row & { id: string; name?: string };
 type Endpoint = {
   title: string;
   description: string;
@@ -15,21 +19,31 @@ type Field = {
   name: string;
   label: string;
   placeholder?: string;
-  type?: "text" | "number" | "select";
-  options?: string[];
 };
+
+const roles = ["merchant_admin", "store_manager", "store_staff", "support_agent", "viewer"];
+const onboardingSteps = [
+  ["business_profile", "Business profile"],
+  ["first_store", "First store"],
+  ["fulfilment", "Fulfilment"],
+  ["team", "Team"],
+  ["catalogue", "Catalogue"],
+  ["inventory", "Inventory"],
+  ["channels", "Channels"],
+  ["payments", "Payments"],
+];
 
 const endpoints: Record<string, Endpoint> = {
   organizations: {
     title: "Organizations",
-    description: "Create and manage tenant records. Platform admins can see all organizations.",
+    description: "Platform-level tenant records. Merchant users should use Organization > Business.",
     listPath: "/organizations",
     createPath: "/organizations",
     fields: [
       { name: "name", label: "Name" },
       { name: "slug", label: "Slug" },
-      { name: "currency", label: "Currency", placeholder: "NGN" },
-      { name: "timezone", label: "Timezone", placeholder: "Africa/Lagos" },
+      { name: "currency", label: "Currency", placeholder: "USD" },
+      { name: "timezone", label: "Timezone", placeholder: "UTC" },
       { name: "description", label: "Description" },
     ],
   },
@@ -72,33 +86,319 @@ const endpoints: Record<string, Endpoint> = {
   },
 };
 
-const dashboardCards = [
-  ["Stores", "Locations, hours and fulfilment options."],
-  ["Catalogue", "Categories, products, variants, prices and images."],
-  ["Inventory", "Store-level stock and low-stock visibility."],
-  ["Orders", "Controlled order lifecycle and fulfilment handoff."],
-  ["Payments", "Provider abstraction with idempotent initialization."],
-  ["Channels", "Communication channel configuration foundation."],
-];
-
 function Dashboard() {
+  const [me, setMe] = useState<ApiUser | null>(null);
+  const [org, setOrg] = useState<Organization | null>(null);
+  const [message, setMessage] = useState("");
+
+  async function load() {
+    setMessage("");
+    try {
+      const meResponse = await apiGet<ApiUser>("/auth/me");
+      setMe(meResponse.data);
+      if (meResponse.data.organization_id) {
+        const orgResponse = await apiGet<Organization>("/organizations/current");
+        setOrg(orgResponse.data);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Request failed");
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const state = parseState(org?.onboarding_state);
+  const done = onboardingSteps.filter(([key]) => state[key]).length;
+
   return (
     <section className="content">
       <div className="section-heading">
-        <h2>Commerce operations</h2>
-        <p>Phase 2 turns the foundation into usable commerce primitives that a future bot runtime can orchestrate.</p>
+        <h2>Overview</h2>
+        <p>Onboard a merchant, configure commerce operations, and keep organization access controlled from one admin surface.</p>
       </div>
+      {message ? <p className="error-text">{message}</p> : null}
       <div className="grid">
-        {dashboardCards.map(([title, body]) => (
-          <article className="summary-card" key={title}>
-            <span>{title}</span>
-            <p>{body}</p>
-          </article>
+        <article className="summary-card">
+          <span>API base</span>
+          <p>{API_BASE_URL}</p>
+        </article>
+        <article className="summary-card">
+          <span>Current role</span>
+          <p>{me?.role ?? "Connect an API token"}</p>
+        </article>
+        <article className="summary-card">
+          <span>Organization</span>
+          <p>{org?.name ?? "No organization loaded"}</p>
+        </article>
+        <article className="summary-card">
+          <span>Onboarding</span>
+          <p>{done} of {onboardingSteps.length} steps marked complete.</p>
+        </article>
+      </div>
+      <div className="table-wrap checklist">
+        {onboardingSteps.map(([key, label]) => (
+          <button key={key} className={state[key] ? "step complete" : "step"} type="button">
+            <span>{state[key] ? "✓" : "○"}</span>
+            {label}
+          </button>
         ))}
       </div>
-      <div className="api-note">
-        <strong>API base</strong>
-        <code>{API_BASE_URL}</code>
+    </section>
+  );
+}
+
+function BusinessScreen() {
+  const [org, setOrg] = useState<Organization | null>(null);
+  const [form, setForm] = useState<Record<string, string>>({});
+  const [signup, setSignup] = useState({ email: "", password: "", first_name: "", last_name: "" });
+  const [message, setMessage] = useState("");
+
+  async function load() {
+    try {
+      const response = await apiGet<Organization>("/organizations/current");
+      setOrg(response.data);
+      setForm(rowToForm(response.data, ["name", "slug", "description", "logo_url", "country", "currency", "timezone", "contact_name", "contact_email", "contact_phone"]));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "No organization loaded yet");
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function register(event: FormEvent) {
+    event.preventDefault();
+    const response = await apiPost<{ access_token: string }>("/auth/register", signup);
+    setStoredToken(response.data.access_token);
+    setMessage("Account created. Complete the business profile to create the organization.");
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const payload = clean(form);
+    if (org?.id) {
+      const response = await apiPatch<Organization>(`/organizations/${org.id}`, payload);
+      setOrg(response.data);
+      setMessage("Business information saved.");
+    } else {
+      const response = await apiPost<{ organization: Organization; access_token: string }>("/onboarding/organization", payload);
+      setOrg(response.data.organization);
+      setStoredToken(response.data.access_token);
+      setMessage("Organization created. Your new merchant admin token has been saved.");
+    }
+  }
+
+  async function saveProgress(key: string) {
+    const next = { ...parseState(org?.onboarding_state), [key]: true };
+    const response = await apiPatch<Organization>("/onboarding/progress", { onboarding_state: JSON.stringify(next) });
+    setOrg(response.data);
+    setMessage("Onboarding progress saved.");
+  }
+
+  return (
+    <section className="content">
+      <div className="section-heading">
+        <h2>Business</h2>
+        <p>Create the organization for a new merchant, then update business identity, contact, currency and timezone.</p>
+      </div>
+      {message ? <p className="error-text">{message}</p> : null}
+      <div className="split">
+        <form className="resource-form" onSubmit={register}>
+          <strong>Create admin account</strong>
+          <input placeholder="First name" value={signup.first_name} onChange={(event) => setSignup({ ...signup, first_name: event.target.value })} />
+          <input placeholder="Last name" value={signup.last_name} onChange={(event) => setSignup({ ...signup, last_name: event.target.value })} />
+          <input placeholder="Email" value={signup.email} onChange={(event) => setSignup({ ...signup, email: event.target.value })} />
+          <input placeholder="Password" type="password" value={signup.password} onChange={(event) => setSignup({ ...signup, password: event.target.value })} />
+          <button type="submit">Register</button>
+        </form>
+        <div className="table-wrap checklist">
+          {onboardingSteps.map(([key, label]) => (
+            <button key={key} className={parseState(org?.onboarding_state)[key] ? "step complete" : "step"} type="button" onClick={() => saveProgress(key)}>
+              <span>{parseState(org?.onboarding_state)[key] ? "✓" : "○"}</span>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <form className="resource-form" onSubmit={submit}>
+        {[
+          ["name", "Business name"],
+          ["slug", "Slug"],
+          ["description", "Description"],
+          ["logo_url", "Logo URL"],
+          ["country", "Country"],
+          ["currency", "Currency"],
+          ["timezone", "Timezone"],
+          ["contact_name", "Contact name"],
+          ["contact_email", "Contact email"],
+          ["contact_phone", "Contact phone"],
+        ].map(([name, label]) => (
+          <label key={name}>
+            {label}
+            <input value={form[name] ?? ""} onChange={(event) => setForm((current) => ({ ...current, [name]: event.target.value }))} />
+          </label>
+        ))}
+        <button type="submit">{org?.id ? "Save business" : "Create organization"}</button>
+      </form>
+    </section>
+  );
+}
+
+function TeamScreen() {
+  const [members, setMembers] = useState<Member[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
+  const [invite, setInvite] = useState({ email: "", first_name: "", last_name: "", role: "store_staff", store_ids: "" });
+  const [message, setMessage] = useState("");
+
+  async function load() {
+    try {
+      const [memberResponse, storeResponse] = await Promise.all([apiGet<Member[]>("/organizations/current/members"), apiGet<Store[]>("/stores")]);
+      setMembers(memberResponse.data);
+      setStores(storeResponse.data);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Request failed");
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<Row>("/organizations/current/invitations", {
+      email: invite.email,
+      first_name: invite.first_name,
+      last_name: invite.last_name,
+      role: invite.role,
+      store_ids: splitIDs(invite.store_ids),
+    });
+    setInvite({ email: "", first_name: "", last_name: "", role: "store_staff", store_ids: "" });
+    setMessage("Invitation created. The token is sent through configured email.");
+    await load();
+  }
+
+  async function updateMember(id: string, payload: Row) {
+    await apiPatch<Row>(`/organizations/current/members/${id}`, payload);
+    await load();
+  }
+
+  return (
+    <section className="content">
+      <div className="section-heading">
+        <h2>Team</h2>
+        <p>Invite staff, assign roles, deactivate/reactivate members, and apply store-scoped access.</p>
+      </div>
+      {message ? <p className="error-text">{message}</p> : null}
+      <form className="resource-form" onSubmit={submit}>
+        <strong>Invite team member</strong>
+        <input placeholder="First name" value={invite.first_name} onChange={(event) => setInvite({ ...invite, first_name: event.target.value })} />
+        <input placeholder="Last name" value={invite.last_name} onChange={(event) => setInvite({ ...invite, last_name: event.target.value })} />
+        <input placeholder="Email" value={invite.email} onChange={(event) => setInvite({ ...invite, email: event.target.value })} />
+        <select value={invite.role} onChange={(event) => setInvite({ ...invite, role: event.target.value })}>
+          {roles.map((role) => <option key={role} value={role}>{role}</option>)}
+        </select>
+        <input placeholder={`Store IDs, comma separated (${stores.length} stores available)`} value={invite.store_ids} onChange={(event) => setInvite({ ...invite, store_ids: event.target.value })} />
+        <button type="submit">Invite</button>
+      </form>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Role</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {members.map((member) => (
+              <tr key={member.id}>
+                <td>{memberName(member)}</td>
+                <td>{String(member.user?.email ?? "")}</td>
+                <td>{String(member.role ?? "")}</td>
+                <td>{String(member.status ?? "")}</td>
+                <td>{formatCell(member.created_at)}</td>
+                <td className="actions">
+                  <select defaultValue={String(member.role ?? "viewer")} onChange={(event) => updateMember(member.id, { role: event.target.value })}>
+                    {roles.map((role) => <option key={role} value={role}>{role}</option>)}
+                  </select>
+                  {member.status === "disabled" ? (
+                    <button type="button" onClick={() => updateMember(member.id, { status: "active" })}>Reactivate</button>
+                  ) : (
+                    <button type="button" onClick={() => window.confirm("Deactivate this member?") && updateMember(member.id, { status: "disabled" })}>Deactivate</button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <ResourceTable rows={stores} title="Store IDs for assignment" />
+    </section>
+  );
+}
+
+function StoreAccessScreen() {
+  const [members, setMembers] = useState<Member[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
+  const [selectedMember, setSelectedMember] = useState("");
+  const [storeIDs, setStoreIDs] = useState("");
+  const [assignments, setAssignments] = useState<Row[]>([]);
+  const [message, setMessage] = useState("");
+
+  async function load() {
+    try {
+      const [memberResponse, storeResponse] = await Promise.all([apiGet<Member[]>("/organizations/current/members"), apiGet<Store[]>("/stores")]);
+      setMembers(memberResponse.data);
+      setStores(storeResponse.data);
+      setSelectedMember((current) => current || memberResponse.data[0]?.id || "");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Request failed");
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function showAssignments(memberID = selectedMember) {
+    if (!memberID) return;
+    const response = await apiGet<Row[]>(`/organizations/current/members/${memberID}/stores`);
+    setAssignments(response.data);
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    await apiPut<Row[]>(`/organizations/current/members/${selectedMember}/stores`, { store_ids: splitIDs(storeIDs) });
+    setMessage("Store access updated.");
+    await showAssignments();
+  }
+
+  return (
+    <section className="content">
+      <div className="section-heading">
+        <h2>Stores & Access</h2>
+        <p>Assign store managers and store staff to specific locations. Backend store scoping uses these assignments.</p>
+      </div>
+      {message ? <p className="error-text">{message}</p> : null}
+      <form className="resource-form" onSubmit={submit}>
+        <strong>Assign stores</strong>
+        <select value={selectedMember} onChange={(event) => setSelectedMember(event.target.value)}>
+          {members.map((member) => <option key={member.id} value={member.id}>{memberName(member)} · {String(member.role ?? "")}</option>)}
+        </select>
+        <input placeholder="Store IDs, comma separated" value={storeIDs} onChange={(event) => setStoreIDs(event.target.value)} />
+        <button type="submit">Save access</button>
+        <button type="button" onClick={() => showAssignments()}>View assignments</button>
+      </form>
+      <div className="split">
+        <ResourceTable rows={stores} title="Stores" />
+        <ResourceTable rows={assignments} title="Current assignments" />
       </div>
     </section>
   );
@@ -132,7 +432,7 @@ function BasicResourceScreen({ resource }: { resource: keyof typeof endpoints })
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!config.createPath) return;
-    const payload = Object.fromEntries(Object.entries(form).filter(([, value]) => value !== ""));
+    const payload = clean(form);
     try {
       await apiPost<Row>(config.createPath, resource === "stores" ? withDefaultFulfilment(payload) : payload);
       setForm({});
@@ -152,11 +452,7 @@ function BasicResourceScreen({ resource }: { resource: keyof typeof endpoints })
         {config.fields?.map((field) => (
           <label key={field.name}>
             {field.label}
-            <input
-              value={form[field.name] ?? ""}
-              placeholder={field.placeholder}
-              onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.value }))}
-            />
+            <input value={form[field.name] ?? ""} placeholder={field.placeholder} onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.value }))} />
           </label>
         ))}
         <button type="submit">Create</button>
@@ -175,10 +471,7 @@ function CatalogueScreen() {
 
   async function load() {
     try {
-      const [categoryResponse, productResponse] = await Promise.all([
-        apiGet<Row[]>("/catalogue/categories"),
-        apiGet<Row[]>("/catalogue/products"),
-      ]);
+      const [categoryResponse, productResponse] = await Promise.all([apiGet<Row[]>("/catalogue/categories"), apiGet<Row[]>("/catalogue/products")]);
       setCategories(categoryResponse.data);
       setProducts(productResponse.data);
     } catch (error) {
@@ -203,15 +496,7 @@ function CatalogueScreen() {
       name: product.name,
       slug: product.slug,
       status: "active",
-      variants: [
-        {
-          sku: product.sku,
-          name: product.variant,
-          price_minor: Number(product.price_minor || 0),
-          currency: "NGN",
-          status: "active",
-        },
-      ],
+      variants: [{ sku: product.sku, name: product.variant, price_minor: Number(product.price_minor || 0), currency: "USD", status: "active" }],
     });
     setProduct({ name: "", slug: "", sku: "", variant: "Regular", price_minor: "" });
     await load();
@@ -326,9 +611,7 @@ function OrdersScreen() {
       <form className="resource-form" onSubmit={submit}>
         <input placeholder="Order ID" value={transition.order_id} onChange={(event) => setTransition({ ...transition, order_id: event.target.value })} />
         <select value={transition.status} onChange={(event) => setTransition({ ...transition, status: event.target.value })}>
-          {["processing", "ready", "out_for_delivery", "completed", "cancelled"].map((status) => (
-            <option key={status} value={status}>{status}</option>
-          ))}
+          {["processing", "ready", "out_for_delivery", "completed", "cancelled"].map((status) => <option key={status} value={status}>{status}</option>)}
         </select>
         <button type="submit">Transition order</button>
       </form>
@@ -423,6 +706,34 @@ function FulfilmentScreen() {
   );
 }
 
+function AuditLogScreen() {
+  const [rows, setRows] = useState<Row[]>([]);
+  const [message, setMessage] = useState("");
+
+  async function load() {
+    try {
+      const response = await apiGet<Row[]>("/organizations/current/audit-logs");
+      setRows(response.data);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Request failed");
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  return (
+    <section className="content">
+      <div className="section-heading">
+        <h2>Audit logs</h2>
+        <p>Administrative events for organization, member, invitation and store-access changes.</p>
+      </div>
+      <ResourceTable rows={rows} message={message} />
+    </section>
+  );
+}
+
 function ResourceTable({ rows, loading, message, title }: { rows: Row[]; loading?: boolean; message?: string; title?: string }) {
   const columns = useMemo(() => Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 8), [rows]);
   return (
@@ -439,9 +750,7 @@ function ResourceTable({ rows, loading, message, title }: { rows: Row[]; loading
           <tbody>
             {rows.map((row, index) => (
               <tr key={String(row.id ?? index)}>
-                {columns.map((column) => (
-                  <td key={column}>{formatCell(row[column])}</td>
-                ))}
+                {columns.map((column) => <td key={column}>{formatCell(row[column])}</td>)}
               </tr>
             ))}
           </tbody>
@@ -451,22 +760,22 @@ function ResourceTable({ rows, loading, message, title }: { rows: Row[]; loading
   );
 }
 
-function Placeholder({ title }: { title: string }) {
+function Placeholder({ title, body = "This section is reserved for a later phase." }: { title: string; body?: string }) {
   return (
     <section className="content">
       <div className="section-heading">
         <h2>{title}</h2>
-        <p>This navigation area is reserved. The Bot Builder and runtime remain out of scope for Phase 2.</p>
+        <p>{body}</p>
       </div>
       <div className="empty-state">
-        <strong>Boundary established</strong>
-        <span>No bot configuration workflow has been implemented here.</span>
+        <strong>Coming soon</strong>
+        <span>No bot builder or runtime has been implemented in Phase 3.</span>
       </div>
     </section>
   );
 }
 
-function withDefaultFulfilment(payload: Record<string, string>) {
+function withDefaultFulfilment(payload: Row) {
   return {
     ...payload,
     fulfilment_modes: [
@@ -475,6 +784,32 @@ function withDefaultFulfilment(payload: Record<string, string>) {
       { mode: "merchant_rider", enabled: true },
     ],
   };
+}
+
+function rowToForm(row: Row, fields: string[]) {
+  return Object.fromEntries(fields.map((field) => [field, String(row[field] ?? "")]));
+}
+
+function clean(form: Record<string, string>) {
+  return Object.fromEntries(Object.entries(form).filter(([, value]) => value.trim() !== ""));
+}
+
+function splitIDs(value: string) {
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function parseState(raw?: string) {
+  if (!raw) return {} as Record<string, boolean>;
+  try {
+    return JSON.parse(raw) as Record<string, boolean>;
+  } catch {
+    return {} as Record<string, boolean>;
+  }
+}
+
+function memberName(member: Member) {
+  const user = member.user ?? {};
+  return [user.first_name, user.last_name].filter(Boolean).join(" ") || String(user.email ?? member.id);
 }
 
 function formatCell(value: unknown) {
@@ -488,17 +823,21 @@ export default function App() {
     <Routes>
       <Route element={<Shell />}>
         <Route index element={<Dashboard />} />
-        <Route path="organizations" element={<BasicResourceScreen resource="organizations" />} />
+        <Route path="platform/organizations" element={<BasicResourceScreen resource="organizations" />} />
         <Route path="commerce/stores" element={<BasicResourceScreen resource="stores" />} />
         <Route path="commerce/catalogue" element={<CatalogueScreen />} />
         <Route path="commerce/inventory" element={<InventoryScreen />} />
         <Route path="commerce/orders" element={<OrdersScreen />} />
         <Route path="commerce/customers" element={<BasicResourceScreen resource="customers" />} />
-        <Route path="payments" element={<PaymentsScreen />} />
-        <Route path="fulfilment" element={<FulfilmentScreen />} />
-        <Route path="channels" element={<BasicResourceScreen resource="channels" />} />
-        <Route path="team" element={<Placeholder title="Team" />} />
-        <Route path="settings" element={<Placeholder title="Settings" />} />
+        <Route path="organization/business" element={<BusinessScreen />} />
+        <Route path="organization/team" element={<TeamScreen />} />
+        <Route path="organization/access" element={<StoreAccessScreen />} />
+        <Route path="organization/audit-logs" element={<AuditLogScreen />} />
+        <Route path="configuration/payments" element={<PaymentsScreen />} />
+        <Route path="configuration/fulfilment" element={<FulfilmentScreen />} />
+        <Route path="configuration/channels" element={<BasicResourceScreen resource="channels" />} />
+        <Route path="automation/bots" element={<Placeholder title="Bots" body="Automation is intentionally disabled until the organization and access model is stable." />} />
+        <Route path="settings" element={<BusinessScreen />} />
         <Route path="*" element={<Placeholder title="Planned module" />} />
       </Route>
     </Routes>

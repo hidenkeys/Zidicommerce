@@ -19,6 +19,7 @@ type Config struct {
 	Database      DatabaseConfig
 	JWT           JWTConfig
 	Payment       PaymentConfig
+	Email         EmailConfig
 }
 
 type DatabaseConfig struct {
@@ -41,6 +42,16 @@ type JWTConfig struct {
 type PaymentConfig struct {
 	Provider       string
 	PaystackSecret string
+}
+
+type EmailConfig struct {
+	Mode       string
+	SMTPHost   string
+	SMTPPort   string
+	SMTPUser   string
+	SMTPPass   string
+	From       string
+	AppBaseURL string
 }
 
 func Load() (Config, error) {
@@ -67,6 +78,15 @@ func Load() (Config, error) {
 		Payment: PaymentConfig{
 			Provider:       getenv("PAYMENT_PROVIDER", "test"),
 			PaystackSecret: os.Getenv("PAYSTACK_SECRET_KEY"),
+		},
+		Email: EmailConfig{
+			Mode:       getenv("EMAIL_MODE", "log"),
+			SMTPHost:   os.Getenv("SMTP_HOST"),
+			SMTPPort:   getenv("SMTP_PORT", "587"),
+			SMTPUser:   os.Getenv("SMTP_USER"),
+			SMTPPass:   os.Getenv("SMTP_PASSWORD"),
+			From:       getenv("EMAIL_FROM", "noreply@zidicommerce.local"),
+			AppBaseURL: getenv("APP_BASE_URL", "http://localhost:3000"),
 		},
 	}
 

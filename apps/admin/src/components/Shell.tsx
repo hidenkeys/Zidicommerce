@@ -3,10 +3,12 @@ import { getStoredToken, setStoredToken } from "../api/client";
 
 const groups = [
   {
+    label: "Overview",
+    items: [["Dashboard", "/"]],
+  },
+  {
     label: "Commerce",
     items: [
-      ["Dashboard", "/"],
-      ["Organizations", "/organizations"],
       ["Stores", "/commerce/stores"],
       ["Catalogue", "/commerce/catalogue"],
       ["Inventory", "/commerce/inventory"],
@@ -15,35 +17,35 @@ const groups = [
     ],
   },
   {
+    label: "Organization",
+    items: [
+      ["Business", "/organization/business"],
+      ["Team", "/organization/team"],
+      ["Stores & Access", "/organization/access"],
+      ["Audit logs", "/organization/audit-logs"],
+    ],
+  },
+  {
+    label: "Configuration",
+    items: [
+      ["Payments", "/configuration/payments"],
+      ["Fulfilment", "/configuration/fulfilment"],
+      ["Channels", "/configuration/channels"],
+    ],
+  },
+  {
     label: "Automation",
     items: [
       ["Bots", "/automation/bots"],
-      ["Conversations", "/automation/conversations"],
     ],
   },
   {
-    label: "Bot Builder",
-    items: [
-      ["Overview", "/bot-builder"],
-      ["Flow", "/bot-builder/flow"],
-      ["Questions", "/bot-builder/questions"],
-      ["Responses", "/bot-builder/responses"],
-      ["Variables", "/bot-builder/variables"],
-      ["Actions", "/bot-builder/actions"],
-      ["Conditions", "/bot-builder/conditions"],
-      ["Integrations", "/bot-builder/integrations"],
-      ["Publish", "/bot-builder/publish"],
-    ],
+    label: "Platform",
+    items: [["Organizations", "/platform/organizations"]],
   },
   {
-    label: "Operations",
-    items: [
-      ["Channels", "/channels"],
-      ["Payments", "/payments"],
-      ["Fulfilment", "/fulfilment"],
-      ["Team", "/team"],
-      ["Settings", "/settings"],
-    ],
+    label: "System",
+    items: [["Settings", "/settings"]],
   },
 ];
 
@@ -83,7 +85,7 @@ export function Shell() {
       <main className="main-panel">
         <header className="topbar">
           <div>
-            <span className="eyebrow">Phase 1 Foundation</span>
+            <span className="eyebrow">Phase 3 Onboarding</span>
             <h1>ZidiCommerce Admin</h1>
           </div>
           <button type="button" onClick={saveToken}>Connect API</button>

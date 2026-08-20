@@ -7,14 +7,19 @@ import (
 )
 
 type OrganizationInput struct {
-	Name        string `json:"name"`
-	Slug        string `json:"slug"`
-	Description string `json:"description"`
-	LogoURL     string `json:"logo_url"`
-	Currency    string `json:"currency"`
-	Timezone    string `json:"timezone"`
-	Status      string `json:"status"`
-	Metadata    string `json:"metadata"`
+	Name            string `json:"name"`
+	Slug            string `json:"slug"`
+	Description     string `json:"description"`
+	LogoURL         string `json:"logo_url"`
+	Country         string `json:"country"`
+	Currency        string `json:"currency"`
+	Timezone        string `json:"timezone"`
+	ContactName     string `json:"contact_name"`
+	ContactEmail    string `json:"contact_email"`
+	ContactPhone    string `json:"contact_phone"`
+	OnboardingState string `json:"onboarding_state"`
+	Status          string `json:"status"`
+	Metadata        string `json:"metadata"`
 }
 
 func (i *OrganizationInput) normalize() {
@@ -23,6 +28,41 @@ func (i *OrganizationInput) normalize() {
 	i.Currency = strings.ToUpper(strings.TrimSpace(i.Currency))
 	i.Timezone = strings.TrimSpace(i.Timezone)
 	i.Status = strings.ToLower(strings.TrimSpace(i.Status))
+	i.ContactEmail = strings.ToLower(strings.TrimSpace(i.ContactEmail))
+}
+
+type InviteInput struct {
+	Email     string      `json:"email"`
+	FirstName string      `json:"first_name"`
+	LastName  string      `json:"last_name"`
+	Role      string      `json:"role"`
+	StoreIDs  []uuid.UUID `json:"store_ids"`
+}
+
+func (i *InviteInput) normalize() {
+	i.Email = strings.ToLower(strings.TrimSpace(i.Email))
+	i.Role = strings.ToLower(strings.TrimSpace(i.Role))
+	i.FirstName = strings.TrimSpace(i.FirstName)
+	i.LastName = strings.TrimSpace(i.LastName)
+}
+
+type AcceptInvitationInput struct {
+	Token     string `json:"token"`
+	Password  string `json:"password"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+}
+
+type MemberUpdateInput struct {
+	Role     string      `json:"role"`
+	Status   string      `json:"status"`
+	StoreIDs []uuid.UUID `json:"store_ids"`
+}
+
+type InvitationAcceptance struct {
+	UserID         uuid.UUID `json:"user_id"`
+	OrganizationID uuid.UUID `json:"organization_id"`
+	Role           string    `json:"role"`
 }
 
 type StoreInput struct {

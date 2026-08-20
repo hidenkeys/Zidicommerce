@@ -26,7 +26,19 @@ Phase 2 adds functional commerce core APIs:
 - fulfilment and channel foundations
 - operational admin screens
 
-It intentionally does not include WhatsApp, Paystack checkout, Bot Builder, Bot Runtime, Bing Chun-specific logic, or production deployment.
+Phase 3 adds merchant onboarding and organization access:
+
+- public user registration
+- merchant organization onboarding
+- organization memberships
+- secure, expiring invitations
+- email sender abstraction
+- store-level staff assignments
+- team management screens
+- business settings and onboarding progress
+- audit log foundation
+
+It intentionally does not include WhatsApp, Bot Builder, Bot Runtime, LLM orchestration, Bing Chun-specific logic, or production deployment.
 
 ## Repository Structure
 

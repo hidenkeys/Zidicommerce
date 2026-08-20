@@ -18,7 +18,10 @@ At minimum set:
 ```text
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/zidicommerce?sslmode=disable
 JWT_SECRET=replace-with-a-long-random-secret
+EMAIL_MODE=log
 ```
+
+Invitation email uses `EMAIL_MODE=log` locally by default. For SMTP-backed invitations set `EMAIL_MODE=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM`, and `APP_BASE_URL`.
 
 ## Database Setup
 
@@ -84,17 +87,32 @@ cd apps/api
 go test ./...
 ```
 
-The tests do not require a live production database. They cover health behavior, config DSNs, migration runner behavior, token issuing/parsing, auth middleware, role policy, tenant scope validation, cart totals, order creation, insufficient inventory, inventory decrement, invalid transitions, payment idempotency, and tenant isolation.
+The tests do not require a live production database. They cover health behavior, config DSNs, migration runner behavior, token issuing/parsing, auth middleware, role policy, tenant scope validation, cart totals, order creation, insufficient inventory, inventory decrement, invalid transitions, payment idempotency, tenant isolation, organization onboarding, invitations, role restrictions, store-level access, and disabled member login protection.
 
 ## Commerce API
 
-Core Phase 2 endpoints:
+Core Phase 2 and Phase 3 endpoints:
 
 ```text
+POST   /v1/auth/register
 GET    /v1/organizations
 POST   /v1/organizations
 GET    /v1/organizations/:id
 PATCH  /v1/organizations/:id
+GET    /v1/organizations/current
+
+POST   /v1/onboarding/organization
+PATCH  /v1/onboarding/progress
+
+GET    /v1/organizations/current/members
+POST   /v1/organizations/current/invitations
+GET    /v1/organizations/current/invitations
+PATCH  /v1/organizations/current/members/:id
+GET    /v1/organizations/current/members/:id/stores
+PUT    /v1/organizations/current/members/:id/stores
+GET    /v1/organizations/current/audit-logs
+
+POST   /v1/invitations/:token/accept
 
 GET    /v1/stores
 POST   /v1/stores
@@ -144,11 +162,9 @@ POST   /v1/channels
 
 ## Phase Guardrails
 
-Do not add these in Phase 1 or Phase 2:
+Do not add these before the bot phase:
 
 - WhatsApp webhooks
-- Paystack checkout
-- delivery integrations
 - Bing Chun-specific logic
 - Bot Builder
 - Bot Runtime
