@@ -1,3 +1,3 @@
-// Package bot is reserved for the future configuration-driven bot builder and runtime.
+// Package bot owns configuration-only bot builder models, validation, publishing,
+// and admin APIs. Runtime execution is intentionally left to a later phase.
 package bot
-

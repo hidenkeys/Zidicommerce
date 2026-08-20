@@ -87,7 +87,7 @@ cd apps/api
 go test ./...
 ```
 
-The tests do not require a live production database. They cover health behavior, config DSNs, migration runner behavior, token issuing/parsing, auth middleware, role policy, tenant scope validation, cart totals, order creation, insufficient inventory, inventory decrement, invalid transitions, payment idempotency, tenant isolation, organization onboarding, invitations, role restrictions, store-level access, and disabled member login protection.
+The tests do not require a live production database. They cover health behavior, config DSNs, migration runner behavior, token issuing/parsing, auth middleware, role policy, tenant scope validation, cart totals, order creation, insufficient inventory, inventory decrement, invalid transitions, payment idempotency, tenant isolation, organization onboarding, invitations, role restrictions, store-level access, disabled member login protection, bot builder validation, tenant isolation, publish snapshots, immutability, and bot role restrictions.
 
 ## Commerce API
 
@@ -160,12 +160,51 @@ GET    /v1/channels
 POST   /v1/channels
 ```
 
+## Bot Builder API
+
+Phase 4 endpoints are configuration-only and require an authenticated organization user. Merchant admins and platform admins can edit and publish; store managers, support agents, and viewers can inspect configuration.
+
+```text
+GET    /v1/bot-modules
+GET    /v1/bot-actions
+GET    /v1/bot-question-types
+
+GET    /v1/bots
+POST   /v1/bots
+GET    /v1/bots/:id
+PATCH  /v1/bots/:id
+GET    /v1/bots/:id/versions
+POST   /v1/bots/:id/versions
+
+GET    /v1/bot-versions/:id/configuration
+GET    /v1/bot-versions/:id/modules
+POST   /v1/bot-versions/:id/modules
+GET    /v1/bot-versions/:id/variables
+POST   /v1/bot-versions/:id/variables
+GET    /v1/bot-versions/:id/questions
+POST   /v1/bot-versions/:id/questions
+GET    /v1/bot-versions/:id/actions
+POST   /v1/bot-versions/:id/actions
+GET    /v1/bot-versions/:id/conditions
+POST   /v1/bot-versions/:id/conditions
+GET    /v1/bot-versions/:id/integrations
+POST   /v1/bot-versions/:id/integrations
+GET    /v1/bot-versions/:id/steps
+POST   /v1/bot-versions/:id/steps
+PATCH  /v1/bot-steps/:id
+POST   /v1/bot-versions/:id/validate
+GET    /v1/bot-versions/:id/preview
+POST   /v1/bot-versions/:id/publish
+```
+
+The preview endpoint returns a configuration preview only. It does not send channel messages, initialize payments, create orders, call delivery providers, or invoke an LLM.
+
 ## Phase Guardrails
 
-Do not add these before the bot phase:
+Do not add these before the runtime phase:
 
 - WhatsApp webhooks
 - Bing Chun-specific logic
-- Bot Builder
 - Bot Runtime
-- full commerce screens
+- LLM orchestration
+- live conversation sessions

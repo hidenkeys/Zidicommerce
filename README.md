@@ -38,7 +38,17 @@ Phase 3 adds merchant onboarding and organization access:
 - business settings and onboarding progress
 - audit log foundation
 
-It intentionally does not include WhatsApp, Bot Builder, Bot Runtime, LLM orchestration, Bing Chun-specific logic, or production deployment.
+Phase 4 adds the configurable Bot Builder foundation:
+
+- organization-scoped bots and bot versions
+- reusable module, action, and question catalogues
+- variables, questions, actions, conditions, integrations, and steps
+- validation before publish
+- immutable published snapshots
+- Bot Builder admin screen
+- audit events for bot creation, validation, and publishing
+
+It intentionally does not include WhatsApp runtime execution, LLM orchestration, Bing Chun-specific logic, or production deployment.
 
 ## Repository Structure
 

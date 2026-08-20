@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/config"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/database"
@@ -53,6 +54,7 @@ func main() {
 		mailer = email.NewSMTPSender(cfg.Email.SMTPHost, cfg.Email.SMTPPort, cfg.Email.SMTPUser, cfg.Email.SMTPPass, cfg.Email.From)
 	}
 	commerceService.ConfigureNotifications(mailer, cfg.Email.AppBaseURL)
+	botService := bot.NewService(db)
 
 	app := httpapi.New(httpapi.Dependencies{
 		Config:       cfg,
@@ -62,6 +64,7 @@ func main() {
 		AuthService:  auth.NewService(userRepo, tokenManager),
 		OrgHandler:   organization.NewHandler(orgRepo),
 		Commerce:     core.NewHandler(commerceService, tokenManager),
+		Bot:          bot.NewHandler(botService),
 	})
 
 	log.Info("starting ZidiCommerce API", "port", cfg.ServerPort, "env", cfg.AppEnv)

@@ -8,6 +8,28 @@ type ApiUser = { id: string; organization_id: string; email?: string; role: stri
 type Organization = Row & { id: string; name?: string; onboarding_state?: string };
 type Member = Row & { id: string; role?: string; status?: string; user?: Row };
 type Store = Row & { id: string; name?: string };
+type Bot = Row & { id: string; name: string; status: string; published_version_id?: string };
+type BotVersion = Row & { id: string; bot_id: string; version_number: number; status: string; start_step_key: string };
+type BotModule = Row & { id: string; module_key: string; name: string; parameters?: string };
+type BotVariable = Row & { id: string; name: string; type: string; scope: string };
+type BotQuestion = Row & { id: string; question_key: string; text: string; type: string; response_mode: string; variable_name?: string };
+type BotAction = Row & { id: string; action_key: string; action_type: string; name: string };
+type BotCondition = Row & { id: string; condition_key: string; name: string };
+type BotStep = Row & { id: string; step_key: string; title: string; type: string; message?: string; next_step_key?: string; sort_order?: number };
+type BotConfig = {
+  version: BotVersion;
+  modules: BotModule[];
+  variables: BotVariable[];
+  questions: BotQuestion[];
+  actions: BotAction[];
+  conditions: BotCondition[];
+  integrations: Row[];
+  steps: BotStep[];
+};
+type ValidationResult = { valid: boolean; issues: { path: string; message: string }[] };
+type BotModuleSpec = { key: string; name: string; category: string; description: string };
+type ActionSpec = { key: string; name: string; description: string };
+type QuestionTypeSpec = { key: string; name: string; response_modes: string[] };
 type Endpoint = {
   title: string;
   description: string;
@@ -734,6 +756,376 @@ function AuditLogScreen() {
   );
 }
 
+function BotBuilderScreen() {
+  const [bots, setBots] = useState<Bot[]>([]);
+  const [versions, setVersions] = useState<BotVersion[]>([]);
+  const [config, setConfig] = useState<BotConfig | null>(null);
+  const [modules, setModules] = useState<BotModuleSpec[]>([]);
+  const [actions, setActions] = useState<ActionSpec[]>([]);
+  const [questionTypes, setQuestionTypes] = useState<QuestionTypeSpec[]>([]);
+  const [selectedBotID, setSelectedBotID] = useState("");
+  const [selectedVersionID, setSelectedVersionID] = useState("");
+  const [botForm, setBotForm] = useState({ name: "", description: "" });
+  const [moduleForm, setModuleForm] = useState({ module_key: "ORDER", require_payment: true });
+  const [variableForm, setVariableForm] = useState({ name: "", type: "string", scope: "user", description: "" });
+  const [questionForm, setQuestionForm] = useState({ question_key: "", text: "", type: "text", response_mode: "free_text", variable_name: "", options: "" });
+  const [actionForm, setActionForm] = useState({ action_key: "", action_type: "get_store", name: "", input_name: "", input_variable: "", output_name: "", output_variable: "" });
+  const [conditionForm, setConditionForm] = useState({ condition_key: "", name: "", combinator: "and", field: "", operator: "equals", value: "" });
+  const [integrationForm, setIntegrationForm] = useState({ provider: "paystack", display_name: "Paystack", required: true, account_reference: "" });
+  const [stepForm, setStepForm] = useState({ step_key: "", type: "message", title: "", message: "", response_mode: "free_text", next_step_key: "", fallback_step_key: "", question_id: "", module_id: "", action_id: "", condition_id: "", options: "", sort_order: "" });
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [preview, setPreview] = useState<Row | null>(null);
+  const [message, setMessage] = useState("");
+
+  async function loadCatalogue() {
+    const [moduleResponse, actionResponse, questionResponse] = await Promise.all([
+      apiGet<BotModuleSpec[]>("/bot-modules"),
+      apiGet<ActionSpec[]>("/bot-actions"),
+      apiGet<QuestionTypeSpec[]>("/bot-question-types"),
+    ]);
+    setModules(moduleResponse.data);
+    setActions(actionResponse.data);
+    setQuestionTypes(questionResponse.data);
+  }
+
+  async function loadBots(nextBotID = selectedBotID) {
+    const response = await apiGet<Bot[]>("/bots");
+    setBots(response.data);
+    const resolvedBotID = nextBotID || response.data[0]?.id || "";
+    setSelectedBotID(resolvedBotID);
+    if (resolvedBotID) {
+      await loadVersions(resolvedBotID);
+    } else {
+      setVersions([]);
+      setConfig(null);
+    }
+  }
+
+  async function loadVersions(botID = selectedBotID, nextVersionID = selectedVersionID) {
+    if (!botID) return;
+    const response = await apiGet<BotVersion[]>(`/bots/${botID}/versions`);
+    setVersions(response.data);
+    const resolvedVersionID = nextVersionID || response.data[0]?.id || "";
+    setSelectedVersionID(resolvedVersionID);
+    if (resolvedVersionID) {
+      await loadConfig(resolvedVersionID);
+    }
+  }
+
+  async function loadConfig(versionID = selectedVersionID) {
+    if (!versionID) return;
+    const response = await apiGet<BotConfig>(`/bot-versions/${versionID}/configuration`);
+    setConfig(response.data);
+  }
+
+  useEffect(() => {
+    void Promise.all([loadCatalogue(), loadBots()]);
+  }, []);
+
+  async function createBot(event: FormEvent) {
+    event.preventDefault();
+    const response = await apiPost<Bot>("/bots", { ...botForm, default_language: "en", timezone: "Africa/Lagos" });
+    setBotForm({ name: "", description: "" });
+    setMessage("Bot created with a draft version.");
+    await loadBots(response.data.id);
+  }
+
+  async function createVersion() {
+    const response = await apiPost<BotVersion>(`/bots/${selectedBotID}/versions`, { source_version_id: selectedVersionID || undefined });
+    setMessage(`Draft v${response.data.version_number} created from the selected version.`);
+    await loadVersions(selectedBotID, response.data.id);
+  }
+
+  async function addModule(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<BotModule>(`/bot-versions/${selectedVersionID}/modules`, {
+      module_key: moduleForm.module_key,
+      parameters: JSON.stringify({ require_payment: moduleForm.require_payment }),
+    });
+    await refreshAfterMutation("Module added.");
+  }
+
+  async function addVariable(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<BotVariable>(`/bot-versions/${selectedVersionID}/variables`, clean(variableForm));
+    setVariableForm({ name: "", type: "string", scope: "user", description: "" });
+    await refreshAfterMutation("Variable added.");
+  }
+
+  async function addQuestion(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<BotQuestion>(`/bot-versions/${selectedVersionID}/questions`, {
+      ...clean(questionForm),
+      options: csvToJSON(questionForm.options),
+    });
+    setQuestionForm({ question_key: "", text: "", type: "text", response_mode: "free_text", variable_name: "", options: "" });
+    await refreshAfterMutation("Question added.");
+  }
+
+  async function addAction(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<BotAction>(`/bot-versions/${selectedVersionID}/actions`, {
+      action_key: actionForm.action_key,
+      action_type: actionForm.action_type,
+      name: actionForm.name,
+      input_mappings: pairToJSON(actionForm.input_name, actionForm.input_variable),
+      output_mappings: pairToJSON(actionForm.output_name, actionForm.output_variable),
+    });
+    setActionForm({ action_key: "", action_type: "get_store", name: "", input_name: "", input_variable: "", output_name: "", output_variable: "" });
+    await refreshAfterMutation("Action added.");
+  }
+
+  async function addCondition(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<BotCondition>(`/bot-versions/${selectedVersionID}/conditions`, {
+      condition_key: conditionForm.condition_key,
+      name: conditionForm.name,
+      combinator: conditionForm.combinator,
+      rules: JSON.stringify([{ field: conditionForm.field, operator: conditionForm.operator, value: conditionForm.value }]),
+    });
+    setConditionForm({ condition_key: "", name: "", combinator: "and", field: "", operator: "equals", value: "" });
+    await refreshAfterMutation("Condition added.");
+  }
+
+  async function addIntegration(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<Row>(`/bot-versions/${selectedVersionID}/integrations`, {
+      provider: integrationForm.provider,
+      display_name: integrationForm.display_name,
+      required: integrationForm.required,
+      config: JSON.stringify({ account_reference: integrationForm.account_reference }),
+    });
+    await refreshAfterMutation("Integration requirement added.");
+  }
+
+  async function addStep(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<BotStep>(`/bot-versions/${selectedVersionID}/steps`, {
+      step_key: stepForm.step_key,
+      type: stepForm.type,
+      title: stepForm.title,
+      message: stepForm.message,
+      response_mode: stepForm.response_mode,
+      next_step_key: stepForm.next_step_key,
+      fallback_step_key: stepForm.fallback_step_key,
+      question_id: stepForm.question_id || undefined,
+      module_id: stepForm.module_id || undefined,
+      action_id: stepForm.action_id || undefined,
+      condition_id: stepForm.condition_id || undefined,
+      options: csvToJSON(stepForm.options),
+      sort_order: Number(stepForm.sort_order || 0),
+    });
+    setStepForm({ step_key: "", type: "message", title: "", message: "", response_mode: "free_text", next_step_key: "", fallback_step_key: "", question_id: "", module_id: "", action_id: "", condition_id: "", options: "", sort_order: "" });
+    await refreshAfterMutation("Step added.");
+  }
+
+  async function validateVersion() {
+    const response = await apiPost<ValidationResult>(`/bot-versions/${selectedVersionID}/validate`, {});
+    setValidation(response.data);
+    setMessage(response.data.valid ? "Configuration is valid." : "Validation found issues.");
+    await loadConfig();
+  }
+
+  async function publishVersion() {
+    const response = await apiPost<Row>(`/bot-versions/${selectedVersionID}/publish`, {});
+    setMessage(`Published immutable snapshot ${String(response.data.id)}.`);
+    await loadBots(selectedBotID);
+  }
+
+  async function loadPreview() {
+    const response = await apiGet<Row>(`/bot-versions/${selectedVersionID}/preview`);
+    setPreview(response.data);
+  }
+
+  async function refreshAfterMutation(nextMessage: string) {
+    setValidation(null);
+    setPreview(null);
+    setMessage(nextMessage);
+    await loadConfig();
+  }
+
+  const editable = config?.version.status !== "published" && config?.version.status !== "archived";
+  const selectedQuestionType = questionTypes.find((item) => item.key === questionForm.type);
+
+  return (
+    <section className="content bot-builder">
+      <div className="section-heading">
+        <h2>Bots</h2>
+        <p>Configure reusable merchant bot flows, validate them, and publish immutable snapshots for later runtime execution.</p>
+      </div>
+      {message ? <p className="error-text">{message}</p> : null}
+      <div className="split">
+        <form className="resource-form" onSubmit={createBot}>
+          <strong>Create bot</strong>
+          <input placeholder="Bot name" value={botForm.name} onChange={(event) => setBotForm({ ...botForm, name: event.target.value })} />
+          <input placeholder="Description" value={botForm.description} onChange={(event) => setBotForm({ ...botForm, description: event.target.value })} />
+          <button type="submit">Create bot</button>
+        </form>
+        <div className="table-wrap bot-toolbar">
+          <label>
+            Bot
+            <select value={selectedBotID} onChange={(event) => { setSelectedBotID(event.target.value); void loadVersions(event.target.value, ""); }}>
+              <option value="">Select bot</option>
+              {bots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name} · {bot.status}</option>)}
+            </select>
+          </label>
+          <label>
+            Version
+            <select value={selectedVersionID} onChange={(event) => { setSelectedVersionID(event.target.value); void loadConfig(event.target.value); }}>
+              <option value="">Select version</option>
+              {versions.map((version) => <option key={version.id} value={version.id}>v{version.version_number} · {version.status}</option>)}
+            </select>
+          </label>
+          <button type="button" disabled={!selectedBotID || !selectedVersionID} onClick={createVersion}>New draft from selected</button>
+          <button type="button" disabled={!selectedVersionID} onClick={validateVersion}>Validate</button>
+          <button type="button" disabled={!selectedVersionID} onClick={loadPreview}>Preview</button>
+          <button type="button" disabled={!selectedVersionID || validation?.valid === false} onClick={publishVersion}>Publish</button>
+        </div>
+      </div>
+
+      {config ? (
+        <>
+          <div className="grid">
+            <article className="summary-card"><span>Version</span><p>v{config.version.version_number} · {config.version.status}</p></article>
+            <article className="summary-card"><span>Start step</span><p>{config.version.start_step_key}</p></article>
+            <article className="summary-card"><span>Modules</span><p>{config.modules.length}</p></article>
+            <article className="summary-card"><span>Steps</span><p>{config.steps.length}</p></article>
+          </div>
+          {!editable ? <p className="muted">This version is immutable. Create a new draft from it to make changes.</p> : null}
+
+          <div className="bot-panel">
+            <form className="resource-form" onSubmit={addModule}>
+              <strong>Module</strong>
+              <select disabled={!editable} value={moduleForm.module_key} onChange={(event) => setModuleForm({ ...moduleForm, module_key: event.target.value })}>
+                {modules.map((module) => <option key={module.key} value={module.key}>{module.name}</option>)}
+              </select>
+              <label className="inline-check"><input disabled={!editable} type="checkbox" checked={moduleForm.require_payment} onChange={(event) => setModuleForm({ ...moduleForm, require_payment: event.target.checked })} /> Require payment for order module</label>
+              <button disabled={!editable} type="submit">Add module</button>
+            </form>
+            <form className="resource-form" onSubmit={addVariable}>
+              <strong>Variable</strong>
+              <input disabled={!editable} placeholder="customer_name" value={variableForm.name} onChange={(event) => setVariableForm({ ...variableForm, name: event.target.value })} />
+              <select disabled={!editable} value={variableForm.type} onChange={(event) => setVariableForm({ ...variableForm, type: event.target.value })}>
+                {["string", "number", "boolean", "date", "datetime", "location", "object", "array"].map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+              <select disabled={!editable} value={variableForm.scope} onChange={(event) => setVariableForm({ ...variableForm, scope: event.target.value })}>
+                {["user", "conversation", "module", "system"].map((scope) => <option key={scope} value={scope}>{scope}</option>)}
+              </select>
+              <input disabled={!editable} placeholder="Description" value={variableForm.description} onChange={(event) => setVariableForm({ ...variableForm, description: event.target.value })} />
+              <button disabled={!editable} type="submit">Add variable</button>
+            </form>
+            <form className="resource-form" onSubmit={addQuestion}>
+              <strong>Question</strong>
+              <input disabled={!editable} placeholder="question key" value={questionForm.question_key} onChange={(event) => setQuestionForm({ ...questionForm, question_key: event.target.value })} />
+              <input disabled={!editable} placeholder="Question text" value={questionForm.text} onChange={(event) => setQuestionForm({ ...questionForm, text: event.target.value })} />
+              <select disabled={!editable} value={questionForm.type} onChange={(event) => setQuestionForm({ ...questionForm, type: event.target.value, response_mode: questionTypes.find((item) => item.key === event.target.value)?.response_modes[0] ?? "free_text" })}>
+                {questionTypes.map((type) => <option key={type.key} value={type.key}>{type.name}</option>)}
+              </select>
+              <select disabled={!editable} value={questionForm.response_mode} onChange={(event) => setQuestionForm({ ...questionForm, response_mode: event.target.value })}>
+                {(selectedQuestionType?.response_modes ?? ["free_text"]).map((mode) => <option key={mode} value={mode}>{mode}</option>)}
+              </select>
+              <select disabled={!editable} value={questionForm.variable_name} onChange={(event) => setQuestionForm({ ...questionForm, variable_name: event.target.value })}>
+                <option value="">No variable</option>
+                {config.variables.map((variable) => <option key={variable.id} value={variable.name}>{variable.name}</option>)}
+              </select>
+              <input disabled={!editable} placeholder="Options, comma separated" value={questionForm.options} onChange={(event) => setQuestionForm({ ...questionForm, options: event.target.value })} />
+              <button disabled={!editable} type="submit">Add question</button>
+            </form>
+            <form className="resource-form" onSubmit={addAction}>
+              <strong>Action</strong>
+              <input disabled={!editable} placeholder="action key" value={actionForm.action_key} onChange={(event) => setActionForm({ ...actionForm, action_key: event.target.value })} />
+              <select disabled={!editable} value={actionForm.action_type} onChange={(event) => setActionForm({ ...actionForm, action_type: event.target.value })}>
+                {actions.map((action) => <option key={action.key} value={action.key}>{action.name}</option>)}
+              </select>
+              <input disabled={!editable} placeholder="Action name" value={actionForm.name} onChange={(event) => setActionForm({ ...actionForm, name: event.target.value })} />
+              <input disabled={!editable} placeholder="Input field" value={actionForm.input_name} onChange={(event) => setActionForm({ ...actionForm, input_name: event.target.value })} />
+              <input disabled={!editable} placeholder="Input variable" value={actionForm.input_variable} onChange={(event) => setActionForm({ ...actionForm, input_variable: event.target.value })} />
+              <input disabled={!editable} placeholder="Output field" value={actionForm.output_name} onChange={(event) => setActionForm({ ...actionForm, output_name: event.target.value })} />
+              <input disabled={!editable} placeholder="Output variable" value={actionForm.output_variable} onChange={(event) => setActionForm({ ...actionForm, output_variable: event.target.value })} />
+              <button disabled={!editable} type="submit">Add action</button>
+            </form>
+            <form className="resource-form" onSubmit={addCondition}>
+              <strong>Condition</strong>
+              <input disabled={!editable} placeholder="condition key" value={conditionForm.condition_key} onChange={(event) => setConditionForm({ ...conditionForm, condition_key: event.target.value })} />
+              <input disabled={!editable} placeholder="Condition name" value={conditionForm.name} onChange={(event) => setConditionForm({ ...conditionForm, name: event.target.value })} />
+              <select disabled={!editable} value={conditionForm.combinator} onChange={(event) => setConditionForm({ ...conditionForm, combinator: event.target.value })}>
+                <option value="and">and</option>
+                <option value="or">or</option>
+              </select>
+              <input disabled={!editable} placeholder="Field or variable" value={conditionForm.field} onChange={(event) => setConditionForm({ ...conditionForm, field: event.target.value })} />
+              <select disabled={!editable} value={conditionForm.operator} onChange={(event) => setConditionForm({ ...conditionForm, operator: event.target.value })}>
+                {["equals", "not_equals", "contains", "greater_than", "less_than", "exists", "not_exists", "in", "not_in"].map((operator) => <option key={operator} value={operator}>{operator}</option>)}
+              </select>
+              <input disabled={!editable} placeholder="Value" value={conditionForm.value} onChange={(event) => setConditionForm({ ...conditionForm, value: event.target.value })} />
+              <button disabled={!editable} type="submit">Add condition</button>
+            </form>
+            <form className="resource-form" onSubmit={addIntegration}>
+              <strong>Integration requirement</strong>
+              <input disabled={!editable} placeholder="Provider" value={integrationForm.provider} onChange={(event) => setIntegrationForm({ ...integrationForm, provider: event.target.value })} />
+              <input disabled={!editable} placeholder="Display name" value={integrationForm.display_name} onChange={(event) => setIntegrationForm({ ...integrationForm, display_name: event.target.value })} />
+              <input disabled={!editable} placeholder="Account reference, no secrets" value={integrationForm.account_reference} onChange={(event) => setIntegrationForm({ ...integrationForm, account_reference: event.target.value })} />
+              <label className="inline-check"><input disabled={!editable} type="checkbox" checked={integrationForm.required} onChange={(event) => setIntegrationForm({ ...integrationForm, required: event.target.checked })} /> Required</label>
+              <button disabled={!editable} type="submit">Add integration</button>
+            </form>
+            <form className="resource-form wide" onSubmit={addStep}>
+              <strong>Step</strong>
+              <input disabled={!editable} placeholder="step key" value={stepForm.step_key} onChange={(event) => setStepForm({ ...stepForm, step_key: event.target.value })} />
+              <select disabled={!editable} value={stepForm.type} onChange={(event) => setStepForm({ ...stepForm, type: event.target.value })}>
+                {["message", "question", "choice", "module", "condition", "action", "handoff", "end"].map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+              <input disabled={!editable} placeholder="Title" value={stepForm.title} onChange={(event) => setStepForm({ ...stepForm, title: event.target.value })} />
+              <input disabled={!editable} placeholder="Next step key" value={stepForm.next_step_key} onChange={(event) => setStepForm({ ...stepForm, next_step_key: event.target.value })} />
+              <input disabled={!editable} placeholder="Fallback step key" value={stepForm.fallback_step_key} onChange={(event) => setStepForm({ ...stepForm, fallback_step_key: event.target.value })} />
+              <select disabled={!editable} value={stepForm.question_id} onChange={(event) => setStepForm({ ...stepForm, question_id: event.target.value })}>
+                <option value="">No question</option>
+                {config.questions.map((question) => <option key={question.id} value={question.id}>{question.question_key}</option>)}
+              </select>
+              <select disabled={!editable} value={stepForm.module_id} onChange={(event) => setStepForm({ ...stepForm, module_id: event.target.value })}>
+                <option value="">No module</option>
+                {config.modules.map((module) => <option key={module.id} value={module.id}>{module.module_key}</option>)}
+              </select>
+              <select disabled={!editable} value={stepForm.action_id} onChange={(event) => setStepForm({ ...stepForm, action_id: event.target.value })}>
+                <option value="">No action</option>
+                {config.actions.map((action) => <option key={action.id} value={action.id}>{action.action_key}</option>)}
+              </select>
+              <select disabled={!editable} value={stepForm.condition_id} onChange={(event) => setStepForm({ ...stepForm, condition_id: event.target.value })}>
+                <option value="">No condition</option>
+                {config.conditions.map((condition) => <option key={condition.id} value={condition.id}>{condition.condition_key}</option>)}
+              </select>
+              <input disabled={!editable} placeholder="Options, comma separated" value={stepForm.options} onChange={(event) => setStepForm({ ...stepForm, options: event.target.value })} />
+              <input disabled={!editable} placeholder="Sort order" type="number" value={stepForm.sort_order} onChange={(event) => setStepForm({ ...stepForm, sort_order: event.target.value })} />
+              <textarea disabled={!editable} placeholder="Message" value={stepForm.message} onChange={(event) => setStepForm({ ...stepForm, message: event.target.value })} />
+              <button disabled={!editable} type="submit">Add step</button>
+            </form>
+          </div>
+
+          <div className="split">
+            <ResourceTable rows={config.modules} title="Modules" />
+            <ResourceTable rows={config.variables} title="Variables" />
+            <ResourceTable rows={config.questions} title="Questions" />
+            <ResourceTable rows={config.steps} title="Steps" />
+          </div>
+          <div className="split">
+            <ResourceTable rows={config.actions} title="Actions" />
+            <ResourceTable rows={config.conditions} title="Conditions" />
+            <ResourceTable rows={config.integrations} title="Integrations" />
+            <div className="table-wrap">
+              <h3>Validation & preview</h3>
+              {validation ? <pre>{JSON.stringify(validation, null, 2)}</pre> : <p className="muted">Run validation before publishing.</p>}
+              {preview ? <pre>{JSON.stringify(preview, null, 2)}</pre> : null}
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="empty-state">
+          <strong>No bot selected</strong>
+          <span>Create or select a bot to configure a version.</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ResourceTable({ rows, loading, message, title }: { rows: Row[]; loading?: boolean; message?: string; title?: string }) {
   const columns = useMemo(() => Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 8), [rows]);
   return (
@@ -798,6 +1190,15 @@ function splitIDs(value: string) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
+function csvToJSON(value: string) {
+  return JSON.stringify(value.split(",").map((item) => item.trim()).filter(Boolean));
+}
+
+function pairToJSON(name: string, variable: string) {
+  if (!name.trim() || !variable.trim()) return "{}";
+  return JSON.stringify({ [name.trim()]: variable.trim() });
+}
+
 function parseState(raw?: string) {
   if (!raw) return {} as Record<string, boolean>;
   try {
@@ -836,7 +1237,7 @@ export default function App() {
         <Route path="configuration/payments" element={<PaymentsScreen />} />
         <Route path="configuration/fulfilment" element={<FulfilmentScreen />} />
         <Route path="configuration/channels" element={<BasicResourceScreen resource="channels" />} />
-        <Route path="automation/bots" element={<Placeholder title="Bots" body="Automation is intentionally disabled until the organization and access model is stable." />} />
+        <Route path="automation/bots" element={<BotBuilderScreen />} />
         <Route path="settings" element={<BusinessScreen />} />
         <Route path="*" element={<Placeholder title="Planned module" />} />
       </Route>

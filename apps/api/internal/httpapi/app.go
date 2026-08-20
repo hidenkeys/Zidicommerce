@@ -6,6 +6,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/config"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
@@ -20,6 +21,7 @@ type Dependencies struct {
 	AuthService  *auth.Service
 	OrgHandler   *organization.Handler
 	Commerce     *core.Handler
+	Bot          *bot.Handler
 }
 
 func New(deps Dependencies) *fiber.App {
@@ -41,6 +43,7 @@ func New(deps Dependencies) *fiber.App {
 
 	protected.Get("/organizations/current", deps.OrgHandler.Current)
 	deps.Commerce.Register(protected)
+	deps.Bot.Register(protected)
 
 	return app
 }

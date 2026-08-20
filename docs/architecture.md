@@ -52,7 +52,7 @@ The API is organized around domain packages. Phase 1 implements only foundation 
 - `tenant`: reusable organization-scoped access pattern
 - `organization`: organization and user persistence foundation
 - `commerce/*`: package boundaries for stores, catalogue, inventory, customers, orders, payments, fulfilment, and channels
-- `bot`: placeholder boundary for the future configuration-driven bot platform
+- `bot`: configuration-driven Bot Builder models, validation, publish snapshots, and admin APIs
 
 ## Database Strategy
 
@@ -123,7 +123,43 @@ Commerce domains are intentionally separated:
 - Fulfilment
 - Channel
 
-Phase 2 makes the commerce domains usable through API services. Phase 3 adds organization onboarding, membership, invitation, store access, and audit foundations. The future bot runtime should orchestrate these services instead of owning commerce business logic.
+Phase 2 makes the commerce domains usable through API services. Phase 3 adds organization onboarding, membership, invitation, store access, and audit foundations. Phase 4 adds Bot Builder configuration only. The future bot runtime should orchestrate commerce services instead of owning commerce business logic.
+
+## Bot Builder
+
+Phase 4 introduces configurable bot entities without executing WhatsApp, payments, order placement, delivery, or LLM behavior.
+
+```mermaid
+flowchart TD
+    A["Bot"] --> B["Draft Version"]
+    B --> C["Modules"]
+    B --> D["Variables"]
+    B --> E["Questions"]
+    B --> F["Actions"]
+    B --> G["Conditions"]
+    B --> H["Integrations"]
+    B --> I["Steps"]
+    I --> J["Validation Engine"]
+    J --> K["Published Snapshot"]
+    K --> L["Future Runtime"]
+```
+
+The builder stores:
+
+- `bots`: organization-owned assistant definitions and the active published version pointer
+- `bot_versions`: mutable draft/validated versions and immutable published/archived versions
+- `bot_version_modules`: reusable capability modules such as order, catalogue, FAQ, complaint, support, and store locator
+- `bot_variables`: typed values collected or produced during a future conversation
+- `bot_questions`: reusable prompts and expected response modes
+- `bot_actions`: declarative references to commerce/system actions
+- `bot_conditions`: rule groups used by future runtime branching
+- `bot_integrations`: provider requirements and non-secret integration metadata
+- `bot_steps`: ordered conversation graph nodes
+- `bot_published_snapshots`: immutable JSON snapshots used as the future runtime contract
+
+Published versions are not editable. To change a live bot, create a new draft from the published version, edit the draft, validate, then publish a new immutable snapshot.
+
+Integrations intentionally reject plaintext secret-like keys in configuration. Runtime credentials should remain in service-level environment variables or a future secret store.
 
 ## Organization Membership
 
@@ -194,25 +230,22 @@ Payments use a provider abstraction. Phase 2 includes:
 
 Payment verification is authoritative and idempotent. A frontend success flag is not enough to mark an order as paid.
 
-## Future Bot Architecture
+## Future Bot Runtime
 
-The future bot platform will be configuration-driven:
+The future runtime should consume published snapshots:
 
 ```mermaid
 flowchart TD
-    A["Bot"] --> B["Bot Version"]
-    B --> C["Modules"]
-    C --> D["Questions"]
-    D --> E["Responses"]
-    E --> F["Variables"]
-    F --> G["Actions"]
-    G --> H["Conditions"]
-    H --> I["Integrations"]
-    I --> J["Published Version"]
-    J --> K["Runtime"]
+    A["Channel message"] --> B["Session resolver"]
+    B --> C["Published snapshot"]
+    C --> D["Interpreter"]
+    D --> E["Commerce services"]
+    D --> F["Payment provider"]
+    D --> G["Delivery provider"]
+    D --> H["LLM/NLU layer"]
 ```
 
-No Bot Builder or runtime is implemented in Phase 1, Phase 2, or Phase 3.
+No runtime interpreter is implemented in Phase 4.
 
 ## Existing Zidi Reuse
 
