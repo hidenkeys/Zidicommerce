@@ -2,6 +2,9 @@ package core
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha512"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -54,8 +57,11 @@ func newCommerceFixture(t *testing.T, inventory int) commerceFixture {
 		&OrderItem{},
 		&OrderEvent{},
 		&Payment{},
+		&PaymentWebhookEvent{},
 		&Fulfilment{},
 		&Channel{},
+		&CommerceNotification{},
+		&MerchantImportJob{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -357,4 +363,138 @@ func TestDisabledMemberCannotAuthenticate(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "active organization membership") {
 		t.Fatalf("expected disabled membership to block login, got %v", err)
 	}
+}
+
+func TestPaystackWebhookIsSignatureVerifiedAndIdempotent(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	fx.service.paymentProvider = namedPaymentProvider{name: "paystack"}
+	fx.service.ConfigurePaymentWebhooks("paystack-secret")
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payment, err := fx.service.InitializePayment(context.Background(), fx.actor, PaymentInput{OrderID: order.ID, Provider: "paystack", Email: "customer@example.com", IdempotencyKey: "pay-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"event":"charge.success","data":{"id":12345,"reference":"` + payment.Reference + `","status":"success","amount":420000,"currency":"NGN"}}`)
+	signature := paystackTestSignature("paystack-secret", body)
+	first, err := fx.service.HandlePaystackWebhook(context.Background(), body, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := fx.service.HandlePaystackWebhook(context.Background(), body, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.EventID != second.EventID || first.Status != paymentWebhookProcessed || second.Status != paymentWebhookProcessed {
+		t.Fatalf("expected idempotent processed webhook, got %+v then %+v", first, second)
+	}
+	var updated Payment
+	if err := fx.db.Where("id = ?", payment.ID).First(&updated).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != PaymentPaid {
+		t.Fatalf("expected payment paid, got %s", updated.Status)
+	}
+	var updatedOrder Order
+	if err := fx.db.Where("id = ?", order.ID).First(&updatedOrder).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updatedOrder.Status != OrderPaid {
+		t.Fatalf("expected order paid, got %s", updatedOrder.Status)
+	}
+	var eventCount int64
+	if err := fx.db.Model(&PaymentWebhookEvent{}).Where("provider = ? AND external_event_id = ?", "paystack", "12345").Count(&eventCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 1 {
+		t.Fatalf("expected one webhook event, got %d", eventCount)
+	}
+	var notifications int64
+	if err := fx.db.Model(&CommerceNotification{}).Where("organization_id = ? AND order_id = ? AND notification_type = ?", fx.actor.OrganizationID, order.ID, "payment_confirmed").Count(&notifications).Error; err != nil {
+		t.Fatal(err)
+	}
+	if notifications != 1 {
+		t.Fatalf("expected one payment notification, got %d", notifications)
+	}
+}
+
+func TestMerchantImportCreatesConfigurationTransactionally(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	result, err := fx.service.ImportMerchantConfiguration(context.Background(), fx.actor, MerchantImportInput{
+		Stores:     []StoreImportInput{{ExternalKey: "store-1", Name: "Import Store", Code: "IMP", FulfilmentModes: []StoreFulfilmentModeInput{{Mode: FulfilmentPickup, Enabled: true}}}},
+		Categories: []CategoryImportInput{{ExternalKey: "cat-1", Name: "Drinks", Slug: "drinks"}},
+		Products: []ProductImportInput{{
+			ExternalKey:         "prod-1",
+			CategoryExternalKey: "cat-1",
+			Name:                "Imported Tea",
+			Slug:                "imported-tea",
+			Variants:            []VariantImportInput{{ExternalKey: "variant-1", SKU: "IMP-TEA", Name: "Regular", PriceMinor: 300000, Currency: "NGN"}},
+			Images:              []ProductImageInput{{URL: "https://example.com/tea.png", AltText: "Imported Tea"}},
+		}},
+		Inventory: []InventoryImportInput{{StoreExternalKey: "store-1", VariantExternalKey: "variant-1", OnHand: 12, ReorderThreshold: 3}},
+		Channels:  []ChannelImportInput{{Provider: "whatsapp", DisplayName: "WhatsApp", PhoneNumberID: "phone-import", Status: StatusActive, Config: `{}`}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.JobID == uuid.Nil || result.Stores["store-1"] == uuid.Nil || result.Variants["variant-1"] == uuid.Nil || len(result.Channels) != 1 {
+		t.Fatalf("unexpected import result: %+v", result)
+	}
+	var jobs int64
+	if err := fx.db.Model(&MerchantImportJob{}).Where("organization_id = ? AND status = ?", fx.actor.OrganizationID, "completed").Count(&jobs).Error; err != nil {
+		t.Fatal(err)
+	}
+	if jobs != 1 {
+		t.Fatalf("expected completed import job, got %d", jobs)
+	}
+}
+
+func TestMerchantImportRejectsInvalidReferencesWithoutPartialWrites(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	_, err := fx.service.ImportMerchantConfiguration(context.Background(), fx.actor, MerchantImportInput{
+		Stores: []StoreImportInput{{ExternalKey: "store-1", Name: "Import Store", Code: "IMP"}},
+		Products: []ProductImportInput{{
+			ExternalKey:         "prod-1",
+			CategoryExternalKey: "missing",
+			Name:                "Imported Tea",
+			Slug:                "imported-tea",
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected import validation error")
+	}
+	var stores int64
+	if err := fx.db.Model(&Store{}).Where("code = ?", "IMP").Count(&stores).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stores != 0 {
+		t.Fatalf("expected no partial store write, got %d", stores)
+	}
+}
+
+type namedPaymentProvider struct {
+	name string
+}
+
+func (p namedPaymentProvider) Name() string { return p.name }
+
+func (p namedPaymentProvider) Initialize(_ context.Context, req PaymentInitializeRequest) (PaymentInitializeResponse, error) {
+	return PaymentInitializeResponse{Reference: req.Reference, AuthorizationURL: "https://pay.example/" + req.Reference, ProviderMetadata: "{}"}, nil
+}
+
+func (p namedPaymentProvider) Verify(_ context.Context, reference string) (PaymentVerification, error) {
+	return PaymentVerification{Reference: reference, Paid: true}, nil
+}
+
+func paystackTestSignature(secret string, body []byte) string {
+	mac := hmac.New(sha512.New, []byte(secret))
+	mac.Write(body)
+	return hex.EncodeToString(mac.Sum(nil))
 }

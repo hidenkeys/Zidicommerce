@@ -77,10 +77,13 @@ func (h *Handler) Register(router fiber.Router) {
 
 	router.Get("/channels", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.listChannels)
 	router.Post("/channels", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.createChannel)
+
+	router.Post("/merchant-imports/configuration", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.importMerchantConfiguration)
 }
 
 func (h *Handler) RegisterPublic(router fiber.Router) {
 	router.Post("/invitations/:token/accept", h.acceptInvitation)
+	router.Post("/payments/paystack/webhook", h.paystackWebhook)
 }
 
 func (h *Handler) onboardOrganization(c *fiber.Ctx) error {
@@ -528,6 +531,11 @@ func (h *Handler) verifyPayment(c *fiber.Ctx) error {
 	return respond(c, data, err)
 }
 
+func (h *Handler) paystackWebhook(c *fiber.Ctx) error {
+	data, err := h.service.HandlePaystackWebhook(c.UserContext(), c.BodyRaw(), c.Get("X-Paystack-Signature"))
+	return respond(c, data, err)
+}
+
 func (h *Handler) listPayments(c *fiber.Ctx) error {
 	data, err := h.service.ListPayments(c.UserContext(), mustUser(c))
 	return respond(c, data, err)
@@ -566,6 +574,15 @@ func (h *Handler) createChannel(c *fiber.Ctx) error {
 
 func (h *Handler) listChannels(c *fiber.Ctx) error {
 	data, err := h.service.ListChannels(c.UserContext(), mustUser(c))
+	return respond(c, data, err)
+}
+
+func (h *Handler) importMerchantConfiguration(c *fiber.Ctx) error {
+	var input MerchantImportInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.ImportMerchantConfiguration(c.UserContext(), mustUser(c), input)
 	return respond(c, data, err)
 }
 

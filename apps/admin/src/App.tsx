@@ -728,6 +728,41 @@ function FulfilmentScreen() {
   );
 }
 
+function MerchantImportScreen() {
+  const [body, setBody] = useState(JSON.stringify({ stores: [], categories: [], products: [], inventory: [], channels: [] }, null, 2));
+  const [result, setResult] = useState<Row | null>(null);
+  const [message, setMessage] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setMessage("");
+    setResult(null);
+    try {
+      const parsed = JSON.parse(body);
+      const response = await apiPost<Row>("/merchant-imports/configuration", parsed);
+      setResult(response.data);
+      setMessage("Merchant configuration imported.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Import failed");
+    }
+  }
+
+  return (
+    <section className="content">
+      <div className="section-heading">
+        <h2>Merchant Import</h2>
+        <p>Load stores, categories, products, images, inventory, fulfilment modes, and channels from one validated JSON document.</p>
+      </div>
+      {message ? <p className="error-text">{message}</p> : null}
+      <form className="resource-form wide" onSubmit={submit}>
+        <textarea rows={18} value={body} onChange={(event) => setBody(event.target.value)} />
+        <button type="submit">Import configuration</button>
+      </form>
+      {result ? <ResourceTable rows={[result]} title="Import result" /> : null}
+    </section>
+  );
+}
+
 function AuditLogScreen() {
   const [rows, setRows] = useState<Row[]>([]);
   const [message, setMessage] = useState("");
@@ -1238,6 +1273,8 @@ export default function App() {
         <Route path="configuration/fulfilment" element={<FulfilmentScreen />} />
         <Route path="configuration/channels" element={<BasicResourceScreen resource="channels" />} />
         <Route path="automation/bots" element={<BotBuilderScreen />} />
+        <Route path="automation/versions" element={<BotBuilderScreen />} />
+        <Route path="settings/import" element={<MerchantImportScreen />} />
         <Route path="settings" element={<BusinessScreen />} />
         <Route path="*" element={<Placeholder title="Planned module" />} />
       </Route>

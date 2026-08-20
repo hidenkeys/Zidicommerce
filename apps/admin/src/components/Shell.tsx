@@ -37,6 +37,7 @@ const groups = [
     label: "Automation",
     items: [
       ["Bots", "/automation/bots"],
+      ["Bot Versions", "/automation/versions"],
     ],
   },
   {
@@ -45,7 +46,10 @@ const groups = [
   },
   {
     label: "System",
-    items: [["Settings", "/settings"]],
+    items: [
+      ["Merchant Import", "/settings/import"],
+      ["Settings", "/settings"],
+    ],
   },
 ];
 
@@ -85,7 +89,7 @@ export function Shell() {
       <main className="main-panel">
         <header className="topbar">
           <div>
-            <span className="eyebrow">Phase 3 Onboarding</span>
+            <span className="eyebrow">Phase 6 Merchant Deployment</span>
             <h1>ZidiCommerce Admin</h1>
           </div>
           <button type="button" onClick={saveToken}>Connect API</button>

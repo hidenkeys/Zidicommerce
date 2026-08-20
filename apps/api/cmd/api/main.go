@@ -50,6 +50,7 @@ func main() {
 		provider = core.NewPaystackProvider(cfg.Payment.PaystackSecret)
 	}
 	commerceService := core.NewService(db, provider)
+	commerceService.ConfigurePaymentWebhooks(cfg.Payment.PaystackSecret)
 	var mailer email.Sender = email.NewLogSender(log, cfg.Email.From)
 	if cfg.Email.Mode == "smtp" {
 		mailer = email.NewSMTPSender(cfg.Email.SMTPHost, cfg.Email.SMTPPort, cfg.Email.SMTPUser, cfg.Email.SMTPPass, cfg.Email.From)
@@ -57,6 +58,7 @@ func main() {
 	commerceService.ConfigureNotifications(mailer, cfg.Email.AppBaseURL)
 	botService := bot.NewService(db)
 	runtimeService := runtimeengine.NewService(db, commerceService, log)
+	runtimeService.RegisterChannelSender("whatsapp", runtimeengine.NewWhatsAppCloudSender("", log))
 
 	app := httpapi.New(httpapi.Dependencies{
 		Config:       cfg,

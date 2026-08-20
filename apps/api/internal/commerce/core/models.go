@@ -280,6 +280,23 @@ type Payment struct {
 
 func (Payment) TableName() string { return "payments" }
 
+type PaymentWebhookEvent struct {
+	ID              uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID  *uuid.UUID `gorm:"type:uuid;index" json:"organization_id,omitempty"`
+	Provider        string     `json:"provider"`
+	ExternalEventID string     `json:"external_event_id"`
+	Reference       string     `json:"reference"`
+	EventType       string     `json:"event_type"`
+	Status          string     `json:"status"`
+	Payload         string     `json:"payload"`
+	ErrorMessage    string     `json:"error_message"`
+	ProcessedAt     *time.Time `json:"processed_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+func (PaymentWebhookEvent) TableName() string { return "payment_webhook_events" }
+
 type Fulfilment struct {
 	ID              uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
 	OrganizationID  uuid.UUID `gorm:"type:uuid;index" json:"organization_id"`
@@ -311,3 +328,35 @@ type Channel struct {
 }
 
 func (Channel) TableName() string { return "channels" }
+
+type CommerceNotification struct {
+	ID                uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID    uuid.UUID  `gorm:"type:uuid;index" json:"organization_id"`
+	OrderID           *uuid.UUID `gorm:"type:uuid;index" json:"order_id,omitempty"`
+	CustomerID        *uuid.UUID `gorm:"type:uuid;index" json:"customer_id,omitempty"`
+	ChannelID         *uuid.UUID `gorm:"type:uuid" json:"channel_id,omitempty"`
+	NotificationType  string     `json:"notification_type"`
+	Recipient         string     `json:"recipient"`
+	Status            string     `json:"status"`
+	Payload           string     `json:"payload"`
+	OutboundMessageID *uuid.UUID `gorm:"type:uuid" json:"outbound_message_id,omitempty"`
+	ErrorMessage      string     `json:"error_message"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+func (CommerceNotification) TableName() string { return "commerce_notifications" }
+
+type MerchantImportJob struct {
+	ID             uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID uuid.UUID  `gorm:"type:uuid;index" json:"organization_id"`
+	ActorUserID    *uuid.UUID `gorm:"type:uuid" json:"actor_user_id,omitempty"`
+	Status         string     `json:"status"`
+	Source         string     `json:"source"`
+	Summary        string     `json:"summary"`
+	Errors         string     `json:"errors"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+func (MerchantImportJob) TableName() string { return "merchant_import_jobs" }

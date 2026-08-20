@@ -103,6 +103,9 @@ func (h *Handler) whatsAppWebhook(c *fiber.Ctx) error {
 		if err != nil {
 			return err
 		}
+		if _, err := h.service.DispatchOutbound(c.UserContext(), channel, input, result); err != nil {
+			h.service.log.Warn("runtime outbound dispatch failed", "channel_id", channel.ID, "error", err)
+		}
 		results = append(results, result)
 	}
 	return c.JSON(fiber.Map{"data": fiber.Map{"processed": len(results), "results": results}})

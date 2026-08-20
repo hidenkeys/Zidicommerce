@@ -290,3 +290,13 @@ func (i *ChannelInput) normalize() {
 	i.DisplayNumber = strings.TrimSpace(i.DisplayNumber)
 	i.Status = strings.ToLower(strings.TrimSpace(i.Status))
 }
+
+type NotificationInput struct {
+	OrderID    *uuid.UUID `json:"order_id"`
+	CustomerID *uuid.UUID `json:"customer_id"`
+	ChannelID  *uuid.UUID `json:"channel_id"`
+	Type       string     `json:"type"`
+	Recipient  string     `json:"recipient"`
+	Status     string     `json:"status"`
+	Payload    string     `json:"payload"`
+}

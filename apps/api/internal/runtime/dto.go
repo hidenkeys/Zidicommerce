@@ -26,6 +26,7 @@ type InboundMessage struct {
 	ExternalMessageID      string         `json:"external_message_id"`
 	ExternalConversationID string         `json:"external_conversation_id"`
 	Sender                 string         `json:"sender"`
+	CustomerID             *uuid.UUID     `json:"customer_id,omitempty"`
 	Text                   string         `json:"text"`
 	Location               *Location      `json:"location,omitempty"`
 	Attachments            []Attachment   `json:"attachments,omitempty"`

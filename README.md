@@ -62,7 +62,21 @@ Phase 5 adds the deterministic Bot Runtime:
 - idempotent inbound message processing
 - runtime events and structured logging
 
-It intentionally does not include LLM orchestration, business-specific bot logic, outbound WhatsApp sending, or production deployment.
+Phase 6 adds the first real merchant deployment layer:
+
+- WhatsApp Cloud API outbound adapter
+- persisted outbound delivery records
+- customer resolution from WhatsApp conversations
+- nested runtime module call/return support
+- expanded commerce action registry
+- Paystack webhook verification and idempotent payment processing
+- notification audit records
+- generic merchant JSON import tooling
+- admin access to merchant import and bot version views
+
+It intentionally does not include LLM orchestration or business-specific bot logic.
+
+See [docs/merchant-deployment.md](docs/merchant-deployment.md) for onboarding, WhatsApp, payment, bot, and local testing guidance.
 
 ## Repository Structure
 

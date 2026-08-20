@@ -74,6 +74,7 @@ func newRuntimeFixture(t *testing.T, config bot.VersionConfiguration) runtimeFix
 		&ConversationMessage{},
 		&ProcessedMessage{},
 		&RuntimeEvent{},
+		&ChannelOutboundMessage{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -383,6 +384,65 @@ func TestWhatsAppSignatureVerificationRequiresConfiguredSecret(t *testing.T) {
 	whatsapp.SecretConfig = "{}"
 	if fx.service.VerifyWhatsAppRequest(whatsapp, signature, body) {
 		t.Fatal("expected missing app secret to fail closed")
+	}
+}
+
+func TestRuntimeSupportsNestedModuleReturn(t *testing.T) {
+	outerID := uuid.New()
+	innerID := uuid.New()
+	config := bot.VersionConfiguration{
+		Version: bot.BotVersion{StartStepKey: "outer"},
+		Modules: []bot.VersionModule{
+			{ID: outerID, ModuleKey: "outer", Name: "Outer", Parameters: `{"entry_step":"inner"}`},
+			{ID: innerID, ModuleKey: "inner", Name: "Inner", Parameters: `{"entry_step":"inner_done"}`},
+		},
+		Steps: []bot.Step{
+			{ID: uuid.New(), StepKey: "outer", Type: bot.StepModule, Title: "Outer", ModuleID: &outerID, NextStepKey: "after_outer"},
+			{ID: uuid.New(), StepKey: "inner", Type: bot.StepModule, Title: "Inner", ModuleID: &innerID, NextStepKey: "outer_done"},
+			{ID: uuid.New(), StepKey: "inner_done", Type: bot.StepEnd, Title: "Inner done", Message: "Inner complete."},
+			{ID: uuid.New(), StepKey: "outer_done", Type: bot.StepEnd, Title: "Outer done", Message: "Outer complete."},
+			{ID: uuid.New(), StepKey: "after_outer", Type: bot.StepEnd, Title: "Done", Message: "All done."},
+		},
+	}
+	fx := newRuntimeFixture(t, config)
+	result, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, "m1", "conv-modules", "hi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SessionStatus != SessionCompleted || len(result.Messages) != 3 {
+		t.Fatalf("expected nested modules to complete with three messages, got %+v", result)
+	}
+	want := []string{"Inner complete.", "Outer complete.", "All done."}
+	for index, message := range result.Messages {
+		if message.Text != want[index] {
+			t.Fatalf("message %d: expected %q, got %q", index, want[index], message.Text)
+		}
+	}
+	var events int64
+	if err := fx.db.Model(&RuntimeEvent{}).Where("organization_id = ? AND event_type = ?", fx.actor.OrganizationID, EventModuleCompleted).Count(&events).Error; err != nil {
+		t.Fatal(err)
+	}
+	if events != 2 {
+		t.Fatalf("expected two module completion events, got %d", events)
+	}
+}
+
+func TestRuntimeDispatchesOutboundThroughRegisteredSender(t *testing.T) {
+	config := bot.VersionConfiguration{Version: bot.BotVersion{StartStepKey: "start"}, Steps: []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepEnd, Title: "Done", Message: "Done."}}}
+	fx := newRuntimeFixture(t, config)
+	sender := &MockChannelSender{}
+	fx.service.RegisterChannelSender("test", sender)
+	input := inbound(fx.channel.ID, "m1", "conv-outbound", "hi")
+	result, err := fx.service.ProcessMessage(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err := fx.service.DispatchOutbound(context.Background(), fx.channel, input, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.Sent) != 1 || len(deliveries) != 1 || deliveries[0].Status != OutboundSent || deliveries[0].ProviderMessageID == "" {
+		t.Fatalf("expected one sent outbound delivery, sent=%+v deliveries=%+v", sender.Sent, deliveries)
 	}
 }
 

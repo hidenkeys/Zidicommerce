@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -45,6 +46,7 @@ type PaymentVerification struct {
 type Service struct {
 	db              *gorm.DB
 	paymentProvider PaymentProvider
+	paystackSecret  string
 	mailer          email.Sender
 	appBaseURL      string
 	now             func() time.Time
@@ -57,6 +59,10 @@ func NewService(db *gorm.DB, provider PaymentProvider) *Service {
 func (s *Service) ConfigureNotifications(mailer email.Sender, appBaseURL string) {
 	s.mailer = mailer
 	s.appBaseURL = strings.TrimRight(appBaseURL, "/")
+}
+
+func (s *Service) ConfigurePaymentWebhooks(paystackSecret string) {
+	s.paystackSecret = strings.TrimSpace(paystackSecret)
 }
 
 func (s *Service) CreateOrganization(ctx context.Context, actor auth.CurrentUser, input OrganizationInput) (organization.Organization, error) {
@@ -363,6 +369,15 @@ func (s *Service) GetProduct(ctx context.Context, actor auth.CurrentUser, produc
 	return product, mapNotFound(err, "Product not found")
 }
 
+func (s *Service) GetVariant(ctx context.Context, actor auth.CurrentUser, variantID uuid.UUID) (Variant, error) {
+	var variant Variant
+	err := s.db.WithContext(ctx).
+		Where("product_variants.organization_id = ? AND product_variants.id = ?", actor.OrganizationID, variantID).
+		Preload("Product").
+		First(&variant).Error
+	return variant, mapNotFound(err, "Variant not found")
+}
+
 func (s *Service) UpdateProduct(ctx context.Context, actor auth.CurrentUser, productID uuid.UUID, input ProductInput) (Product, error) {
 	if !actor.Role.CanManageOrganization() {
 		return Product{}, httperror.Forbidden("You cannot manage catalogue")
@@ -440,6 +455,28 @@ func (s *Service) ListInventory(ctx context.Context, actor auth.CurrentUser, sto
 	}
 	err := query.Order("updated_at DESC").Find(&rows).Error
 	return rows, err
+}
+
+func (s *Service) CheckInventory(ctx context.Context, actor auth.CurrentUser, storeID, variantID uuid.UUID, quantity int) (InventoryLevel, error) {
+	if quantity <= 0 {
+		return InventoryLevel{}, httperror.BadRequest("Quantity must be greater than zero")
+	}
+	if _, err := s.GetStore(ctx, actor, storeID); err != nil {
+		return InventoryLevel{}, err
+	}
+	var level InventoryLevel
+	err := s.db.WithContext(ctx).
+		Where("organization_id = ? AND store_id = ? AND variant_id = ?", actor.OrganizationID, storeID, variantID).
+		Preload("Variant").
+		Preload("Variant.Product").
+		First(&level).Error
+	if err != nil {
+		return InventoryLevel{}, mapNotFound(err, "Inventory level not found")
+	}
+	if level.Available() < quantity {
+		return InventoryLevel{}, httperror.BadRequest("Insufficient inventory")
+	}
+	return level, nil
 }
 
 func (s *Service) UpdateInventory(ctx context.Context, actor auth.CurrentUser, inventoryID uuid.UUID, input InventoryInput) (InventoryLevel, error) {
@@ -520,6 +557,59 @@ func (s *Service) CreateCustomer(ctx context.Context, actor auth.CurrentUser, in
 	return customer, s.db.WithContext(ctx).Create(&customer).Error
 }
 
+func (s *Service) FindOrCreateCustomer(ctx context.Context, actor auth.CurrentUser, input CustomerInput) (Customer, error) {
+	input.normalize()
+	if input.Phone == "" && input.Email == "" && input.Name == "" {
+		return Customer{}, httperror.BadRequest("Customer name, phone, or email is required")
+	}
+	var customer Customer
+	query := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID)
+	if input.Phone != "" {
+		err := query.Where("phone = ?", input.Phone).First(&customer).Error
+		if err == nil {
+			return s.updateCustomerMissingFields(ctx, customer, input)
+		}
+		if err != gorm.ErrRecordNotFound {
+			return Customer{}, err
+		}
+	}
+	if input.Email != "" {
+		err := s.db.WithContext(ctx).Where("organization_id = ? AND email = ?", actor.OrganizationID, input.Email).First(&customer).Error
+		if err == nil {
+			return s.updateCustomerMissingFields(ctx, customer, input)
+		}
+		if err != gorm.ErrRecordNotFound {
+			return Customer{}, err
+		}
+	}
+	return s.CreateCustomer(ctx, actor, input)
+}
+
+func (s *Service) updateCustomerMissingFields(ctx context.Context, customer Customer, input CustomerInput) (Customer, error) {
+	updates := map[string]any{"updated_at": s.now()}
+	if customer.Name == "" && input.Name != "" {
+		updates["name"] = input.Name
+	}
+	if customer.Phone == "" && input.Phone != "" {
+		updates["phone"] = input.Phone
+	}
+	if customer.Email == "" && input.Email != "" {
+		updates["email"] = input.Email
+	}
+	if customer.DefaultAddress == "" && input.DefaultAddress != "" {
+		updates["default_address"] = input.DefaultAddress
+	}
+	if len(updates) > 1 {
+		if err := s.db.WithContext(ctx).Model(&customer).Updates(updates).Error; err != nil {
+			return Customer{}, err
+		}
+		if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", customer.OrganizationID, customer.ID).First(&customer).Error; err != nil {
+			return Customer{}, err
+		}
+	}
+	return customer, nil
+}
+
 func (s *Service) ListCustomers(ctx context.Context, actor auth.CurrentUser) ([]Customer, error) {
 	var customers []Customer
 	err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("updated_at DESC").Find(&customers).Error
@@ -538,6 +628,21 @@ func (s *Service) CreateCart(ctx context.Context, actor auth.CurrentUser, input 
 	}
 	cart := Cart{ID: uuid.New(), OrganizationID: actor.OrganizationID, CustomerID: input.CustomerID, StoreID: input.StoreID, Status: "active", Currency: defaultString(input.Currency, "NGN")}
 	return cart, s.db.WithContext(ctx).Create(&cart).Error
+}
+
+func (s *Service) GetOrCreateActiveCart(ctx context.Context, actor auth.CurrentUser, input CartInput) (Cart, error) {
+	if input.CustomerID == uuid.Nil || input.StoreID == uuid.Nil {
+		return Cart{}, httperror.BadRequest("Customer and store are required")
+	}
+	var cart Cart
+	err := s.db.WithContext(ctx).Where("organization_id = ? AND customer_id = ? AND store_id = ? AND status = ?", actor.OrganizationID, input.CustomerID, input.StoreID, "active").Order("created_at DESC").First(&cart).Error
+	if err == nil {
+		return cart, nil
+	}
+	if err != gorm.ErrRecordNotFound {
+		return Cart{}, err
+	}
+	return s.CreateCart(ctx, actor, input)
 }
 
 func (s *Service) GetCart(ctx context.Context, actor auth.CurrentUser, cartID uuid.UUID) (CartSummary, error) {
@@ -762,6 +867,22 @@ func (s *Service) ListOrders(ctx context.Context, actor auth.CurrentUser, filter
 	return orders, query.Find(&orders).Error
 }
 
+func (s *Service) ListCustomerOrders(ctx context.Context, actor auth.CurrentUser, customerID uuid.UUID) ([]Order, error) {
+	if customerID == uuid.Nil {
+		return nil, httperror.BadRequest("Customer is required")
+	}
+	var orders []Order
+	err := s.db.WithContext(ctx).
+		Where("orders.organization_id = ? AND orders.customer_id = ?", actor.OrganizationID, customerID).
+		Preload("Items").
+		Preload("Customer").
+		Preload("Store").
+		Order("orders.created_at DESC").
+		Limit(20).
+		Find(&orders).Error
+	return orders, err
+}
+
 func (s *Service) GetOrder(ctx context.Context, actor auth.CurrentUser, orderID uuid.UUID) (Order, error) {
 	var order Order
 	query := s.db.WithContext(ctx).Where("orders.organization_id = ? AND orders.id = ?", actor.OrganizationID, orderID).Preload("Items").Preload("Customer").Preload("Store")
@@ -793,7 +914,10 @@ func (s *Service) TransitionOrder(ctx context.Context, actor auth.CurrentUser, o
 		if err := tx.Model(&order).Updates(map[string]any{"status": input.Status, "updated_at": s.now()}).Error; err != nil {
 			return err
 		}
-		return s.recordOrderEventTx(tx, actor, order.ID, from, input.Status, "order_transition", input.IdempotencyKey, input.Reason)
+		if err := s.recordOrderEventTx(tx, actor, order.ID, from, input.Status, "order_transition", input.IdempotencyKey, input.Reason); err != nil {
+			return err
+		}
+		return s.recordOrderNotificationTx(tx, actor.OrganizationID, order.ID, "order_"+input.Status, "Order "+order.OrderNumber+" is now "+input.Status+".")
 	})
 	if err != nil {
 		return Order{}, err
@@ -864,6 +988,9 @@ func (s *Service) VerifyPayment(ctx context.Context, actor auth.CurrentUser, inp
 			if err := s.recordOrderEventTx(tx, actor, order.ID, OrderAwaitingPayment, OrderPaid, "payment_verified", "payment:"+payment.Reference, ""); err != nil {
 				return err
 			}
+			if err := s.recordOrderNotificationTx(tx, actor.OrganizationID, order.ID, "payment_confirmed", "Payment confirmed for order "+order.OrderNumber+"."); err != nil {
+				return err
+			}
 		}
 		return tx.Where("organization_id = ? AND id = ?", actor.OrganizationID, payment.ID).First(&payment).Error
 	})
@@ -874,6 +1001,12 @@ func (s *Service) ListPayments(ctx context.Context, actor auth.CurrentUser) ([]P
 	var payments []Payment
 	err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("created_at DESC").Find(&payments).Error
 	return payments, err
+}
+
+func (s *Service) GetPaymentByReference(ctx context.Context, actor auth.CurrentUser, reference string) (Payment, error) {
+	var payment Payment
+	err := s.db.WithContext(ctx).Where("organization_id = ? AND reference = ?", actor.OrganizationID, strings.TrimSpace(reference)).First(&payment).Error
+	return payment, mapNotFound(err, "Payment not found")
 }
 
 func (s *Service) GetFulfilment(ctx context.Context, actor auth.CurrentUser, orderID uuid.UUID) (Fulfilment, error) {
@@ -928,6 +1061,24 @@ func (s *Service) ListChannels(ctx context.Context, actor auth.CurrentUser) ([]C
 	var channels []Channel
 	err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("created_at DESC").Find(&channels).Error
 	return channels, err
+}
+
+func (s *Service) RecordNotification(ctx context.Context, actor auth.CurrentUser, input NotificationInput) (CommerceNotification, error) {
+	if strings.TrimSpace(input.Type) == "" {
+		return CommerceNotification{}, httperror.BadRequest("Notification type is required")
+	}
+	notification := CommerceNotification{
+		ID:               uuid.New(),
+		OrganizationID:   actor.OrganizationID,
+		OrderID:          input.OrderID,
+		CustomerID:       input.CustomerID,
+		ChannelID:        input.ChannelID,
+		NotificationType: strings.TrimSpace(input.Type),
+		Recipient:        strings.TrimSpace(input.Recipient),
+		Status:           defaultString(strings.TrimSpace(input.Status), "queued"),
+		Payload:          jsonObject(input.Payload),
+	}
+	return notification, s.db.WithContext(ctx).Create(&notification).Error
 }
 
 func (s *Service) storeQuery(db *gorm.DB, actor auth.CurrentUser) *gorm.DB {
@@ -1037,6 +1188,21 @@ func (s *Service) recordOrderEventTx(tx *gorm.DB, actor auth.CurrentUser, orderI
 	return tx.Create(&event).Error
 }
 
+func (s *Service) recordOrderNotificationTx(tx *gorm.DB, organizationID, orderID uuid.UUID, notificationType, message string) error {
+	var order Order
+	if err := tx.Where("organization_id = ? AND id = ?", organizationID, orderID).Preload("Customer").First(&order).Error; err != nil {
+		return err
+	}
+	var channel Channel
+	var channelID *uuid.UUID
+	if err := tx.Where("organization_id = ? AND provider = ? AND status = ?", organizationID, "whatsapp", StatusActive).Order("created_at ASC").First(&channel).Error; err == nil {
+		channelID = &channel.ID
+	}
+	customerID := order.CustomerID
+	notification := CommerceNotification{ID: uuid.New(), OrganizationID: organizationID, OrderID: &order.ID, CustomerID: &customerID, ChannelID: channelID, NotificationType: notificationType, Recipient: order.Customer.Phone, Status: "queued", Payload: jsonValue(map[string]any{"message": message, "order_id": order.ID.String(), "order_number": order.OrderNumber, "status": order.Status})}
+	return tx.Create(&notification).Error
+}
+
 func mapNotFound(err error, message string) error {
 	if err == nil {
 		return nil
@@ -1087,6 +1253,17 @@ func jsonObject(raw string) string {
 		return "{}"
 	}
 	return raw
+}
+
+func jsonValue(value any) string {
+	if value == nil {
+		return "{}"
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(body)
 }
 
 func defaultString(value, fallback string) string {

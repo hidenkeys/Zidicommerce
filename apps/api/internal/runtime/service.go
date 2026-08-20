@@ -30,6 +30,7 @@ type Service struct {
 	db       *gorm.DB
 	commerce *core.Service
 	actions  *ActionRegistry
+	senders  map[string]ChannelSender
 	log      *slog.Logger
 	now      func() time.Time
 }
@@ -38,7 +39,7 @@ func NewService(db *gorm.DB, commerce *core.Service, logger *slog.Logger) *Servi
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{db: db, commerce: commerce, actions: NewActionRegistry(commerce), log: logger, now: func() time.Time { return time.Now().UTC() }}
+	return &Service{db: db, commerce: commerce, actions: NewActionRegistry(commerce), senders: map[string]ChannelSender{}, log: logger, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func (s *Service) ProcessMessage(ctx context.Context, input InboundMessage) (RuntimeResult, error) {
@@ -89,6 +90,12 @@ func (s *Service) ProcessMessage(ctx context.Context, input InboundMessage) (Run
 			return RuntimeResult{}, err
 		}
 	}
+	customer, err := s.resolveCustomer(ctx, channel, input)
+	if err != nil {
+		_ = s.markProcessed(ctx, processed, nil, "failed", RuntimeResult{Error: publicRuntimeError(err)})
+		return RuntimeResult{}, err
+	}
+	input.CustomerID = &customer.ID
 
 	session, snapshot, err := s.loadOrCreateSession(ctx, channel, input)
 	if err != nil {
@@ -271,11 +278,14 @@ func (s *Service) loadOrCreateSession(ctx context.Context, channel core.Channel,
 	if err != nil {
 		return ConversationSession{}, bot.VersionConfiguration{}, err
 	}
-	systemContext := map[string]any{"organization_id": channel.OrganizationID.String(), "bot_id": botRecord.ID.String(), "bot_version_id": snapshot.Version.ID.String(), "channel_id": channel.ID.String(), "channel_provider": channel.Provider, "sender": input.Sender}
+	systemContext := map[string]any{"organization_id": channel.OrganizationID.String(), "bot_id": botRecord.ID.String(), "bot_version_id": snapshot.Version.ID.String(), "channel_id": channel.ID.String(), "channel_provider": channel.Provider, "sender": input.Sender, "customer_phone": input.Sender}
+	if input.CustomerID != nil {
+		systemContext["customer_id"] = input.CustomerID.String()
+	}
 	now := s.now()
 	expiresAt := now.Add(defaultSessionTTL)
 	if newConversation {
-		session = ConversationSession{ID: uuid.New(), OrganizationID: channel.OrganizationID, BotID: botRecord.ID, BotVersionID: snapshot.Version.ID, ChannelID: channel.ID, ExternalConversationID: input.ExternalConversationID, CurrentStepKey: snapshot.Version.StartStepKey, Status: SessionActive, Variables: "{}", SystemContext: jsonMap(systemContext), LockVersion: 1, LastMessageAt: &now, ExpiresAt: &expiresAt}
+		session = ConversationSession{ID: uuid.New(), OrganizationID: channel.OrganizationID, BotID: botRecord.ID, BotVersionID: snapshot.Version.ID, ChannelID: channel.ID, CustomerID: input.CustomerID, ExternalConversationID: input.ExternalConversationID, CurrentStepKey: snapshot.Version.StartStepKey, Status: SessionActive, Variables: "{}", SystemContext: jsonMap(systemContext), LockVersion: 1, LastMessageAt: &now, ExpiresAt: &expiresAt}
 		if err := s.db.WithContext(ctx).Create(&session).Error; err != nil {
 			return ConversationSession{}, bot.VersionConfiguration{}, err
 		}
@@ -284,6 +294,7 @@ func (s *Service) loadOrCreateSession(ctx context.Context, channel core.Channel,
 	}
 	session.BotID = botRecord.ID
 	session.BotVersionID = snapshot.Version.ID
+	session.CustomerID = input.CustomerID
 	session.CurrentStepKey = snapshot.Version.StartStepKey
 	session.ExpectedInput = ""
 	session.Status = SessionActive
@@ -291,12 +302,21 @@ func (s *Service) loadOrCreateSession(ctx context.Context, channel core.Channel,
 	session.SystemContext = jsonMap(systemContext)
 	session.LastMessageAt = &now
 	session.ExpiresAt = &expiresAt
-	if err := s.db.WithContext(ctx).Model(&ConversationSession{}).Where("id = ?", session.ID).Updates(map[string]any{"bot_id": session.BotID, "bot_version_id": session.BotVersionID, "current_step_key": session.CurrentStepKey, "expected_input": "", "status": SessionActive, "variables": "{}", "system_context": session.SystemContext, "last_message_at": &now, "expires_at": &expiresAt, "updated_at": now, "lock_version": gorm.Expr("lock_version + 1")}).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(&ConversationSession{}).Where("id = ?", session.ID).Updates(map[string]any{"bot_id": session.BotID, "bot_version_id": session.BotVersionID, "customer_id": session.CustomerID, "current_step_key": session.CurrentStepKey, "expected_input": "", "status": SessionActive, "variables": "{}", "system_context": session.SystemContext, "last_message_at": &now, "expires_at": &expiresAt, "updated_at": now, "lock_version": gorm.Expr("lock_version + 1")}).Error; err != nil {
 		return ConversationSession{}, bot.VersionConfiguration{}, err
 	}
 	session.LockVersion++
 	s.recordEvent(ctx, session, EventConversationStarted, "info", "", "", map[string]any{"reset": true})
 	return session, snapshot, nil
+}
+
+func (s *Service) resolveCustomer(ctx context.Context, channel core.Channel, input InboundMessage) (core.Customer, error) {
+	name := stringValue(input.Metadata["profile_name"])
+	customer, err := s.commerce.FindOrCreateCustomer(ctx, auth.CurrentUser{ID: uuid.Nil, OrganizationID: channel.OrganizationID, Role: authz.MerchantAdmin}, core.CustomerInput{Name: name, Phone: input.Sender, Metadata: `{"source":"runtime"}`})
+	if err != nil {
+		return core.Customer{}, runtimeErrorf(ErrActionFailed, "I could not identify this customer.", "resolve customer failed: %v", err)
+	}
+	return customer, nil
 }
 
 func (s *Service) execute(ctx context.Context, snapshot bot.VersionConfiguration, session *ConversationSession, input InboundMessage) (RuntimeResult, error) {
@@ -423,6 +443,11 @@ func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.V
 		if entry == "" {
 			entry = step.NextStepKey
 			s.recordEvent(ctx, *session, EventModuleCompleted, "info", step.StepKey, "", map[string]any{"module_key": module.ModuleKey})
+		} else if step.NextStepKey != "" {
+			if err := pushModuleFrame(runtimeContext.System, module.ModuleKey, step.StepKey, step.NextStepKey); err != nil {
+				return false, err
+			}
+			session.SystemContext = jsonMap(runtimeContext.System)
 		}
 		return s.advance(session, entry), nil
 	case bot.StepHandoff:
@@ -435,6 +460,12 @@ func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.V
 	case bot.StepEnd:
 		if step.Message != "" {
 			result.Messages = append(result.Messages, OutboundMessage{Type: MessageText, Text: runtimeContext.Render(step.Message, fallbackVariable(snapshot))})
+		}
+		frame, ok := popModuleFrame(runtimeContext.System)
+		if ok {
+			session.SystemContext = jsonMap(runtimeContext.System)
+			s.recordEvent(ctx, *session, EventModuleCompleted, "info", step.StepKey, "", map[string]any{"module_key": frame.ModuleKey, "return_step_key": frame.ReturnStepKey})
+			return s.advance(session, frame.ReturnStepKey), nil
 		}
 		session.Status = SessionCompleted
 		s.recordEvent(ctx, *session, EventConversationCompleted, "info", step.StepKey, "", nil)
@@ -831,4 +862,51 @@ func scrubOutputs(outputs map[string]any) map[string]any {
 
 func formatRuntimeReference(prefix string, id uuid.UUID) string {
 	return fmt.Sprintf("%s-%s", prefix, strings.ReplaceAll(id.String(), "-", ""))
+}
+
+type moduleFrame struct {
+	ModuleKey     string `json:"module_key"`
+	CallerStepKey string `json:"caller_step_key"`
+	ReturnStepKey string `json:"return_step_key"`
+}
+
+func pushModuleFrame(system map[string]any, moduleKey, callerStepKey, returnStepKey string) error {
+	stack := moduleStack(system)
+	if len(stack) >= 10 {
+		return runtimeError(ErrRuntimeConfigurationError, "This bot has too many nested modules.")
+	}
+	stack = append(stack, moduleFrame{ModuleKey: moduleKey, CallerStepKey: callerStepKey, ReturnStepKey: returnStepKey})
+	system["module_stack"] = stack
+	return nil
+}
+
+func popModuleFrame(system map[string]any) (moduleFrame, bool) {
+	stack := moduleStack(system)
+	if len(stack) == 0 {
+		return moduleFrame{}, false
+	}
+	frame := stack[len(stack)-1]
+	stack = stack[:len(stack)-1]
+	if len(stack) == 0 {
+		delete(system, "module_stack")
+	} else {
+		system["module_stack"] = stack
+	}
+	return frame, true
+}
+
+func moduleStack(system map[string]any) []moduleFrame {
+	raw, ok := system["module_stack"]
+	if !ok {
+		return nil
+	}
+	body, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var stack []moduleFrame
+	if err := json.Unmarshal(body, &stack); err != nil {
+		return nil
+	}
+	return stack
 }

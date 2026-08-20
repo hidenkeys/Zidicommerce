@@ -35,6 +35,11 @@ const (
 	EventConversationCompleted = "conversation_completed"
 	EventHandoffStarted        = "handoff_started"
 	EventRuntimeError          = "runtime_error"
+
+	OutboundQueued  = "queued"
+	OutboundSent    = "sent"
+	OutboundFailed  = "failed"
+	OutboundSkipped = "skipped"
 )
 
 type ConversationSession struct {
@@ -106,3 +111,26 @@ type RuntimeEvent struct {
 }
 
 func (RuntimeEvent) TableName() string { return "runtime_events" }
+
+type ChannelOutboundMessage struct {
+	ID                     uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID         uuid.UUID  `gorm:"type:uuid;index" json:"organization_id"`
+	ChannelID              uuid.UUID  `gorm:"type:uuid;index" json:"channel_id"`
+	SessionID              *uuid.UUID `gorm:"type:uuid;index" json:"session_id,omitempty"`
+	ExternalConversationID string     `json:"external_conversation_id"`
+	Recipient              string     `json:"recipient"`
+	Provider               string     `json:"provider"`
+	MessageType            string     `json:"message_type"`
+	Status                 string     `json:"status"`
+	Payload                string     `json:"payload"`
+	ProviderMessageID      string     `json:"provider_message_id"`
+	ProviderResponse       string     `json:"provider_response"`
+	ErrorMessage           string     `json:"error_message"`
+	Attempts               int        `json:"attempts"`
+	NextAttemptAt          *time.Time `json:"next_attempt_at,omitempty"`
+	SentAt                 *time.Time `json:"sent_at,omitempty"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
+}
+
+func (ChannelOutboundMessage) TableName() string { return "channel_outbound_messages" }
