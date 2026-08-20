@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/jobs"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -62,6 +63,8 @@ func newCommerceFixture(t *testing.T, inventory int) commerceFixture {
 		&Channel{},
 		&CommerceNotification{},
 		&MerchantImportJob{},
+		&PaymentReconciliation{},
+		&jobs.Job{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +195,53 @@ func TestOrderTransitionRejectsInvalidJump(t *testing.T) {
 	}
 	if _, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderCompleted}); err == nil {
 		t.Fatal("expected invalid transition to be rejected")
+	}
+}
+
+func TestOrderTransitionIsIdempotentByKey(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderCancelled, IdempotencyKey: "cancel-once"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderCancelled, IdempotencyKey: "cancel-once"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Status != OrderCancelled || second.Status != OrderCancelled {
+		t.Fatalf("expected cancelled order on replay, got %s then %s", first.Status, second.Status)
+	}
+	var events int64
+	if err := fx.db.Model(&OrderEvent{}).Where("organization_id = ? AND order_id = ? AND idempotency_key = ?", fx.actor.OrganizationID, order.ID, "cancel-once").Count(&events).Error; err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 {
+		t.Fatalf("expected one idempotent order event, got %d", events)
+	}
+}
+
+func TestUpdateFulfilmentRejectsInvalidTransition(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.UpdateFulfilment(context.Background(), fx.actor, order.ID, FulfilmentInput{Status: "out_for_delivery"}); err == nil {
+		t.Fatal("expected invalid pickup fulfilment transition to fail")
 	}
 }
 
@@ -425,6 +475,72 @@ func TestPaystackWebhookIsSignatureVerifiedAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestPaystackWebhookRejectsProviderVerificationMismatch(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	fx.service.paymentProvider = namedPaymentProvider{name: "paystack", paid: true, amountMinor: 100, currency: "NGN"}
+	fx.service.ConfigurePaymentWebhooks("paystack-secret")
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payment, err := fx.service.InitializePayment(context.Background(), fx.actor, PaymentInput{OrderID: order.ID, Provider: "paystack", Email: "customer@example.com", IdempotencyKey: "pay-mismatch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"event":"charge.success","data":{"id":22345,"reference":"` + payment.Reference + `","status":"success","amount":420000,"currency":"NGN"}}`)
+	result, err := fx.service.HandlePaystackWebhook(context.Background(), body, paystackTestSignature("paystack-secret", body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != paymentWebhookFailed {
+		t.Fatalf("expected failed webhook, got %+v", result)
+	}
+	var updated Payment
+	if err := fx.db.Where("id = ?", payment.ID).First(&updated).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != PaymentPending {
+		t.Fatalf("expected payment to remain pending, got %s", updated.Status)
+	}
+}
+
+func TestReconcilePaymentAutoMarksPaidWhenProviderMatches(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	fx.service.paymentProvider = namedPaymentProvider{name: "test", paid: true, amountMinor: 420000, currency: "NGN"}
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payment, err := fx.service.InitializePayment(context.Background(), fx.actor, PaymentInput{OrderID: order.ID, Provider: "test", Email: "customer@example.com", IdempotencyKey: "pay-reconcile"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciliation, err := fx.service.ReconcilePayment(context.Background(), fx.actor, payment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciliation.Status != "auto_reconciled" || reconciliation.ActionTaken != "marked_paid" {
+		t.Fatalf("expected auto reconciled payment, got %+v", reconciliation)
+	}
+	var updated Order
+	if err := fx.db.Where("id = ?", order.ID).First(&updated).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != OrderPaid {
+		t.Fatalf("expected reconciled order paid, got %s", updated.Status)
+	}
+}
+
 func TestMerchantImportCreatesConfigurationTransactionally(t *testing.T) {
 	fx := newCommerceFixture(t, 5)
 	result, err := fx.service.ImportMerchantConfiguration(context.Background(), fx.actor, MerchantImportInput{
@@ -480,7 +596,11 @@ func TestMerchantImportRejectsInvalidReferencesWithoutPartialWrites(t *testing.T
 }
 
 type namedPaymentProvider struct {
-	name string
+	name        string
+	paid        bool
+	amountMinor int64
+	currency    string
+	status      string
 }
 
 func (p namedPaymentProvider) Name() string { return p.name }
@@ -490,7 +610,11 @@ func (p namedPaymentProvider) Initialize(_ context.Context, req PaymentInitializ
 }
 
 func (p namedPaymentProvider) Verify(_ context.Context, reference string) (PaymentVerification, error) {
-	return PaymentVerification{Reference: reference, Paid: true}, nil
+	paid := p.paid
+	if p.status == "" && !p.paid {
+		paid = true
+	}
+	return PaymentVerification{Reference: reference, Paid: paid, Status: defaultString(p.status, boolPaymentStatus(paid)), AmountMinor: p.amountMinor, Currency: p.currency, ProviderMetadata: "{}"}, nil
 }
 
 func paystackTestSignature(secret string, body []byte) string {

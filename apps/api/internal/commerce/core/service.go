@@ -13,6 +13,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/email"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/jobs"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -39,8 +40,12 @@ type PaymentInitializeResponse struct {
 }
 
 type PaymentVerification struct {
-	Reference string
-	Paid      bool
+	Reference        string
+	Paid             bool
+	Status           string
+	AmountMinor      int64
+	Currency         string
+	ProviderMetadata string
 }
 
 type Service struct {
@@ -49,6 +54,7 @@ type Service struct {
 	paystackSecret  string
 	mailer          email.Sender
 	appBaseURL      string
+	jobs            *jobs.Service
 	now             func() time.Time
 }
 
@@ -63,6 +69,10 @@ func (s *Service) ConfigureNotifications(mailer email.Sender, appBaseURL string)
 
 func (s *Service) ConfigurePaymentWebhooks(paystackSecret string) {
 	s.paystackSecret = strings.TrimSpace(paystackSecret)
+}
+
+func (s *Service) ConfigureJobs(jobService *jobs.Service) {
+	s.jobs = jobService
 }
 
 func (s *Service) CreateOrganization(ctx context.Context, actor auth.CurrentUser, input OrganizationInput) (organization.Organization, error) {
@@ -514,6 +524,9 @@ func (s *Service) UpdateInventory(ctx context.Context, actor auth.CurrentUser, i
 		if err := tx.Model(&level).Updates(updates).Error; err != nil {
 			return err
 		}
+		if err := s.auditTx(tx, &actor.OrganizationID, &actor.ID, "inventory", &level.ID, "inventory_updated", fmt.Sprintf(`{"store_id":%q,"variant_id":%q}`, level.StoreID, level.VariantID)); err != nil {
+			return err
+		}
 		return tx.Where("organization_id = ? AND id = ?", actor.OrganizationID, inventoryID).First(&level).Error
 	})
 	return level, err
@@ -537,13 +550,19 @@ func (s *Service) UpsertInventory(ctx context.Context, actor auth.CurrentUser, i
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND store_id = ? AND variant_id = ?", actor.OrganizationID, input.StoreID, input.VariantID).First(&level).Error
 		if err == nil {
-			return tx.Model(&level).Updates(map[string]any{"on_hand": input.OnHand, "reorder_threshold": input.ReorderThreshold, "updated_at": s.now()}).Error
+			if err := tx.Model(&level).Updates(map[string]any{"on_hand": input.OnHand, "reorder_threshold": input.ReorderThreshold, "updated_at": s.now()}).Error; err != nil {
+				return err
+			}
+			return s.auditTx(tx, &actor.OrganizationID, &actor.ID, "inventory", &level.ID, "inventory_upserted", fmt.Sprintf(`{"store_id":%q,"variant_id":%q}`, level.StoreID, level.VariantID))
 		}
 		if err != gorm.ErrRecordNotFound {
 			return err
 		}
 		level = InventoryLevel{ID: uuid.New(), OrganizationID: actor.OrganizationID, StoreID: input.StoreID, VariantID: input.VariantID, OnHand: input.OnHand, ReorderThreshold: input.ReorderThreshold}
-		return tx.Create(&level).Error
+		if err := tx.Create(&level).Error; err != nil {
+			return err
+		}
+		return s.auditTx(tx, &actor.OrganizationID, &actor.ID, "inventory", &level.ID, "inventory_created", fmt.Sprintf(`{"store_id":%q,"variant_id":%q}`, level.StoreID, level.VariantID))
 	})
 	return level, err
 }
@@ -907,6 +926,19 @@ func (s *Service) TransitionOrder(ctx context.Context, actor auth.CurrentUser, o
 		if err := query.First(&order).Error; err != nil {
 			return mapNotFound(err, "Order not found")
 		}
+		if input.IdempotencyKey != "" {
+			var existing OrderEvent
+			err := tx.Where("organization_id = ? AND order_id = ? AND idempotency_key = ?", actor.OrganizationID, order.ID, input.IdempotencyKey).First(&existing).Error
+			if err == nil {
+				return nil
+			}
+			if err != gorm.ErrRecordNotFound {
+				return err
+			}
+		}
+		if order.Status == input.Status {
+			return nil
+		}
 		if !canTransition(order.Status, input.Status) {
 			return httperror.BadRequest("Invalid order status transition")
 		}
@@ -915,6 +947,9 @@ func (s *Service) TransitionOrder(ctx context.Context, actor auth.CurrentUser, o
 			return err
 		}
 		if err := s.recordOrderEventTx(tx, actor, order.ID, from, input.Status, "order_transition", input.IdempotencyKey, input.Reason); err != nil {
+			return err
+		}
+		if err := s.auditTx(tx, &actor.OrganizationID, &actor.ID, "order", &order.ID, "order_transition", fmt.Sprintf(`{"from":%q,"to":%q}`, from, input.Status)); err != nil {
 			return err
 		}
 		return s.recordOrderNotificationTx(tx, actor.OrganizationID, order.ID, "order_"+input.Status, "Order "+order.OrderNumber+" is now "+input.Status+".")
@@ -973,6 +1008,9 @@ func (s *Service) VerifyPayment(ctx context.Context, actor auth.CurrentUser, inp
 		if !verification.Paid {
 			return httperror.BadRequest("Payment is not paid")
 		}
+		if err := verifyPaymentMatches(payment, verification); err != nil {
+			return err
+		}
 		now := s.now()
 		if err := tx.Model(&payment).Updates(map[string]any{"status": PaymentPaid, "verified_at": &now, "updated_at": now}).Error; err != nil {
 			return err
@@ -995,6 +1033,61 @@ func (s *Service) VerifyPayment(ctx context.Context, actor auth.CurrentUser, inp
 		return tx.Where("organization_id = ? AND id = ?", actor.OrganizationID, payment.ID).First(&payment).Error
 	})
 	return payment, err
+}
+
+func (s *Service) ReconcilePayment(ctx context.Context, actor auth.CurrentUser, paymentID uuid.UUID) (PaymentReconciliation, error) {
+	if paymentID == uuid.Nil {
+		return PaymentReconciliation{}, httperror.BadRequest("Payment is required")
+	}
+	var reconciliation PaymentReconciliation
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var payment Payment
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", actor.OrganizationID, paymentID).First(&payment).Error; err != nil {
+			return mapNotFound(err, "Payment not found")
+		}
+		verification, err := s.paymentProvider.Verify(ctx, payment.Reference)
+		if err != nil {
+			return err
+		}
+		status := "matched"
+		action := "none"
+		discrepancy := ""
+		if err := verifyPaymentMatches(payment, verification); err != nil {
+			status = "review_required"
+			discrepancy = err.Error()
+		} else if payment.Status != PaymentPaid && verification.Paid {
+			now := s.now()
+			if err := tx.Model(&payment).Updates(map[string]any{"status": PaymentPaid, "verified_at": &now, "updated_at": now}).Error; err != nil {
+				return err
+			}
+			var order Order
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", payment.OrganizationID, payment.OrderID).First(&order).Error; err != nil {
+				return err
+			}
+			if order.Status == OrderAwaitingPayment {
+				if err := tx.Model(&order).Updates(map[string]any{"status": OrderPaid, "updated_at": now}).Error; err != nil {
+					return err
+				}
+				if err := s.recordOrderEventTx(tx, actor, order.ID, OrderAwaitingPayment, OrderPaid, "payment_reconciled", "payment-reconcile:"+payment.Reference, ""); err != nil {
+					return err
+				}
+				if err := s.recordOrderNotificationTx(tx, actor.OrganizationID, order.ID, "payment_confirmed", "Payment confirmed for order "+order.OrderNumber+"."); err != nil {
+					return err
+				}
+			}
+			status = "auto_reconciled"
+			action = "marked_paid"
+		} else if payment.Status == PaymentPaid && !verification.Paid {
+			status = "review_required"
+			discrepancy = "internal payment is paid but provider is not paid"
+		}
+		reconciliation = PaymentReconciliation{ID: uuid.New(), OrganizationID: actor.OrganizationID, PaymentID: payment.ID, Provider: payment.Provider, Reference: payment.Reference, InternalStatus: payment.Status, ProviderStatus: defaultString(verification.Status, boolPaymentStatus(verification.Paid)), Status: status, ActionTaken: action, Discrepancy: discrepancy, Metadata: jsonObject(verification.ProviderMetadata)}
+		if err := tx.Create(&reconciliation).Error; err != nil {
+			return err
+		}
+		return s.auditTx(tx, &actor.OrganizationID, &actor.ID, "payment", &payment.ID, "payment_reconciled", fmt.Sprintf(`{"status":%q,"action":%q}`, status, action))
+	})
+	return reconciliation, err
 }
 
 func (s *Service) ListPayments(ctx context.Context, actor auth.CurrentUser) ([]Payment, error) {
@@ -1023,6 +1116,9 @@ func (s *Service) UpdateFulfilment(ctx context.Context, actor auth.CurrentUser, 
 	if err != nil {
 		return Fulfilment{}, err
 	}
+	if input.Status != "" && input.Status != fulfilment.Status && !canFulfilmentTransition(fulfilment.Type, fulfilment.Status, input.Status) {
+		return Fulfilment{}, httperror.BadRequest("Invalid fulfilment status transition")
+	}
 	updates := map[string]any{"updated_at": s.now()}
 	if input.Status != "" {
 		updates["status"] = input.Status
@@ -1041,6 +1137,9 @@ func (s *Service) UpdateFulfilment(ctx context.Context, actor auth.CurrentUser, 
 	}
 	if err := s.db.WithContext(ctx).Model(&fulfilment).Updates(updates).Error; err != nil {
 		return Fulfilment{}, err
+	}
+	if input.Status != "" && input.Status != fulfilment.Status {
+		_ = s.auditTx(s.db.WithContext(ctx), &actor.OrganizationID, &actor.ID, "fulfilment", &fulfilment.ID, "fulfilment_transition", fmt.Sprintf(`{"from":%q,"to":%q}`, fulfilment.Status, input.Status))
 	}
 	return s.GetFulfilment(ctx, actor, orderID)
 }
@@ -1078,7 +1177,13 @@ func (s *Service) RecordNotification(ctx context.Context, actor auth.CurrentUser
 		Status:           defaultString(strings.TrimSpace(input.Status), "queued"),
 		Payload:          jsonObject(input.Payload),
 	}
-	return notification, s.db.WithContext(ctx).Create(&notification).Error
+	if err := s.db.WithContext(ctx).Create(&notification).Error; err != nil {
+		return CommerceNotification{}, err
+	}
+	if err := s.enqueueNotificationJob(ctx, notification); err != nil {
+		return CommerceNotification{}, err
+	}
+	return notification, nil
 }
 
 func (s *Service) storeQuery(db *gorm.DB, actor auth.CurrentUser) *gorm.DB {
@@ -1200,7 +1305,10 @@ func (s *Service) recordOrderNotificationTx(tx *gorm.DB, organizationID, orderID
 	}
 	customerID := order.CustomerID
 	notification := CommerceNotification{ID: uuid.New(), OrganizationID: organizationID, OrderID: &order.ID, CustomerID: &customerID, ChannelID: channelID, NotificationType: notificationType, Recipient: order.Customer.Phone, Status: "queued", Payload: jsonValue(map[string]any{"message": message, "order_id": order.ID.String(), "order_number": order.OrderNumber, "status": order.Status})}
-	return tx.Create(&notification).Error
+	if err := tx.Create(&notification).Error; err != nil {
+		return err
+	}
+	return s.enqueueNotificationJobTx(tx, notification)
 }
 
 func mapNotFound(err error, message string) error {
@@ -1229,8 +1337,70 @@ func canTransition(from, to string) bool {
 	return false
 }
 
+func canFulfilmentTransition(fulfilmentType, from, to string) bool {
+	allowed := map[string][]string{
+		"pending":          {"ready", "cancelled"},
+		"ready":            {"completed", "cancelled"},
+		"out_for_delivery": {"completed", "cancelled"},
+	}
+	if fulfilmentType == FulfilmentMerchantRider {
+		allowed["ready"] = []string{"out_for_delivery", "completed", "cancelled"}
+	}
+	for _, candidate := range allowed[from] {
+		if candidate == to {
+			return true
+		}
+	}
+	return false
+}
+
 func isFulfilmentMode(mode string) bool {
 	return mode == FulfilmentPickup || mode == FulfilmentCustomerRider || mode == FulfilmentMerchantRider
+}
+
+func verifyPaymentMatches(payment Payment, verification PaymentVerification) error {
+	if verification.Reference != "" && verification.Reference != payment.Reference {
+		return httperror.BadRequest("Payment reference mismatch")
+	}
+	if verification.AmountMinor > 0 && verification.AmountMinor != payment.AmountMinor {
+		return httperror.BadRequest("Payment amount mismatch")
+	}
+	if verification.Currency != "" && strings.ToUpper(verification.Currency) != strings.ToUpper(payment.Currency) {
+		return httperror.BadRequest("Payment currency mismatch")
+	}
+	return nil
+}
+
+func boolPaymentStatus(paid bool) string {
+	if paid {
+		return "success"
+	}
+	return "not_paid"
+}
+
+func (s *Service) enqueueNotificationJob(ctx context.Context, notification CommerceNotification) error {
+	if s.jobs == nil {
+		return nil
+	}
+	_, err := s.jobs.Enqueue(ctx, jobs.EnqueueInput{
+		OrganizationID: &notification.OrganizationID,
+		JobType:        jobs.JobTypeNotificationDelivery,
+		Payload:        map[string]any{"notification_id": notification.ID.String()},
+		IdempotencyKey: "notification:" + notification.ID.String(),
+		CorrelationID:  notification.ID.String(),
+		MaxAttempts:    5,
+	})
+	return err
+}
+
+func (s *Service) enqueueNotificationJobTx(tx *gorm.DB, notification CommerceNotification) error {
+	if s.jobs == nil {
+		return nil
+	}
+	now := s.now()
+	organizationID := notification.OrganizationID
+	job := jobs.Job{ID: uuid.New(), OrganizationID: &organizationID, JobType: jobs.JobTypeNotificationDelivery, Status: jobs.StatusQueued, Payload: jsonValue(map[string]any{"notification_id": notification.ID.String()}), IdempotencyKey: "notification:" + notification.ID.String(), CorrelationID: notification.ID.String(), MaxAttempts: 5, AvailableAt: now}
+	return tx.Create(&job).Error
 }
 
 func multiplyPrice(price int64, quantity int) (int64, error) {

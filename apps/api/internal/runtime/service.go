@@ -20,6 +20,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/jobs"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -29,6 +30,7 @@ const defaultSessionTTL = 24 * time.Hour
 type Service struct {
 	db       *gorm.DB
 	commerce *core.Service
+	jobs     *jobs.Service
 	actions  *ActionRegistry
 	senders  map[string]ChannelSender
 	log      *slog.Logger
@@ -40,6 +42,10 @@ func NewService(db *gorm.DB, commerce *core.Service, logger *slog.Logger) *Servi
 		logger = slog.Default()
 	}
 	return &Service{db: db, commerce: commerce, actions: NewActionRegistry(commerce), senders: map[string]ChannelSender{}, log: logger, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func (s *Service) ConfigureJobs(jobService *jobs.Service) {
+	s.jobs = jobService
 }
 
 func (s *Service) ProcessMessage(ctx context.Context, input InboundMessage) (RuntimeResult, error) {
@@ -319,6 +325,46 @@ func (s *Service) resolveCustomer(ctx context.Context, channel core.Channel, inp
 	return customer, nil
 }
 
+func (s *Service) openSupportHandoff(ctx context.Context, session ConversationSession, reason string, runtimeContext RuntimeContext) error {
+	var existing SupportHandoff
+	err := s.db.WithContext(ctx).Where("organization_id = ? AND session_id = ? AND status IN ?", session.OrganizationID, session.ID, []string{"open", "assigned"}).First(&existing).Error
+	if err == nil {
+		return nil
+	}
+	if err != gorm.ErrRecordNotFound {
+		return err
+	}
+	orderID := uuidFromAny(runtimeContext.Variables["order_id"])
+	if orderID == nil {
+		if raw, ok := lookupPath(runtimeContext.Variables, "order.id"); ok {
+			orderID = uuidFromAny(raw)
+		}
+	}
+	handoff := SupportHandoff{
+		ID:             uuid.New(),
+		OrganizationID: session.OrganizationID,
+		SessionID:      session.ID,
+		CustomerID:     session.CustomerID,
+		OrderID:        orderID,
+		Status:         "open",
+		Reason:         strings.TrimSpace(reason),
+		Metadata:       jsonMap(map[string]any{"bot_id": session.BotID.String(), "bot_version_id": session.BotVersionID.String(), "channel_id": session.ChannelID.String(), "external_conversation_id": session.ExternalConversationID}),
+	}
+	return s.db.WithContext(ctx).Create(&handoff).Error
+}
+
+func uuidFromAny(value any) *uuid.UUID {
+	raw := strings.TrimSpace(stringValue(value))
+	if raw == "" {
+		return nil
+	}
+	parsed, err := uuid.Parse(raw)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
 func (s *Service) execute(ctx context.Context, snapshot bot.VersionConfiguration, session *ConversationSession, input InboundMessage) (RuntimeResult, error) {
 	variables := parseJSONMap(session.Variables)
 	system := parseJSONMap(session.SystemContext)
@@ -429,6 +475,7 @@ func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.V
 		}
 		if outputs["handoff"] == true {
 			session.Status = SessionHandoff
+			_ = s.openSupportHandoff(ctx, *session, stringValue(outputs["reason"]), runtimeContext)
 			return false, nil
 		}
 		return s.advance(session, step.NextStepKey), nil
@@ -455,6 +502,7 @@ func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.V
 			result.Messages = append(result.Messages, OutboundMessage{Type: MessageText, Text: runtimeContext.Render(step.Message, fallbackVariable(snapshot))})
 		}
 		session.Status = SessionHandoff
+		_ = s.openSupportHandoff(ctx, *session, step.Message, runtimeContext)
 		s.recordEvent(ctx, *session, EventHandoffStarted, "info", step.StepKey, "", nil)
 		return false, nil
 	case bot.StepEnd:

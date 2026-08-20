@@ -106,6 +106,39 @@ func (s *Service) HandlePaystackWebhook(ctx context.Context, body []byte, signat
 			result.Status = paymentWebhookFailed
 			return nil
 		}
+		if payload.Data.Currency != "" && strings.ToUpper(payload.Data.Currency) != strings.ToUpper(payment.Currency) {
+			now := s.now()
+			if err := tx.Model(&event).Updates(map[string]any{"organization_id": payment.OrganizationID, "status": paymentWebhookFailed, "error_message": "currency mismatch", "processed_at": &now, "updated_at": now}).Error; err != nil {
+				return err
+			}
+			result.Status = paymentWebhookFailed
+			return nil
+		}
+		verification, err := s.paymentProvider.Verify(ctx, payment.Reference)
+		if err != nil {
+			now := s.now()
+			if updateErr := tx.Model(&event).Updates(map[string]any{"organization_id": payment.OrganizationID, "status": paymentWebhookFailed, "error_message": publicWebhookError(err), "processed_at": &now, "updated_at": now}).Error; updateErr != nil {
+				return updateErr
+			}
+			result.Status = paymentWebhookFailed
+			return nil
+		}
+		if !verification.Paid {
+			now := s.now()
+			if err := tx.Model(&event).Updates(map[string]any{"organization_id": payment.OrganizationID, "status": paymentWebhookFailed, "error_message": "provider verification is not paid", "processed_at": &now, "updated_at": now}).Error; err != nil {
+				return err
+			}
+			result.Status = paymentWebhookFailed
+			return nil
+		}
+		if err := verifyPaymentMatches(payment, verification); err != nil {
+			now := s.now()
+			if updateErr := tx.Model(&event).Updates(map[string]any{"organization_id": payment.OrganizationID, "status": paymentWebhookFailed, "error_message": publicWebhookError(err), "processed_at": &now, "updated_at": now}).Error; updateErr != nil {
+				return updateErr
+			}
+			result.Status = paymentWebhookFailed
+			return nil
+		}
 		now := s.now()
 		if payment.Status != PaymentPaid {
 			if err := tx.Model(&payment).Updates(map[string]any{"status": PaymentPaid, "verified_at": &now, "updated_at": now}).Error; err != nil {
@@ -155,4 +188,15 @@ func paystackEventID(payload paystackWebhookPayload) string {
 		rawID = payload.Event + ":" + payload.Data.Reference + ":" + strings.ToLower(payload.Data.Status)
 	}
 	return rawID
+}
+
+func publicWebhookError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	if len(message) > 240 {
+		return message[:240]
+	}
+	return message
 }

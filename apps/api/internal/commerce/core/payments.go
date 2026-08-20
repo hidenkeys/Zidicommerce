@@ -26,7 +26,7 @@ func (SafeTestProvider) Initialize(_ context.Context, req PaymentInitializeReque
 }
 
 func (SafeTestProvider) Verify(_ context.Context, reference string) (PaymentVerification, error) {
-	return PaymentVerification{Reference: reference, Paid: true}, nil
+	return PaymentVerification{Reference: reference, Paid: true, Status: "success"}, nil
 }
 
 type PaystackProvider struct {
@@ -116,6 +116,8 @@ func (p *PaystackProvider) Verify(ctx context.Context, reference string) (Paymen
 		Data   struct {
 			Reference string `json:"reference"`
 			Status    string `json:"status"`
+			Amount    int64  `json:"amount"`
+			Currency  string `json:"currency"`
 		} `json:"data"`
 		Message string `json:"message"`
 	}
@@ -125,5 +127,5 @@ func (p *PaystackProvider) Verify(ctx context.Context, reference string) (Paymen
 	if resp.StatusCode >= 400 || !decoded.Status {
 		return PaymentVerification{}, fmt.Errorf("paystack verify failed: %s", decoded.Message)
 	}
-	return PaymentVerification{Reference: decoded.Data.Reference, Paid: decoded.Data.Status == "success"}, nil
+	return PaymentVerification{Reference: decoded.Data.Reference, Paid: decoded.Data.Status == "success", Status: decoded.Data.Status, AmountMinor: decoded.Data.Amount, Currency: strings.ToUpper(decoded.Data.Currency), ProviderMetadata: jsonValue(decoded.Data)}, nil
 }

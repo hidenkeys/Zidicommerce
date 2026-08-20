@@ -341,6 +341,9 @@ type CommerceNotification struct {
 	Payload           string     `json:"payload"`
 	OutboundMessageID *uuid.UUID `gorm:"type:uuid" json:"outbound_message_id,omitempty"`
 	ErrorMessage      string     `json:"error_message"`
+	Attempts          int        `json:"attempts"`
+	NextAttemptAt     *time.Time `json:"next_attempt_at,omitempty"`
+	SentAt            *time.Time `json:"sent_at,omitempty"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
 }
@@ -360,3 +363,20 @@ type MerchantImportJob struct {
 }
 
 func (MerchantImportJob) TableName() string { return "merchant_import_jobs" }
+
+type PaymentReconciliation struct {
+	ID             uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID uuid.UUID `gorm:"type:uuid;index" json:"organization_id"`
+	PaymentID      uuid.UUID `gorm:"type:uuid;index" json:"payment_id"`
+	Provider       string    `json:"provider"`
+	Reference      string    `json:"reference"`
+	InternalStatus string    `json:"internal_status"`
+	ProviderStatus string    `json:"provider_status"`
+	Status         string    `json:"status"`
+	ActionTaken    string    `json:"action_taken"`
+	Discrepancy    string    `json:"discrepancy"`
+	Metadata       string    `json:"metadata"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+func (PaymentReconciliation) TableName() string { return "payment_reconciliations" }

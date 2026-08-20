@@ -15,6 +15,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/jobs"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -75,6 +76,8 @@ func newRuntimeFixture(t *testing.T, config bot.VersionConfiguration) runtimeFix
 		&ProcessedMessage{},
 		&RuntimeEvent{},
 		&ChannelOutboundMessage{},
+		&SupportHandoff{},
+		&jobs.Job{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -300,6 +303,13 @@ func TestRuntimeHandoffPausesAutomation(t *testing.T) {
 	if !next.Handoff || !strings.Contains(next.Messages[0].Text, "team member") {
 		t.Fatalf("expected automation to remain paused, got %+v", next)
 	}
+	var handoffs int64
+	if err := fx.db.Model(&SupportHandoff{}).Where("organization_id = ? AND session_id = ? AND status = ?", fx.actor.OrganizationID, result.ConversationID, "open").Count(&handoffs).Error; err != nil {
+		t.Fatal(err)
+	}
+	if handoffs != 1 {
+		t.Fatalf("expected one open support handoff, got %d", handoffs)
+	}
 }
 
 func TestRuntimePinsExistingSessionToOriginalPublishedVersion(t *testing.T) {
@@ -443,6 +453,42 @@ func TestRuntimeDispatchesOutboundThroughRegisteredSender(t *testing.T) {
 	}
 	if len(sender.Sent) != 1 || len(deliveries) != 1 || deliveries[0].Status != OutboundSent || deliveries[0].ProviderMessageID == "" {
 		t.Fatalf("expected one sent outbound delivery, sent=%+v deliveries=%+v", sender.Sent, deliveries)
+	}
+}
+
+func TestRuntimeQueuesOutboundAndWorkerSendsIt(t *testing.T) {
+	config := bot.VersionConfiguration{Version: bot.BotVersion{StartStepKey: "start"}, Steps: []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepEnd, Title: "Done", Message: "Done."}}}
+	fx := newRuntimeFixture(t, config)
+	jobService := jobs.NewService(fx.db, nil)
+	fx.service.ConfigureJobs(jobService)
+	jobService.Register(jobs.JobTypeChannelOutbound, fx.service.ProcessOutboundJob)
+	sender := &MockChannelSender{}
+	fx.service.RegisterChannelSender("test", sender)
+	input := inbound(fx.channel.ID, "m1", "conv-worker-outbound", "hi")
+	result, err := fx.service.ProcessMessage(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err := fx.service.DispatchOutbound(context.Background(), fx.channel, input, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.Sent) != 0 || len(deliveries) != 1 || deliveries[0].Status != OutboundQueued {
+		t.Fatalf("expected one queued outbound delivery before worker, sent=%+v deliveries=%+v", sender.Sent, deliveries)
+	}
+	processed, err := jobService.ProcessDue(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed != 1 || len(sender.Sent) != 1 {
+		t.Fatalf("expected worker to send one delivery, processed=%d sent=%+v", processed, sender.Sent)
+	}
+	var updated ChannelOutboundMessage
+	if err := fx.db.Where("id = ?", deliveries[0].ID).First(&updated).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != OutboundSent || updated.ProviderMessageID == "" {
+		t.Fatalf("expected outbound sent after worker, got %+v", updated)
 	}
 }
 

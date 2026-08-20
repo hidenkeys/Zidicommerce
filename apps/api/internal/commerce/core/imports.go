@@ -99,6 +99,11 @@ func (s *Service) ImportMerchantConfiguration(ctx context.Context, actor auth.Cu
 		return MerchantImportResult{}, err
 	}
 	result := MerchantImportResult{Stores: map[string]uuid.UUID{}, Categories: map[string]uuid.UUID{}, Products: map[string]uuid.UUID{}, Variants: map[string]uuid.UUID{}}
+	job := MerchantImportJob{ID: uuid.New(), OrganizationID: actor.OrganizationID, ActorUserID: &actor.ID, Status: "processing", Source: "json", Summary: "{}", Errors: "[]"}
+	if err := s.db.WithContext(ctx).Create(&job).Error; err != nil {
+		return MerchantImportResult{}, err
+	}
+	result.JobID = job.ID
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, input := range input.Stores {
 			store := Store{ID: uuid.New(), OrganizationID: actor.OrganizationID, Name: strings.TrimSpace(input.Name), Code: strings.ToUpper(strings.TrimSpace(input.Code)), Status: defaultString(strings.ToLower(strings.TrimSpace(input.Status)), StatusActive), Address: strings.TrimSpace(input.Address), City: strings.TrimSpace(input.City), Country: strings.TrimSpace(input.Country), Latitude: input.Latitude, Longitude: input.Longitude, Metadata: jsonObject(input.Metadata)}
@@ -153,13 +158,11 @@ func (s *Service) ImportMerchantConfiguration(ctx context.Context, actor auth.Cu
 			}
 			result.Channels = append(result.Channels, channel.ID)
 		}
-		job := MerchantImportJob{ID: uuid.New(), OrganizationID: actor.OrganizationID, ActorUserID: &actor.ID, Status: "completed", Source: "json", Summary: jsonValue(result), Errors: "[]"}
-		if err := tx.Create(&job).Error; err != nil {
-			return err
-		}
-		result.JobID = job.ID
-		return nil
+		return tx.Model(&job).Updates(map[string]any{"status": "completed", "summary": jsonValue(result), "errors": "[]"}).Error
 	})
+	if err != nil {
+		_ = s.db.WithContext(ctx).Model(&job).Updates(map[string]any{"status": "failed", "errors": jsonValue([]string{err.Error()})}).Error
+	}
 	return result, err
 }
 

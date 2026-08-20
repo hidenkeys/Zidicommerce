@@ -36,10 +36,15 @@ const (
 	EventHandoffStarted        = "handoff_started"
 	EventRuntimeError          = "runtime_error"
 
-	OutboundQueued  = "queued"
-	OutboundSent    = "sent"
-	OutboundFailed  = "failed"
-	OutboundSkipped = "skipped"
+	OutboundQueued            = "queued"
+	OutboundSending           = "sending"
+	OutboundSent              = "sent"
+	OutboundDelivered         = "delivered"
+	OutboundRead              = "read"
+	OutboundFailed            = "failed"
+	OutboundRetryPending      = "retry_pending"
+	OutboundFailedPermanently = "failed_permanently"
+	OutboundSkipped           = "skipped"
 )
 
 type ConversationSession struct {
@@ -123,14 +128,34 @@ type ChannelOutboundMessage struct {
 	MessageType            string     `json:"message_type"`
 	Status                 string     `json:"status"`
 	Payload                string     `json:"payload"`
+	IdempotencyKey         string     `json:"idempotency_key"`
 	ProviderMessageID      string     `json:"provider_message_id"`
 	ProviderResponse       string     `json:"provider_response"`
 	ErrorMessage           string     `json:"error_message"`
 	Attempts               int        `json:"attempts"`
 	NextAttemptAt          *time.Time `json:"next_attempt_at,omitempty"`
 	SentAt                 *time.Time `json:"sent_at,omitempty"`
+	DeliveredAt            *time.Time `json:"delivered_at,omitempty"`
+	ReadAt                 *time.Time `json:"read_at,omitempty"`
 	CreatedAt              time.Time  `json:"created_at"`
 	UpdatedAt              time.Time  `json:"updated_at"`
 }
 
 func (ChannelOutboundMessage) TableName() string { return "channel_outbound_messages" }
+
+type SupportHandoff struct {
+	ID             uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID uuid.UUID  `gorm:"type:uuid;index" json:"organization_id"`
+	SessionID      uuid.UUID  `gorm:"type:uuid;index" json:"session_id"`
+	CustomerID     *uuid.UUID `gorm:"type:uuid;index" json:"customer_id,omitempty"`
+	OrderID        *uuid.UUID `gorm:"type:uuid;index" json:"order_id,omitempty"`
+	AssignedUserID *uuid.UUID `gorm:"type:uuid" json:"assigned_user_id,omitempty"`
+	Status         string     `json:"status"`
+	Reason         string     `json:"reason"`
+	Metadata       string     `json:"metadata"`
+	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+func (SupportHandoff) TableName() string { return "support_handoffs" }

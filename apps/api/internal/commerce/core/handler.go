@@ -71,6 +71,7 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Get("/payments", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.listPayments)
 	router.Post("/payments/initialize", h.initializePayment)
 	router.Post("/payments/verify", h.verifyPayment)
+	router.Post("/payments/:id/reconcile", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.reconcilePayment)
 
 	router.Get("/fulfilment/:order_id", h.getFulfilment)
 	router.Patch("/fulfilment/:order_id", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin, authz.StoreManager, authz.StoreStaff), h.updateFulfilment)
@@ -528,6 +529,15 @@ func (h *Handler) verifyPayment(c *fiber.Ctx) error {
 		return err
 	}
 	data, err := h.service.VerifyPayment(c.UserContext(), mustUser(c), input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) reconcilePayment(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.ReconcilePayment(c.UserContext(), mustUser(c), id)
 	return respond(c, data, err)
 }
 

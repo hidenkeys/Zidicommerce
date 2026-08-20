@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
@@ -12,6 +13,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/database"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/email"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httpapi"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/jobs"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/migrations"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
 	runtimeengine "github.com/hidenkeys/zidicommerce/apps/api/internal/runtime"
@@ -51,6 +53,8 @@ func main() {
 	}
 	commerceService := core.NewService(db, provider)
 	commerceService.ConfigurePaymentWebhooks(cfg.Payment.PaystackSecret)
+	jobService := jobs.NewService(db, log)
+	commerceService.ConfigureJobs(jobService)
 	var mailer email.Sender = email.NewLogSender(log, cfg.Email.From)
 	if cfg.Email.Mode == "smtp" {
 		mailer = email.NewSMTPSender(cfg.Email.SMTPHost, cfg.Email.SMTPPort, cfg.Email.SMTPUser, cfg.Email.SMTPPass, cfg.Email.From)
@@ -58,7 +62,11 @@ func main() {
 	commerceService.ConfigureNotifications(mailer, cfg.Email.AppBaseURL)
 	botService := bot.NewService(db)
 	runtimeService := runtimeengine.NewService(db, commerceService, log)
+	runtimeService.ConfigureJobs(jobService)
 	runtimeService.RegisterChannelSender("whatsapp", runtimeengine.NewWhatsAppCloudSender("", log))
+	jobService.Register(jobs.JobTypeChannelOutbound, runtimeService.ProcessOutboundJob)
+	jobService.Register(jobs.JobTypeNotificationDelivery, runtimeService.ProcessNotificationJob)
+	jobService.Start(ctx, 2*time.Second, 25)
 
 	app := httpapi.New(httpapi.Dependencies{
 		Config:       cfg,

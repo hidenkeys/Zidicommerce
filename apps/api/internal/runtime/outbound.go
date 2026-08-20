@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/jobs"
 	"gorm.io/gorm"
 )
 
@@ -37,9 +39,10 @@ func (s *Service) RegisterChannelSender(provider string, sender ChannelSender) {
 
 func (s *Service) DispatchOutbound(ctx context.Context, channel core.Channel, input InboundMessage, result RuntimeResult) ([]ChannelOutboundMessage, error) {
 	deliveries := make([]ChannelOutboundMessage, 0, len(result.Messages))
-	for _, message := range result.Messages {
+	for index, message := range result.Messages {
 		payload := s.channelPayload(channel, input.Sender, message)
 		sessionID := result.ConversationID
+		idempotencyKey := outboundIdempotencyKey(input, result, index)
 		delivery := ChannelOutboundMessage{
 			ID:                     uuid.New(),
 			OrganizationID:         channel.OrganizationID,
@@ -51,54 +54,198 @@ func (s *Service) DispatchOutbound(ctx context.Context, channel core.Channel, in
 			MessageType:            message.Type,
 			Status:                 OutboundQueued,
 			Payload:                jsonValue(payload),
+			IdempotencyKey:         idempotencyKey,
 			ProviderResponse:       "{}",
 		}
 		if err := s.db.WithContext(ctx).Create(&delivery).Error; err != nil {
+			if existing, ok, findErr := s.findOutboundByIdempotency(ctx, channel, idempotencyKey); findErr == nil && ok {
+				deliveries = append(deliveries, existing)
+				continue
+			}
 			return deliveries, err
 		}
-		sender, ok := s.senders[strings.ToLower(channel.Provider)]
-		if !ok {
-			now := s.now()
-			delivery.Status = OutboundSkipped
-			delivery.ErrorMessage = "channel sender is not configured"
-			delivery.UpdatedAt = now
-			if err := s.db.WithContext(ctx).Model(&delivery).Updates(map[string]any{"status": delivery.Status, "error_message": delivery.ErrorMessage, "updated_at": now}).Error; err != nil {
+		if s.jobs != nil {
+			_, err := s.jobs.Enqueue(ctx, jobs.EnqueueInput{
+				OrganizationID: &channel.OrganizationID,
+				JobType:        jobs.JobTypeChannelOutbound,
+				Payload:        map[string]any{"outbound_message_id": delivery.ID.String()},
+				IdempotencyKey: "outbound:" + delivery.ID.String(),
+				CorrelationID:  delivery.ID.String(),
+				MaxAttempts:    5,
+			})
+			if err != nil {
 				return deliveries, err
 			}
 			deliveries = append(deliveries, delivery)
 			continue
 		}
-		sendCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-		providerResult, err := sender.Send(sendCtx, channel, input.Sender, message, payload)
-		cancel()
-		if err != nil {
-			now := s.now()
-			nextAttempt := now.Add(2 * time.Minute)
-			delivery.Status = OutboundFailed
-			delivery.ErrorMessage = publicSendError(err)
-			delivery.Attempts = 1
-			delivery.NextAttemptAt = &nextAttempt
-			delivery.UpdatedAt = now
-			if updateErr := s.db.WithContext(ctx).Model(&delivery).Updates(map[string]any{"status": delivery.Status, "error_message": delivery.ErrorMessage, "attempts": delivery.Attempts, "next_attempt_at": &nextAttempt, "updated_at": now}).Error; updateErr != nil {
-				return deliveries, updateErr
-			}
-			s.log.Warn("runtime outbound send failed", "organization_id", channel.OrganizationID, "channel_id", channel.ID, "provider", channel.Provider, "delivery_id", delivery.ID, "error", delivery.ErrorMessage)
-			deliveries = append(deliveries, delivery)
-			continue
-		}
-		now := s.now()
-		delivery.Status = OutboundSent
-		delivery.Attempts = 1
-		delivery.ProviderMessageID = providerResult.ProviderMessageID
-		delivery.ProviderResponse = jsonValue(providerResult.Response)
-		delivery.SentAt = &now
-		delivery.UpdatedAt = now
-		if err := s.db.WithContext(ctx).Model(&delivery).Updates(map[string]any{"status": delivery.Status, "attempts": delivery.Attempts, "provider_message_id": delivery.ProviderMessageID, "provider_response": delivery.ProviderResponse, "sent_at": &now, "updated_at": now}).Error; err != nil {
+		if err := s.SendOutboundNow(ctx, delivery.ID, 1, 5); err != nil {
 			return deliveries, err
 		}
+		_ = s.db.WithContext(ctx).Where("id = ?", delivery.ID).First(&delivery).Error
 		deliveries = append(deliveries, delivery)
 	}
 	return deliveries, nil
+}
+
+func (s *Service) ProcessOutboundJob(ctx context.Context, job jobs.Job) error {
+	var payload struct {
+		OutboundMessageID string `json:"outbound_message_id"`
+	}
+	if err := json.Unmarshal([]byte(defaultObject(job.Payload)), &payload); err != nil {
+		return jobs.PermanentError{Err: err}
+	}
+	id, err := uuid.Parse(strings.TrimSpace(payload.OutboundMessageID))
+	if err != nil {
+		return jobs.PermanentError{Err: err}
+	}
+	return s.SendOutboundNow(ctx, id, job.Attempts+1, job.MaxAttempts)
+}
+
+func (s *Service) ProcessNotificationJob(ctx context.Context, job jobs.Job) error {
+	var payload struct {
+		NotificationID string `json:"notification_id"`
+	}
+	if err := json.Unmarshal([]byte(defaultObject(job.Payload)), &payload); err != nil {
+		return jobs.PermanentError{Err: err}
+	}
+	notificationID, err := uuid.Parse(strings.TrimSpace(payload.NotificationID))
+	if err != nil {
+		return jobs.PermanentError{Err: err}
+	}
+	var notification core.CommerceNotification
+	if err := s.db.WithContext(ctx).Where("id = ?", notificationID).First(&notification).Error; err != nil {
+		return jobs.PermanentError{Err: err}
+	}
+	if notification.Status == "sent" || notification.Status == "skipped" {
+		return nil
+	}
+	if notification.ChannelID == nil || strings.TrimSpace(notification.Recipient) == "" {
+		now := s.now()
+		return s.db.WithContext(ctx).Model(&notification).Updates(map[string]any{"status": "skipped", "error_message": "notification has no channel or recipient", "updated_at": now}).Error
+	}
+	var channel core.Channel
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", notification.OrganizationID, *notification.ChannelID).First(&channel).Error; err != nil {
+		return jobs.PermanentError{Err: err}
+	}
+	notificationPayload := parseJSONMap(notification.Payload)
+	text := strings.TrimSpace(stringValue(notificationPayload["message"]))
+	if text == "" {
+		text = notification.NotificationType
+	}
+	outboundPayload := s.channelPayload(channel, notification.Recipient, OutboundMessage{Type: MessageText, Text: text})
+	delivery, err := s.notificationDelivery(ctx, notification, channel, outboundPayload)
+	if err != nil {
+		return err
+	}
+	if err := s.SendOutboundNow(ctx, delivery.ID, job.Attempts+1, job.MaxAttempts); err != nil {
+		now := s.now()
+		_ = s.db.WithContext(ctx).Model(&notification).Updates(map[string]any{"status": "retry_pending", "attempts": job.Attempts + 1, "error_message": publicSendError(err), "next_attempt_at": now.Add(outboundBackoff(job.Attempts + 1)), "updated_at": now}).Error
+		return err
+	}
+	now := s.now()
+	return s.db.WithContext(ctx).Model(&notification).Updates(map[string]any{"status": "sent", "attempts": job.Attempts + 1, "outbound_message_id": delivery.ID, "sent_at": &now, "error_message": "", "updated_at": now}).Error
+}
+
+func (s *Service) notificationDelivery(ctx context.Context, notification core.CommerceNotification, channel core.Channel, payload map[string]any) (ChannelOutboundMessage, error) {
+	idempotencyKey := "notification:" + notification.ID.String()
+	if existing, ok, err := s.findOutboundByIdempotency(ctx, channel, idempotencyKey); err != nil || ok {
+		return existing, err
+	}
+	delivery := ChannelOutboundMessage{
+		ID:                     uuid.New(),
+		OrganizationID:         notification.OrganizationID,
+		ChannelID:              channel.ID,
+		SessionID:              nil,
+		ExternalConversationID: notification.Recipient,
+		Recipient:              notification.Recipient,
+		Provider:               channel.Provider,
+		MessageType:            MessageText,
+		Status:                 OutboundQueued,
+		Payload:                jsonValue(payload),
+		IdempotencyKey:         idempotencyKey,
+		ProviderResponse:       "{}",
+	}
+	return delivery, s.db.WithContext(ctx).Create(&delivery).Error
+}
+
+func (s *Service) SendOutboundNow(ctx context.Context, deliveryID uuid.UUID, attempt, maxAttempts int) error {
+	var delivery ChannelOutboundMessage
+	if err := s.db.WithContext(ctx).Where("id = ?", deliveryID).First(&delivery).Error; err != nil {
+		return jobs.PermanentError{Err: err}
+	}
+	if delivery.Status == OutboundSent || delivery.Status == OutboundDelivered || delivery.Status == OutboundRead || delivery.Status == OutboundSkipped {
+		return nil
+	}
+	if delivery.ProviderMessageID != "" {
+		return nil
+	}
+	var channel core.Channel
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", delivery.OrganizationID, delivery.ChannelID).First(&channel).Error; err != nil {
+		return jobs.PermanentError{Err: err}
+	}
+	sender, ok := s.senders[strings.ToLower(channel.Provider)]
+	if !ok {
+		now := s.now()
+		updates := map[string]any{"status": OutboundSkipped, "error_message": "channel sender is not configured", "updated_at": now}
+		_ = s.db.WithContext(ctx).Model(&delivery).Updates(updates).Error
+		return jobs.PermanentError{Err: errors.New("channel sender is not configured")}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(defaultObject(delivery.Payload)), &payload); err != nil {
+		return jobs.PermanentError{Err: err}
+	}
+	message := OutboundMessage{Type: delivery.MessageType}
+	now := s.now()
+	if err := s.db.WithContext(ctx).Model(&delivery).Updates(map[string]any{"status": OutboundSending, "attempts": attempt, "error_message": "", "updated_at": now}).Error; err != nil {
+		return err
+	}
+	sendCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	providerResult, err := sender.Send(sendCtx, channel, delivery.Recipient, message, payload)
+	cancel()
+	if err != nil {
+		now = s.now()
+		nextAttempt := now.Add(outboundBackoff(attempt))
+		status := OutboundRetryPending
+		if maxAttempts > 0 && attempt >= maxAttempts {
+			status = OutboundFailedPermanently
+		}
+		updateErr := s.db.WithContext(ctx).Model(&delivery).Updates(map[string]any{"status": status, "error_message": publicSendError(err), "attempts": attempt, "next_attempt_at": &nextAttempt, "updated_at": now}).Error
+		if updateErr != nil {
+			return updateErr
+		}
+		s.log.Warn("runtime outbound send failed", "organization_id", channel.OrganizationID, "channel_id", channel.ID, "provider", channel.Provider, "delivery_id", delivery.ID, "error", publicSendError(err))
+		return err
+	}
+	now = s.now()
+	return s.db.WithContext(ctx).Model(&delivery).Updates(map[string]any{"status": OutboundSent, "attempts": attempt, "provider_message_id": providerResult.ProviderMessageID, "provider_response": jsonValue(providerResult.Response), "sent_at": &now, "next_attempt_at": nil, "error_message": "", "updated_at": now}).Error
+}
+
+func (s *Service) findOutboundByIdempotency(ctx context.Context, channel core.Channel, idempotencyKey string) (ChannelOutboundMessage, bool, error) {
+	var delivery ChannelOutboundMessage
+	err := s.db.WithContext(ctx).Where("organization_id = ? AND channel_id = ? AND idempotency_key = ?", channel.OrganizationID, channel.ID, idempotencyKey).First(&delivery).Error
+	if err == nil {
+		return delivery, true, nil
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ChannelOutboundMessage{}, false, nil
+	}
+	return ChannelOutboundMessage{}, false, err
+}
+
+func outboundIdempotencyKey(input InboundMessage, result RuntimeResult, index int) string {
+	return strings.Join([]string{input.ExternalMessageID, result.ConversationID.String(), strconv.Itoa(index)}, ":")
+}
+
+func outboundBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := time.Duration(1<<min(attempt-1, 5)) * 30 * time.Second
+	if delay > 30*time.Minute {
+		return 30 * time.Minute
+	}
+	return delay
 }
 
 func (s *Service) ListOutboundMessages(ctx context.Context, organizationID uuid.UUID, limit int) ([]ChannelOutboundMessage, error) {
@@ -218,8 +365,4 @@ func (m *MockChannelSender) Send(_ context.Context, _ core.Channel, recipient st
 		return m.Responses[index], nil
 	}
 	return ProviderSendResult{ProviderMessageID: uuid.NewString(), Response: map[string]any{"ok": true}}, nil
-}
-
-func ensureOutboundMigrated(db *gorm.DB) error {
-	return db.AutoMigrate(&ChannelOutboundMessage{})
 }
