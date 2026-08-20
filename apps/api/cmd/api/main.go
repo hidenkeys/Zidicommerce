@@ -1,0 +1,59 @@
+package main
+
+import (
+	"context"
+	"log/slog"
+	"os"
+
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/config"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/database"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/httpapi"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/migrations"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
+	"github.com/joho/godotenv"
+)
+
+func main() {
+	_ = godotenv.Load()
+
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("failed to load configuration", "error", err)
+		os.Exit(1)
+	}
+
+	log := config.NewLogger(cfg.LogLevel)
+	ctx := context.Background()
+
+	db, sqlDB, err := database.Connect(ctx, cfg.Database)
+	if err != nil {
+		log.Error("failed to connect to database", "error", err)
+		os.Exit(1)
+	}
+	defer sqlDB.Close()
+
+	if err := migrations.Run(ctx, sqlDB, cfg.MigrationsDir); err != nil {
+		log.Error("failed to run migrations", "error", err)
+		os.Exit(1)
+	}
+
+	tokenManager := auth.NewTokenManager(cfg.JWT)
+	userRepo := organization.NewUserRepository(db)
+	orgRepo := organization.NewRepository(db)
+
+	app := httpapi.New(httpapi.Dependencies{
+		Config:       cfg,
+		Logger:       log,
+		DB:           sqlDB,
+		TokenManager: tokenManager,
+		AuthService:  auth.NewService(userRepo, tokenManager),
+		OrgHandler:   organization.NewHandler(orgRepo),
+	})
+
+	log.Info("starting ZidiCommerce API", "port", cfg.ServerPort, "env", cfg.AppEnv)
+	if err := app.Listen(":" + cfg.ServerPort); err != nil {
+		log.Error("server stopped", "error", err)
+		os.Exit(1)
+	}
+}
