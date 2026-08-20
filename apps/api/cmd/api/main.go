@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/config"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/database"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httpapi"
@@ -41,6 +42,11 @@ func main() {
 	tokenManager := auth.NewTokenManager(cfg.JWT)
 	userRepo := organization.NewUserRepository(db)
 	orgRepo := organization.NewRepository(db)
+	var provider core.PaymentProvider = core.SafeTestProvider{}
+	if cfg.Payment.Provider == "paystack" {
+		provider = core.NewPaystackProvider(cfg.Payment.PaystackSecret)
+	}
+	commerceService := core.NewService(db, provider)
 
 	app := httpapi.New(httpapi.Dependencies{
 		Config:       cfg,
@@ -49,6 +55,7 @@ func main() {
 		TokenManager: tokenManager,
 		AuthService:  auth.NewService(userRepo, tokenManager),
 		OrgHandler:   organization.NewHandler(orgRepo),
+		Commerce:     core.NewHandler(commerceService),
 	})
 
 	log.Info("starting ZidiCommerce API", "port", cfg.ServerPort, "env", cfg.AppEnv)

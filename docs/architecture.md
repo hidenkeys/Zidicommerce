@@ -123,7 +123,58 @@ Commerce domains are intentionally separated:
 - Fulfilment
 - Channel
 
-Phase 1 creates boundaries and schema only. Full workflows are later-phase work.
+Phase 2 makes the commerce domains usable through API services. The future bot runtime should orchestrate these services instead of owning commerce business logic.
+
+## Commerce Flow
+
+```mermaid
+flowchart TD
+    A["Customer"] --> B["Store selection"]
+    B --> C["Catalogue"]
+    C --> D["Cart"]
+    D --> E["Order creation"]
+    E --> F["Payment initialization"]
+    F --> G["Payment verification"]
+    G --> H["Fulfilment"]
+    H --> I["Order completion"]
+```
+
+## Order State Machine
+
+Allowed transitions:
+
+```mermaid
+stateDiagram-v2
+    [*] --> awaiting_payment
+    awaiting_payment --> paid
+    awaiting_payment --> cancelled
+    paid --> processing
+    paid --> cancelled
+    processing --> ready
+    processing --> cancelled
+    ready --> out_for_delivery
+    ready --> completed
+    ready --> cancelled
+    out_for_delivery --> completed
+    out_for_delivery --> cancelled
+```
+
+The frontend cannot mutate order status directly. It must call `POST /v1/orders/:id/transition`.
+
+## Inventory Safety
+
+Order creation runs in a database transaction. Inventory rows are locked before stock is decremented. The service checks available stock and rejects orders that would make inventory negative.
+
+The backend always resolves product prices from the database. Client-supplied totals and prices are ignored.
+
+## Payment Boundary
+
+Payments use a provider abstraction. Phase 2 includes:
+
+- a safe `test` provider for local development and automated tests
+- a Paystack provider implementation that is used only when `PAYMENT_PROVIDER=paystack` and `PAYSTACK_SECRET_KEY` are configured
+
+Payment verification is authoritative and idempotent. A frontend success flag is not enough to mark an order as paid.
 
 ## Future Bot Architecture
 
@@ -143,7 +194,7 @@ flowchart TD
     J --> K["Runtime"]
 ```
 
-No Bot Builder or runtime is implemented in Phase 1.
+No Bot Builder or runtime is implemented in Phase 1 or Phase 2.
 
 ## Existing Zidi Reuse
 
@@ -164,4 +215,3 @@ Not reused:
 - legacy campaign/reward handlers
 - in-memory WhatsApp bot sessions
 - payment/email utilities from the monolith
-

@@ -18,6 +18,7 @@ type Config struct {
 	MigrationsDir string
 	Database      DatabaseConfig
 	JWT           JWTConfig
+	Payment       PaymentConfig
 }
 
 type DatabaseConfig struct {
@@ -35,6 +36,11 @@ type JWTConfig struct {
 	Secret     string
 	Issuer     string
 	TTLMinutes int
+}
+
+type PaymentConfig struct {
+	Provider       string
+	PaystackSecret string
 }
 
 func Load() (Config, error) {
@@ -57,6 +63,10 @@ func Load() (Config, error) {
 		JWT: JWTConfig{
 			Secret: getenv("JWT_SECRET", ""),
 			Issuer: getenv("JWT_ISSUER", "zidicommerce"),
+		},
+		Payment: PaymentConfig{
+			Provider:       getenv("PAYMENT_PROVIDER", "test"),
+			PaystackSecret: os.Getenv("PAYSTACK_SECRET_KEY"),
 		},
 	}
 

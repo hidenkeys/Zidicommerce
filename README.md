@@ -13,6 +13,19 @@ Phase 1 establishes the foundation only:
 - shared package foundation
 - documentation and basic tests
 
+Phase 2 adds functional commerce core APIs:
+
+- organization management
+- stores, hours, and fulfilment modes
+- catalogue categories, products, variants, prices, and images
+- store-level inventory
+- customers and carts
+- transaction-safe order creation
+- controlled order state transitions
+- payment provider abstraction
+- fulfilment and channel foundations
+- operational admin screens
+
 It intentionally does not include WhatsApp, Paystack checkout, Bot Builder, Bot Runtime, Bing Chun-specific logic, or production deployment.
 
 ## Repository Structure

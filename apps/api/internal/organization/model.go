@@ -8,13 +8,17 @@ import (
 )
 
 type Organization struct {
-	ID        uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
-	Name      string    `json:"name"`
-	Slug      string    `json:"slug"`
-	Status    string    `json:"status"`
-	Metadata  string    `json:"metadata"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID          uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	Name        string    `json:"name"`
+	Slug        string    `json:"slug"`
+	Description string    `json:"description"`
+	LogoURL     string    `gorm:"column:logo_url" json:"logo_url"`
+	Currency    string    `json:"currency"`
+	Timezone    string    `json:"timezone"`
+	Status      string    `json:"status"`
+	Metadata    string    `json:"metadata"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 func (Organization) TableName() string {

@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
+import { getStoredToken, setStoredToken } from "../api/client";
 
 const groups = [
   {
@@ -47,6 +48,13 @@ const groups = [
 ];
 
 export function Shell() {
+  function saveToken() {
+    const token = window.prompt("Paste a ZidiCommerce API access token", getStoredToken());
+    if (token !== null) {
+      setStoredToken(token);
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -78,11 +86,10 @@ export function Shell() {
             <span className="eyebrow">Phase 1 Foundation</span>
             <h1>ZidiCommerce Admin</h1>
           </div>
-          <button type="button">Connect API</button>
+          <button type="button" onClick={saveToken}>Connect API</button>
         </header>
         <Outlet />
       </main>
     </div>
   );
 }
-
