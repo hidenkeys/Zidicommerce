@@ -87,7 +87,7 @@ cd apps/api
 go test ./...
 ```
 
-The tests do not require a live production database. They cover health behavior, config DSNs, migration runner behavior, token issuing/parsing, auth middleware, role policy, tenant scope validation, cart totals, order creation, insufficient inventory, inventory decrement, invalid transitions, payment idempotency, tenant isolation, organization onboarding, invitations, role restrictions, store-level access, disabled member login protection, bot builder validation, tenant isolation, publish snapshots, immutability, and bot role restrictions.
+The tests do not require a live production database. They cover health behavior, config DSNs, migration runner behavior, token issuing/parsing, auth middleware, role policy, tenant scope validation, cart totals, order creation, insufficient inventory, inventory decrement, invalid transitions, payment idempotency, tenant isolation, organization onboarding, invitations, role restrictions, store-level access, disabled member login protection, bot builder validation, tenant isolation, publish snapshots, immutability, bot role restrictions, runtime sessions, questions, validation, conditions, actions, modules, handoff, idempotency, version pinning, and WhatsApp signature verification.
 
 ## Commerce API
 
@@ -199,12 +199,49 @@ POST   /v1/bot-versions/:id/publish
 
 The preview endpoint returns a configuration preview only. It does not send channel messages, initialize payments, create orders, call delivery providers, or invoke an LLM.
 
+## Runtime API
+
+Phase 5 runtime endpoints:
+
+```text
+POST   /v1/runtime/test/start
+POST   /v1/runtime/test/message
+GET    /v1/runtime/conversations
+GET    /v1/runtime/conversations/:id
+GET    /v1/runtime/conversations/:id/messages
+
+GET    /v1/runtime/webhooks/whatsapp
+POST   /v1/runtime/webhooks/whatsapp
+```
+
+The simulator endpoints are authenticated and run the real runtime engine. They are distinct from Bot Builder preview.
+
+WhatsApp webhook verification uses an active WhatsApp channel `verify_token`. WhatsApp POST webhooks require `X-Hub-Signature-256` and a configured channel `app_secret`; requests fail closed when the secret is missing.
+
+Runtime responses are structured:
+
+```json
+{
+  "conversation_id": "uuid",
+  "status": "active",
+  "messages": [
+    {
+      "type": "text",
+      "text": "Welcome"
+    }
+  ]
+}
+```
+
+See `docs/runtime.md` for session lifecycle, version pinning, channel abstraction, idempotency, and error handling.
+
 ## Phase Guardrails
 
-Do not add these before the runtime phase:
+Do not add these before a later AI/channel integration phase:
 
-- WhatsApp webhooks
 - Bing Chun-specific logic
-- Bot Runtime
 - LLM orchestration
-- live conversation sessions
+- outbound WhatsApp Cloud API sending
+- advanced analytics
+- full support agent console
+- business-specific delivery/rider workflows

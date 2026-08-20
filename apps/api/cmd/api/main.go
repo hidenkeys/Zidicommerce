@@ -14,6 +14,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httpapi"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/migrations"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
+	runtimeengine "github.com/hidenkeys/zidicommerce/apps/api/internal/runtime"
 	"github.com/joho/godotenv"
 )
 
@@ -55,6 +56,7 @@ func main() {
 	}
 	commerceService.ConfigureNotifications(mailer, cfg.Email.AppBaseURL)
 	botService := bot.NewService(db)
+	runtimeService := runtimeengine.NewService(db, commerceService, log)
 
 	app := httpapi.New(httpapi.Dependencies{
 		Config:       cfg,
@@ -65,6 +67,7 @@ func main() {
 		OrgHandler:   organization.NewHandler(orgRepo),
 		Commerce:     core.NewHandler(commerceService, tokenManager),
 		Bot:          bot.NewHandler(botService),
+		Runtime:      runtimeengine.NewHandler(runtimeService),
 	})
 
 	log.Info("starting ZidiCommerce API", "port", cfg.ServerPort, "env", cfg.AppEnv)

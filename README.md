@@ -48,7 +48,21 @@ Phase 4 adds the configurable Bot Builder foundation:
 - Bot Builder admin screen
 - audit events for bot creation, validation, and publishing
 
-It intentionally does not include WhatsApp runtime execution, LLM orchestration, Bing Chun-specific logic, or production deployment.
+Phase 5 adds the deterministic Bot Runtime:
+
+- published-snapshot-only execution
+- persistent conversation sessions and messages
+- session variables and safe template resolution
+- question validation
+- conditions, actions, modules, handoff, and end steps
+- commerce-backed action registry
+- test runtime simulator
+- channel-neutral message models
+- WhatsApp webhook adapter with signature verification
+- idempotent inbound message processing
+- runtime events and structured logging
+
+It intentionally does not include LLM orchestration, business-specific bot logic, outbound WhatsApp sending, or production deployment.
 
 ## Repository Structure
 

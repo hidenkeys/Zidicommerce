@@ -9,7 +9,7 @@ ZidiCommerce is a separate commerce platform in the Zidi ecosystem. Existing Zid
 ```mermaid
 flowchart TD
     A["ZidiCommerce Admin"] --> B["ZidiCommerce API"]
-    C["Future Channels: WhatsApp, web chat, Instagram"] --> B
+    C["Channels: test, WhatsApp, future web chat"] --> B
     B --> D["PostgreSQL"]
     B --> E["Future Payment Providers"]
     B --> F["Future Delivery Providers"]
@@ -123,7 +123,7 @@ Commerce domains are intentionally separated:
 - Fulfilment
 - Channel
 
-Phase 2 makes the commerce domains usable through API services. Phase 3 adds organization onboarding, membership, invitation, store access, and audit foundations. Phase 4 adds Bot Builder configuration only. The future bot runtime should orchestrate commerce services instead of owning commerce business logic.
+Phase 2 makes the commerce domains usable through API services. Phase 3 adds organization onboarding, membership, invitation, store access, and audit foundations. Phase 4 adds Bot Builder configuration. Phase 5 adds a deterministic runtime that consumes published snapshots and orchestrates commerce services instead of owning commerce business logic.
 
 ## Bot Builder
 
@@ -230,9 +230,9 @@ Payments use a provider abstraction. Phase 2 includes:
 
 Payment verification is authoritative and idempotent. A frontend success flag is not enough to mark an order as paid.
 
-## Future Bot Runtime
+## Bot Runtime
 
-The future runtime should consume published snapshots:
+The runtime consumes published snapshots:
 
 ```mermaid
 flowchart TD
@@ -242,10 +242,19 @@ flowchart TD
     D --> E["Commerce services"]
     D --> F["Payment provider"]
     D --> G["Delivery provider"]
-    D --> H["LLM/NLU layer"]
+    D --> H["Future LLM/NLU layer"]
 ```
 
-No runtime interpreter is implemented in Phase 4.
+Runtime policy:
+
+- new sessions use the current published snapshot
+- active sessions stay pinned to the version they started with
+- completed, expired, or cancelled sessions reset to the current published version only when the customer sends a reset/start trigger
+- draft bot versions are never executed
+
+Runtime state lives in `conversation_sessions`, `conversation_messages`, `processed_messages`, and `runtime_events`.
+
+See [runtime.md](./runtime.md) for the detailed runtime architecture.
 
 ## Existing Zidi Reuse
 

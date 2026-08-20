@@ -1,0 +1,108 @@
+package runtime
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+const (
+	SessionActive    = "active"
+	SessionCompleted = "completed"
+	SessionHandoff   = "handoff"
+	SessionExpired   = "expired"
+	SessionCancelled = "cancelled"
+
+	DirectionInbound  = "inbound"
+	DirectionOutbound = "outbound"
+
+	MessageText            = "text"
+	MessageButtons         = "buttons"
+	MessageList            = "list"
+	MessageImage           = "image"
+	MessageLocationRequest = "location_request"
+
+	EventConversationStarted   = "conversation_started"
+	EventMessageReceived       = "message_received"
+	EventStepExecuted          = "step_executed"
+	EventQuestionPresented     = "question_presented"
+	EventAnswerReceived        = "answer_received"
+	EventActionStarted         = "action_started"
+	EventActionCompleted       = "action_completed"
+	EventActionFailed          = "action_failed"
+	EventModuleStarted         = "module_started"
+	EventModuleCompleted       = "module_completed"
+	EventConversationCompleted = "conversation_completed"
+	EventHandoffStarted        = "handoff_started"
+	EventRuntimeError          = "runtime_error"
+)
+
+type ConversationSession struct {
+	ID                     uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID         uuid.UUID  `gorm:"type:uuid;index;uniqueIndex:idx_runtime_session_external" json:"organization_id"`
+	BotID                  uuid.UUID  `gorm:"type:uuid;index" json:"bot_id"`
+	BotVersionID           uuid.UUID  `gorm:"type:uuid;index" json:"bot_version_id"`
+	ChannelID              uuid.UUID  `gorm:"type:uuid;index;uniqueIndex:idx_runtime_session_external" json:"channel_id"`
+	CustomerID             *uuid.UUID `gorm:"type:uuid" json:"customer_id,omitempty"`
+	ExternalConversationID string     `gorm:"uniqueIndex:idx_runtime_session_external" json:"external_conversation_id"`
+	CurrentStepKey         string     `json:"current_step_key"`
+	ExpectedInput          string     `json:"expected_input"`
+	Status                 string     `json:"status"`
+	Variables              string     `json:"variables"`
+	SystemContext          string     `json:"system_context"`
+	LockVersion            int        `json:"lock_version"`
+	LastMessageAt          *time.Time `json:"last_message_at,omitempty"`
+	ExpiresAt              *time.Time `json:"expires_at,omitempty"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
+}
+
+func (ConversationSession) TableName() string { return "conversation_sessions" }
+
+type ConversationMessage struct {
+	ID                uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID    uuid.UUID `gorm:"type:uuid;index" json:"organization_id"`
+	SessionID         uuid.UUID `gorm:"type:uuid;index" json:"session_id"`
+	ChannelID         uuid.UUID `gorm:"type:uuid;index" json:"channel_id"`
+	ExternalMessageID string    `json:"external_message_id"`
+	Direction         string    `json:"direction"`
+	MessageType       string    `json:"message_type"`
+	Sender            string    `json:"sender"`
+	Body              string    `json:"body"`
+	Metadata          string    `json:"metadata"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
+func (ConversationMessage) TableName() string { return "conversation_messages" }
+
+type ProcessedMessage struct {
+	ID                     uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID         uuid.UUID  `gorm:"type:uuid;index;uniqueIndex:idx_runtime_processed_external" json:"organization_id"`
+	ChannelID              uuid.UUID  `gorm:"type:uuid;index;uniqueIndex:idx_runtime_processed_external" json:"channel_id"`
+	SessionID              *uuid.UUID `gorm:"type:uuid" json:"session_id,omitempty"`
+	ExternalMessageID      string     `gorm:"uniqueIndex:idx_runtime_processed_external" json:"external_message_id"`
+	ExternalConversationID string     `json:"external_conversation_id"`
+	Status                 string     `json:"status"`
+	Result                 string     `json:"result"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
+}
+
+func (ProcessedMessage) TableName() string { return "processed_messages" }
+
+type RuntimeEvent struct {
+	ID             uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID uuid.UUID  `gorm:"type:uuid;index" json:"organization_id"`
+	SessionID      *uuid.UUID `gorm:"type:uuid;index" json:"session_id,omitempty"`
+	BotID          *uuid.UUID `gorm:"type:uuid" json:"bot_id,omitempty"`
+	BotVersionID   *uuid.UUID `gorm:"type:uuid" json:"bot_version_id,omitempty"`
+	ChannelID      *uuid.UUID `gorm:"type:uuid" json:"channel_id,omitempty"`
+	EventType      string     `json:"event_type"`
+	Severity       string     `json:"severity"`
+	StepKey        string     `json:"step_key"`
+	ActionKey      string     `json:"action_key"`
+	Metadata       string     `json:"metadata"`
+	CreatedAt      time.Time  `json:"created_at"`
+}
+
+func (RuntimeEvent) TableName() string { return "runtime_events" }

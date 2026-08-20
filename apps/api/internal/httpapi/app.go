@@ -11,6 +11,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/config"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
+	runtimeengine "github.com/hidenkeys/zidicommerce/apps/api/internal/runtime"
 )
 
 type Dependencies struct {
@@ -22,6 +23,7 @@ type Dependencies struct {
 	OrgHandler   *organization.Handler
 	Commerce     *core.Handler
 	Bot          *bot.Handler
+	Runtime      *runtimeengine.Handler
 }
 
 func New(deps Dependencies) *fiber.App {
@@ -37,6 +39,7 @@ func New(deps Dependencies) *fiber.App {
 	v1.Post("/auth/login", loginHandler(deps.AuthService))
 	v1.Post("/auth/register", registerHandler(deps.AuthService))
 	deps.Commerce.RegisterPublic(v1)
+	deps.Runtime.RegisterPublic(v1)
 
 	protected := v1.Group("", auth.Middleware(deps.TokenManager))
 	protected.Get("/auth/me", meHandler)
@@ -44,6 +47,7 @@ func New(deps Dependencies) *fiber.App {
 	protected.Get("/organizations/current", deps.OrgHandler.Current)
 	deps.Commerce.Register(protected)
 	deps.Bot.Register(protected)
+	deps.Runtime.Register(protected)
 
 	return app
 }
