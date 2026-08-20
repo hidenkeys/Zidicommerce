@@ -78,6 +78,11 @@ type RuntimeMessageInput struct {
 	Metadata          map[string]any `json:"metadata,omitempty"`
 }
 
+type SupportHandoffResolveInput struct {
+	ResolutionNote string `json:"resolution_note"`
+	ResumeBot      bool   `json:"resume_bot"`
+}
+
 type WhatsAppWebhookPayload struct {
 	Object string `json:"object"`
 	Entry  []struct {

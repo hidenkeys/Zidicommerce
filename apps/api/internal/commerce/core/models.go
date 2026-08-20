@@ -216,6 +216,7 @@ type Order struct {
 	OrderNumber      string      `json:"order_number"`
 	Status           string      `json:"status"`
 	FulfilmentType   string      `json:"fulfilment_type"`
+	IdempotencyKey   string      `json:"idempotency_key"`
 	SubtotalMinor    int64       `json:"subtotal_minor"`
 	DeliveryFeeMinor int64       `json:"delivery_fee_minor"`
 	TotalMinor       int64       `json:"total_minor"`

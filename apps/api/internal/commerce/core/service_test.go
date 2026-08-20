@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -84,6 +85,7 @@ func newCommerceFixture(t *testing.T, inventory int) commerceFixture {
 		Address: "1 Test Road",
 		FulfilmentModes: []StoreFulfilmentModeInput{
 			{Mode: FulfilmentPickup, Enabled: true},
+			{Mode: FulfilmentCustomerRider, Enabled: true},
 			{Mode: FulfilmentMerchantRider, Enabled: true, DeliveryFeeMinor: 500},
 		},
 	})
@@ -167,6 +169,55 @@ func TestOrderCreationRejectsInsufficientInventory(t *testing.T) {
 	}
 }
 
+func TestConcurrentCheckoutOnlyOneOrderConsumesSingleInventoryUnit(t *testing.T) {
+	fx := newCommerceFixture(t, 1)
+	sqlDB, err := fx.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+
+	inputs := []OrderInput{
+		{CustomerID: fx.customer.ID, StoreID: fx.store.ID, FulfilmentType: FulfilmentPickup, Items: []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}}, IdempotencyKey: "checkout-a"},
+		{CustomerID: fx.customer.ID, StoreID: fx.store.ID, FulfilmentType: FulfilmentPickup, Items: []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}}, IdempotencyKey: "checkout-b"},
+	}
+	errs := make([]error, len(inputs))
+	var wg sync.WaitGroup
+	wg.Add(len(inputs))
+	for index := range inputs {
+		go func(index int) {
+			defer wg.Done()
+			_, errs[index] = fx.service.CreateOrder(context.Background(), fx.actor, inputs[index])
+		}(index)
+	}
+	wg.Wait()
+
+	successes := 0
+	insufficient := 0
+	for _, err := range errs {
+		if err == nil {
+			successes++
+			continue
+		}
+		if strings.Contains(err.Error(), "Insufficient inventory") {
+			insufficient++
+			continue
+		}
+		t.Fatalf("unexpected checkout error: %v", err)
+	}
+	if successes != 1 || insufficient != 1 {
+		t.Fatalf("expected one success and one insufficient-inventory failure, got successes=%d insufficient=%d errors=%v", successes, insufficient, errs)
+	}
+
+	var inventory InventoryLevel
+	if err := fx.db.Where("organization_id = ? AND store_id = ? AND variant_id = ?", fx.actor.OrganizationID, fx.store.ID, fx.variant.ID).First(&inventory).Error; err != nil {
+		t.Fatal(err)
+	}
+	if inventory.OnHand != 0 {
+		t.Fatalf("expected final inventory to be 0, got %d", inventory.OnHand)
+	}
+}
+
 func TestCartCalculatesBackendPrices(t *testing.T) {
 	fx := newCommerceFixture(t, 5)
 	cart, err := fx.service.CreateCart(context.Background(), fx.actor, CartInput{CustomerID: fx.customer.ID, StoreID: fx.store.ID, Currency: "NGN"})
@@ -179,6 +230,27 @@ func TestCartCalculatesBackendPrices(t *testing.T) {
 	}
 	if summary.SubtotalMinor != 840000 || len(summary.Items) != 1 {
 		t.Fatalf("unexpected cart summary: %+v", summary)
+	}
+}
+
+func TestCheckoutUsesCurrentVariantPriceFromDatabase(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	cart, err := fx.service.CreateCart(context.Background(), fx.actor, CartInput{CustomerID: fx.customer.ID, StoreID: fx.store.ID, Currency: "NGN"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.AddCartItem(context.Background(), fx.actor, cart.ID, CartItemInput{VariantID: fx.variant.ID, Quantity: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Model(&Variant{}).Where("id = ?", fx.variant.ID).Update("price_minor", int64(500000)).Error; err != nil {
+		t.Fatal(err)
+	}
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{CartID: &cart.ID, CustomerID: fx.customer.ID, StoreID: fx.store.ID, FulfilmentType: FulfilmentPickup, IdempotencyKey: "stale-cart-price"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.SubtotalMinor != 500000 {
+		t.Fatalf("expected checkout to use current database price, got %d", order.SubtotalMinor)
 	}
 }
 
@@ -229,6 +301,58 @@ func TestOrderTransitionIsIdempotentByKey(t *testing.T) {
 	}
 }
 
+func TestOrderCreationIsIdempotentAndDoesNotDoubleDecrementInventory(t *testing.T) {
+	fx := newCommerceFixture(t, 2)
+	input := OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+		IdempotencyKey: "checkout-once",
+	}
+	first, err := fx.service.CreateOrder(context.Background(), fx.actor, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := fx.service.CreateOrder(context.Background(), fx.actor, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID {
+		t.Fatalf("expected same order on duplicate checkout, got %s and %s", first.ID, second.ID)
+	}
+	var inventory InventoryLevel
+	if err := fx.db.Where("organization_id = ? AND store_id = ? AND variant_id = ?", fx.actor.OrganizationID, fx.store.ID, fx.variant.ID).First(&inventory).Error; err != nil {
+		t.Fatal(err)
+	}
+	if inventory.OnHand != 1 {
+		t.Fatalf("expected inventory decremented once, got %d", inventory.OnHand)
+	}
+}
+
+func TestOrderCancellationRestoresInventory(t *testing.T) {
+	fx := newCommerceFixture(t, 1)
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderCancelled, IdempotencyKey: "cancel-restore"}); err != nil {
+		t.Fatal(err)
+	}
+	var inventory InventoryLevel
+	if err := fx.db.Where("organization_id = ? AND store_id = ? AND variant_id = ?", fx.actor.OrganizationID, fx.store.ID, fx.variant.ID).First(&inventory).Error; err != nil {
+		t.Fatal(err)
+	}
+	if inventory.OnHand != 1 {
+		t.Fatalf("expected cancellation to restore inventory to 1, got %d", inventory.OnHand)
+	}
+}
+
 func TestUpdateFulfilmentRejectsInvalidTransition(t *testing.T) {
 	fx := newCommerceFixture(t, 5)
 	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
@@ -242,6 +366,41 @@ func TestUpdateFulfilmentRejectsInvalidTransition(t *testing.T) {
 	}
 	if _, err := fx.service.UpdateFulfilment(context.Background(), fx.actor, order.ID, FulfilmentInput{Status: "out_for_delivery"}); err == nil {
 		t.Fatal("expected invalid pickup fulfilment transition to fail")
+	}
+}
+
+func TestFulfilmentTransitionsForSupportedModes(t *testing.T) {
+	cases := []struct {
+		name        string
+		mode        string
+		transitions []string
+	}{
+		{name: "pickup", mode: FulfilmentPickup, transitions: []string{"ready", "completed"}},
+		{name: "customer rider", mode: FulfilmentCustomerRider, transitions: []string{"ready", "completed"}},
+		{name: "merchant rider", mode: FulfilmentMerchantRider, transitions: []string{"ready", "out_for_delivery", "completed"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newCommerceFixture(t, 5)
+			order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+				CustomerID:     fx.customer.ID,
+				StoreID:        fx.store.ID,
+				FulfilmentType: tc.mode,
+				Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, status := range tc.transitions {
+				fulfilment, err := fx.service.UpdateFulfilment(context.Background(), fx.actor, order.ID, FulfilmentInput{Status: status})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if fulfilment.Status != status {
+					t.Fatalf("expected fulfilment status %s, got %s", status, fulfilment.Status)
+				}
+			}
+		})
 	}
 }
 
@@ -538,6 +697,42 @@ func TestReconcilePaymentAutoMarksPaidWhenProviderMatches(t *testing.T) {
 	}
 	if updated.Status != OrderPaid {
 		t.Fatalf("expected reconciled order paid, got %s", updated.Status)
+	}
+}
+
+func TestReconcilePaymentPreservesDiscrepancyWhenLocalPaidProviderFailed(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	fx.service.paymentProvider = namedPaymentProvider{name: "test", paid: true, amountMinor: 420000, currency: "NGN"}
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payment, err := fx.service.InitializePayment(context.Background(), fx.actor, PaymentInput{OrderID: order.ID, Provider: "test", Email: "customer@example.com", IdempotencyKey: "pay-discrepancy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Model(&payment).Updates(map[string]any{"status": PaymentPaid}).Error; err != nil {
+		t.Fatal(err)
+	}
+	fx.service.paymentProvider = namedPaymentProvider{name: "test", paid: false, status: "failed", amountMinor: 420000, currency: "NGN"}
+	reconciliation, err := fx.service.ReconcilePayment(context.Background(), fx.actor, payment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciliation.Status != "review_required" || reconciliation.Discrepancy == "" {
+		t.Fatalf("expected review-required discrepancy, got %+v", reconciliation)
+	}
+	var updated Payment
+	if err := fx.db.Where("id = ?", payment.ID).First(&updated).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != PaymentPaid {
+		t.Fatalf("expected local paid status to be preserved, got %s", updated.Status)
 	}
 }
 

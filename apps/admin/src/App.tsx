@@ -731,7 +731,21 @@ function FulfilmentScreen() {
 function MerchantImportScreen() {
   const [body, setBody] = useState(JSON.stringify({ stores: [], categories: [], products: [], inventory: [], channels: [] }, null, 2));
   const [result, setResult] = useState<Row | null>(null);
+  const [jobs, setJobs] = useState<Row[]>([]);
   const [message, setMessage] = useState("");
+
+  async function loadJobs() {
+    try {
+      const response = await apiGet<Row[]>("/merchant-imports");
+      setJobs(response.data);
+    } catch {
+      setJobs([]);
+    }
+  }
+
+  useEffect(() => {
+    void loadJobs();
+  }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -742,6 +756,7 @@ function MerchantImportScreen() {
       const response = await apiPost<Row>("/merchant-imports/configuration", parsed);
       setResult(response.data);
       setMessage("Merchant configuration imported.");
+      await loadJobs();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Import failed");
     }
@@ -759,6 +774,66 @@ function MerchantImportScreen() {
         <button type="submit">Import configuration</button>
       </form>
       {result ? <ResourceTable rows={[result]} title="Import result" /> : null}
+      <ResourceTable rows={jobs} title="Recent import jobs" />
+    </section>
+  );
+}
+
+function SupportHandoffsScreen() {
+  const [rows, setRows] = useState<Row[]>([]);
+  const [status, setStatus] = useState("open");
+  const [resolveID, setResolveID] = useState("");
+  const [resolutionNote, setResolutionNote] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function load(nextStatus = status) {
+    try {
+      const query = nextStatus ? `?status=${encodeURIComponent(nextStatus)}` : "";
+      const response = await apiGet<Row[]>(`/runtime/support-handoffs${query}`);
+      setRows(response.data);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Request failed");
+    }
+  }
+
+  useEffect(() => {
+    void load(status);
+  }, [status]);
+
+  async function resolve(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<Row>(`/runtime/support-handoffs/${resolveID}/resolve`, { resolution_note: resolutionNote });
+    setResolveID("");
+    setResolutionNote("");
+    await load();
+  }
+
+  return (
+    <section className="content">
+      <div className="section-heading">
+        <h2>Support Handoffs</h2>
+        <p>Review conversations paused for human support and resolve them once handled.</p>
+      </div>
+      <div className="split">
+        <form className="resource-form" onSubmit={(event) => { event.preventDefault(); void load(); }}>
+          <strong>Filter</strong>
+          <select value={status} onChange={(event) => setStatus(event.target.value)}>
+            <option value="open">open</option>
+            <option value="assigned">assigned</option>
+            <option value="resolved">resolved</option>
+            <option value="">all</option>
+          </select>
+          <button type="submit">Refresh</button>
+        </form>
+        <form className="resource-form" onSubmit={resolve}>
+          <strong>Resolve handoff</strong>
+          <input placeholder="Handoff ID" value={resolveID} onChange={(event) => setResolveID(event.target.value)} />
+          <input placeholder="Resolution note" value={resolutionNote} onChange={(event) => setResolutionNote(event.target.value)} />
+          <button type="submit">Resolve</button>
+        </form>
+      </div>
+      <ResourceTable rows={rows} message={message} />
     </section>
   );
 }
@@ -1274,6 +1349,7 @@ export default function App() {
         <Route path="configuration/channels" element={<BasicResourceScreen resource="channels" />} />
         <Route path="automation/bots" element={<BotBuilderScreen />} />
         <Route path="automation/versions" element={<BotBuilderScreen />} />
+        <Route path="automation/support-handoffs" element={<SupportHandoffsScreen />} />
         <Route path="settings/import" element={<MerchantImportScreen />} />
         <Route path="settings" element={<BusinessScreen />} />
         <Route path="*" element={<Placeholder title="Planned module" />} />

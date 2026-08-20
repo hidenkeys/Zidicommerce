@@ -176,6 +176,51 @@ func (s *Service) ListConversationMessages(ctx context.Context, actor auth.Curre
 	return messages, err
 }
 
+func (s *Service) ListSupportHandoffs(ctx context.Context, actor auth.CurrentUser, status string) ([]SupportHandoff, error) {
+	if !actor.Role.CanViewCommerce() && actor.Role != authz.SupportAgent {
+		return nil, httperror.Forbidden("You cannot view support handoffs")
+	}
+	query := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("created_at DESC").Limit(100)
+	if strings.TrimSpace(status) != "" {
+		query = query.Where("status = ?", strings.TrimSpace(status))
+	}
+	var handoffs []SupportHandoff
+	return handoffs, query.Find(&handoffs).Error
+}
+
+func (s *Service) ResolveSupportHandoff(ctx context.Context, actor auth.CurrentUser, handoffID uuid.UUID, input SupportHandoffResolveInput) (SupportHandoff, error) {
+	if !actor.Role.CanViewCommerce() && actor.Role != authz.SupportAgent {
+		return SupportHandoff{}, httperror.Forbidden("You cannot resolve support handoffs")
+	}
+	var handoff SupportHandoff
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error; err != nil {
+			return mapNotFoundCode(err, ErrSessionNotFound, "Support handoff not found")
+		}
+		if handoff.Status == "resolved" {
+			return nil
+		}
+		now := s.now()
+		metadata := parseJSONMap(handoff.Metadata)
+		if strings.TrimSpace(input.ResolutionNote) != "" {
+			metadata["resolution_note"] = strings.TrimSpace(input.ResolutionNote)
+		}
+		updates := map[string]any{"status": "resolved", "resolved_at": &now, "metadata": jsonMap(metadata), "updated_at": now}
+		if err := tx.Model(&handoff).Updates(updates).Error; err != nil {
+			return err
+		}
+		sessionStatus := SessionCompleted
+		if input.ResumeBot {
+			sessionStatus = SessionActive
+		}
+		if err := tx.Model(&ConversationSession{}).Where("organization_id = ? AND id = ? AND status = ?", actor.OrganizationID, handoff.SessionID, SessionHandoff).Updates(map[string]any{"status": sessionStatus, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		return tx.Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error
+	})
+	return handoff, err
+}
+
 func (s *Service) VerifyWhatsAppRequest(channel core.Channel, signature string, body []byte) bool {
 	secret := stringValue(parseJSONMap(channel.SecretConfig)["app_secret"])
 	if secret == "" {

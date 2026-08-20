@@ -762,6 +762,17 @@ func (s *Service) CreateOrder(ctx context.Context, actor auth.CurrentUser, input
 	}
 	var created Order
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if input.IdempotencyKey != "" {
+			var existing Order
+			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND idempotency_key = ?", actor.OrganizationID, input.IdempotencyKey).First(&existing).Error
+			if err == nil {
+				created = existing
+				return nil
+			}
+			if err != gorm.ErrRecordNotFound {
+				return err
+			}
+		}
 		if err := s.ensureStoreAccessibleTx(tx, actor, input.StoreID); err != nil {
 			return err
 		}
@@ -800,6 +811,7 @@ func (s *Service) CreateOrder(ctx context.Context, actor auth.CurrentUser, input
 			OrderNumber:      orderNumber(s.now()),
 			Status:           OrderAwaitingPayment,
 			FulfilmentType:   input.FulfilmentType,
+			IdempotencyKey:   input.IdempotencyKey,
 			DeliveryFeeMinor: mode.DeliveryFeeMinor,
 			Currency:         defaultString(input.Currency, "NGN"),
 			Metadata:         jsonObject(input.Metadata),
@@ -828,7 +840,16 @@ func (s *Service) CreateOrder(ctx context.Context, actor auth.CurrentUser, input
 			if inv.Available() < item.Quantity {
 				return httperror.BadRequest("Insufficient inventory")
 			}
-			if err := tx.Model(&inv).Updates(map[string]any{"on_hand": gorm.Expr("on_hand - ?", item.Quantity), "updated_at": s.now()}).Error; err != nil {
+			result := tx.Model(&InventoryLevel{}).
+				Where("organization_id = ? AND store_id = ? AND variant_id = ? AND on_hand - reserved >= ?", actor.OrganizationID, input.StoreID, item.VariantID, item.Quantity).
+				Updates(map[string]any{"on_hand": gorm.Expr("on_hand - ?", item.Quantity), "updated_at": s.now()})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return httperror.BadRequest("Insufficient inventory")
+			}
+			if err := tx.Where("organization_id = ? AND store_id = ? AND variant_id = ?", actor.OrganizationID, input.StoreID, item.VariantID).First(&inv).Error; err != nil {
 				return err
 			}
 			lineTotal, err := multiplyPrice(variant.PriceMinor, item.Quantity)
@@ -864,6 +885,12 @@ func (s *Service) CreateOrder(ctx context.Context, actor auth.CurrentUser, input
 		return nil
 	})
 	if err != nil {
+		if input.IdempotencyKey != "" {
+			var existing Order
+			if findErr := s.db.WithContext(ctx).Where("organization_id = ? AND idempotency_key = ?", actor.OrganizationID, input.IdempotencyKey).First(&existing).Error; findErr == nil {
+				return s.GetOrder(ctx, actor, existing.ID)
+			}
+		}
 		return Order{}, err
 	}
 	return s.GetOrder(ctx, actor, created.ID)
@@ -945,6 +972,11 @@ func (s *Service) TransitionOrder(ctx context.Context, actor auth.CurrentUser, o
 		from := order.Status
 		if err := tx.Model(&order).Updates(map[string]any{"status": input.Status, "updated_at": s.now()}).Error; err != nil {
 			return err
+		}
+		if input.Status == OrderCancelled {
+			if err := s.restoreInventoryForOrderTx(tx, actor.OrganizationID, order.ID); err != nil {
+				return err
+			}
 		}
 		if err := s.recordOrderEventTx(tx, actor, order.ID, from, input.Status, "order_transition", input.IdempotencyKey, input.Reason); err != nil {
 			return err
@@ -1309,6 +1341,29 @@ func (s *Service) recordOrderNotificationTx(tx *gorm.DB, organizationID, orderID
 		return err
 	}
 	return s.enqueueNotificationJobTx(tx, notification)
+}
+
+func (s *Service) restoreInventoryForOrderTx(tx *gorm.DB, organizationID, orderID uuid.UUID) error {
+	var order Order
+	if err := tx.Where("organization_id = ? AND id = ?", organizationID, orderID).First(&order).Error; err != nil {
+		return err
+	}
+	var items []OrderItem
+	if err := tx.Where("organization_id = ? AND order_id = ?", organizationID, orderID).Find(&items).Error; err != nil {
+		return err
+	}
+	for _, item := range items {
+		var level InventoryLevel
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("organization_id = ? AND store_id = ? AND variant_id = ?", organizationID, order.StoreID, item.VariantID).
+			First(&level).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&level).Updates(map[string]any{"on_hand": gorm.Expr("on_hand + ?", item.Quantity), "updated_at": s.now()}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func mapNotFound(err error, message string) error {

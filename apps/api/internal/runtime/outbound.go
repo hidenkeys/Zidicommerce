@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,6 +44,13 @@ func (s *Service) DispatchOutbound(ctx context.Context, channel core.Channel, in
 		payload := s.channelPayload(channel, input.Sender, message)
 		sessionID := result.ConversationID
 		idempotencyKey := outboundIdempotencyKey(input, result, index)
+		if existing, ok, err := s.findOutboundByIdempotency(ctx, channel, idempotencyKey); err != nil || ok {
+			if err != nil {
+				return deliveries, err
+			}
+			deliveries = append(deliveries, existing)
+			continue
+		}
 		delivery := ChannelOutboundMessage{
 			ID:                     uuid.New(),
 			OrganizationID:         channel.OrganizationID,
@@ -140,7 +148,13 @@ func (s *Service) ProcessNotificationJob(ctx context.Context, job jobs.Job) erro
 	}
 	if err := s.SendOutboundNow(ctx, delivery.ID, job.Attempts+1, job.MaxAttempts); err != nil {
 		now := s.now()
-		_ = s.db.WithContext(ctx).Model(&notification).Updates(map[string]any{"status": "retry_pending", "attempts": job.Attempts + 1, "error_message": publicSendError(err), "next_attempt_at": now.Add(outboundBackoff(job.Attempts + 1)), "updated_at": now}).Error
+		attempt := job.Attempts + 1
+		status := "retry_pending"
+		var permanent jobs.PermanentError
+		if errors.As(err, &permanent) || (job.MaxAttempts > 0 && attempt >= job.MaxAttempts) {
+			status = "failed_permanently"
+		}
+		_ = s.db.WithContext(ctx).Model(&notification).Updates(map[string]any{"status": status, "attempts": attempt, "error_message": publicSendError(err), "next_attempt_at": now.Add(outboundBackoff(attempt)), "updated_at": now}).Error
 		return err
 	}
 	now := s.now()
@@ -170,14 +184,11 @@ func (s *Service) notificationDelivery(ctx context.Context, notification core.Co
 }
 
 func (s *Service) SendOutboundNow(ctx context.Context, deliveryID uuid.UUID, attempt, maxAttempts int) error {
-	var delivery ChannelOutboundMessage
-	if err := s.db.WithContext(ctx).Where("id = ?", deliveryID).First(&delivery).Error; err != nil {
+	delivery, claimed, err := s.claimOutboundForSend(ctx, deliveryID, attempt)
+	if err != nil {
 		return jobs.PermanentError{Err: err}
 	}
-	if delivery.Status == OutboundSent || delivery.Status == OutboundDelivered || delivery.Status == OutboundRead || delivery.Status == OutboundSkipped {
-		return nil
-	}
-	if delivery.ProviderMessageID != "" {
+	if !claimed {
 		return nil
 	}
 	var channel core.Channel
@@ -196,15 +207,11 @@ func (s *Service) SendOutboundNow(ctx context.Context, deliveryID uuid.UUID, att
 		return jobs.PermanentError{Err: err}
 	}
 	message := OutboundMessage{Type: delivery.MessageType}
-	now := s.now()
-	if err := s.db.WithContext(ctx).Model(&delivery).Updates(map[string]any{"status": OutboundSending, "attempts": attempt, "error_message": "", "updated_at": now}).Error; err != nil {
-		return err
-	}
 	sendCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	providerResult, err := sender.Send(sendCtx, channel, delivery.Recipient, message, payload)
 	cancel()
+	now := s.now()
 	if err != nil {
-		now = s.now()
 		nextAttempt := now.Add(outboundBackoff(attempt))
 		status := OutboundRetryPending
 		if maxAttempts > 0 && attempt >= maxAttempts {
@@ -219,6 +226,65 @@ func (s *Service) SendOutboundNow(ctx context.Context, deliveryID uuid.UUID, att
 	}
 	now = s.now()
 	return s.db.WithContext(ctx).Model(&delivery).Updates(map[string]any{"status": OutboundSent, "attempts": attempt, "provider_message_id": providerResult.ProviderMessageID, "provider_response": jsonValue(providerResult.Response), "sent_at": &now, "next_attempt_at": nil, "error_message": "", "updated_at": now}).Error
+}
+
+func (s *Service) claimOutboundForSend(ctx context.Context, deliveryID uuid.UUID, attempt int) (ChannelOutboundMessage, bool, error) {
+	now := s.now()
+	staleSendingCutoff := now.Add(-15 * time.Minute)
+	if s.db.Dialector.Name() == "postgres" {
+		var delivery ChannelOutboundMessage
+		err := s.db.WithContext(ctx).Raw(`
+			UPDATE channel_outbound_messages
+			SET status = ?, attempts = ?, error_message = '', updated_at = ?
+			WHERE id = ?
+			  AND provider_message_id = ''
+			  AND (
+			    status IN (?, ?, ?)
+			    OR (status = ? AND updated_at <= ?)
+			  )
+			RETURNING *
+		`, OutboundSending, attempt, now, deliveryID, OutboundQueued, OutboundFailed, OutboundRetryPending, OutboundSending, staleSendingCutoff).Scan(&delivery).Error
+		if err != nil {
+			return ChannelOutboundMessage{}, false, err
+		}
+		if delivery.ID == uuid.Nil {
+			return ChannelOutboundMessage{}, false, nil
+		}
+		return delivery, true, nil
+	}
+	var delivery ChannelOutboundMessage
+	if err := s.db.WithContext(ctx).Where("id = ?", deliveryID).First(&delivery).Error; err != nil {
+		return ChannelOutboundMessage{}, false, err
+	}
+	if delivery.ProviderMessageID != "" || !outboundClaimable(delivery, staleSendingCutoff) {
+		return ChannelOutboundMessage{}, false, nil
+	}
+	result := s.db.WithContext(ctx).
+		Model(&ChannelOutboundMessage{}).
+		Where("id = ? AND provider_message_id = '' AND (status IN ? OR (status = ? AND updated_at <= ?))", deliveryID, []string{OutboundQueued, OutboundFailed, OutboundRetryPending}, OutboundSending, staleSendingCutoff).
+		Updates(map[string]any{"status": OutboundSending, "attempts": attempt, "error_message": "", "updated_at": now})
+	if result.Error != nil {
+		return ChannelOutboundMessage{}, false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ChannelOutboundMessage{}, false, nil
+	}
+	delivery.Status = OutboundSending
+	delivery.Attempts = attempt
+	delivery.ErrorMessage = ""
+	delivery.UpdatedAt = now
+	return delivery, true, nil
+}
+
+func outboundClaimable(delivery ChannelOutboundMessage, staleSendingCutoff time.Time) bool {
+	switch delivery.Status {
+	case OutboundQueued, OutboundFailed, OutboundRetryPending:
+		return true
+	case OutboundSending:
+		return !delivery.UpdatedAt.After(staleSendingCutoff)
+	default:
+		return false
+	}
 }
 
 func (s *Service) findOutboundByIdempotency(ctx context.Context, channel core.Channel, idempotencyKey string) (ChannelOutboundMessage, bool, error) {
@@ -350,12 +416,23 @@ func publicSendError(err error) string {
 }
 
 type MockChannelSender struct {
+	mu        sync.Mutex
+	Delay     time.Duration
 	Responses []ProviderSendResult
 	Errors    []error
 	Sent      []map[string]any
 }
 
-func (m *MockChannelSender) Send(_ context.Context, _ core.Channel, recipient string, _ OutboundMessage, payload map[string]any) (ProviderSendResult, error) {
+func (m *MockChannelSender) Send(ctx context.Context, _ core.Channel, recipient string, _ OutboundMessage, payload map[string]any) (ProviderSendResult, error) {
+	if m.Delay > 0 {
+		select {
+		case <-ctx.Done():
+			return ProviderSendResult{}, ctx.Err()
+		case <-time.After(m.Delay):
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.Sent = append(m.Sent, map[string]any{"recipient": recipient, "payload": payload})
 	index := len(m.Sent) - 1
 	if index < len(m.Errors) && m.Errors[index] != nil {

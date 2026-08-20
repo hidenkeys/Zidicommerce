@@ -18,11 +18,12 @@ import (
 type Handler func(context.Context, Job) error
 
 type Service struct {
-	db       *gorm.DB
-	log      *slog.Logger
-	handlers map[string]Handler
-	now      func() time.Time
-	workerID string
+	db         *gorm.DB
+	log        *slog.Logger
+	handlers   map[string]Handler
+	now        func() time.Time
+	workerID   string
+	staleAfter time.Duration
 }
 
 type EnqueueInput struct {
@@ -50,7 +51,7 @@ func NewService(db *gorm.DB, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{db: db, log: logger, handlers: map[string]Handler{}, now: func() time.Time { return time.Now().UTC() }, workerID: "worker-" + uuid.NewString()}
+	return &Service{db: db, log: logger, handlers: map[string]Handler{}, now: func() time.Time { return time.Now().UTC() }, workerID: "worker-" + uuid.NewString(), staleAfter: 15 * time.Minute}
 }
 
 func (s *Service) Register(jobType string, handler Handler) {
@@ -113,6 +114,9 @@ func (s *Service) ProcessDue(ctx context.Context, limit int) (int, error) {
 	if limit <= 0 {
 		limit = 10
 	}
+	if err := s.requeueStaleProcessing(ctx); err != nil {
+		return 0, err
+	}
 	processed := 0
 	for processed < limit {
 		job, found, err := s.claimOne(ctx)
@@ -125,6 +129,25 @@ func (s *Service) ProcessDue(ctx context.Context, limit int) (int, error) {
 		}
 	}
 	return processed, nil
+}
+
+func (s *Service) requeueStaleProcessing(ctx context.Context) error {
+	if s.staleAfter <= 0 {
+		return nil
+	}
+	now := s.now()
+	cutoff := now.Add(-s.staleAfter)
+	return s.db.WithContext(ctx).
+		Model(&Job{}).
+		Where("status = ? AND locked_at IS NOT NULL AND locked_at <= ?", StatusProcessing, cutoff).
+		Updates(map[string]any{
+			"status":       StatusRetryPending,
+			"available_at": now,
+			"locked_at":    nil,
+			"locked_by":    "",
+			"last_error":   "job lock expired",
+			"updated_at":   now,
+		}).Error
 }
 
 func (s *Service) Start(ctx context.Context, interval time.Duration, batchSize int) {

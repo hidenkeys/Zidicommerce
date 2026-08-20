@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +24,33 @@ func newJobTestService(t *testing.T) (*gorm.DB, *Service) {
 		t.Fatal(err)
 	}
 	return db, NewService(db, slog.Default())
+}
+
+func TestProcessDueRequeuesStaleProcessingJobs(t *testing.T) {
+	db, service := newJobTestService(t)
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	service.staleAfter = time.Minute
+	lockedAt := now.Add(-2 * time.Minute)
+	job := Job{ID: uuid.New(), JobType: "noop", Status: StatusProcessing, Payload: "{}", LockedAt: &lockedAt, LockedBy: "dead-worker", MaxAttempts: 3, AvailableAt: lockedAt}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	service.Register("noop", func(_ context.Context, _ Job) error { return nil })
+	processed, err := service.ProcessDue(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed != 1 {
+		t.Fatalf("expected stale job to be processed, got %d", processed)
+	}
+	var updated Job
+	if err := db.Where("id = ?", job.ID).First(&updated).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != StatusCompleted || updated.LockedBy != "" || updated.CompletedAt == nil {
+		t.Fatalf("expected stale job to complete after reclaim, got %+v", updated)
+	}
 }
 
 func TestEnqueueIsIdempotentByTypeAndKey(t *testing.T) {
@@ -90,5 +119,56 @@ func TestProcessDueRetriesAndThenCompletes(t *testing.T) {
 	}
 	if completed.Status != StatusCompleted || completed.CompletedAt == nil {
 		t.Fatalf("expected completed job, got %+v", completed)
+	}
+}
+
+func TestProcessDueMarksPermanentAfterMaxAttempts(t *testing.T) {
+	db, service := newJobTestService(t)
+	service.Register("always-fails", func(_ context.Context, _ Job) error {
+		return errors.New("temporary failure")
+	})
+	job, err := service.Enqueue(context.Background(), EnqueueInput{JobType: "always-fails", MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ProcessDue(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	var updated Job
+	if err := db.Where("id = ?", job.ID).First(&updated).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != StatusFailedPermanently || updated.Attempts != 1 {
+		t.Fatalf("expected permanently failed job, got %+v", updated)
+	}
+}
+
+func TestConcurrentWorkersClaimJobOnce(t *testing.T) {
+	db, first := newJobTestService(t)
+	second := NewService(db, slog.Default())
+	var handled atomic.Int32
+	handler := func(_ context.Context, _ Job) error {
+		handled.Add(1)
+		time.Sleep(10 * time.Millisecond)
+		return nil
+	}
+	first.Register("single", handler)
+	second.Register("single", handler)
+	if _, err := first.Enqueue(context.Background(), EnqueueInput{JobType: "single"}); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = first.ProcessDue(context.Background(), 1)
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = second.ProcessDue(context.Background(), 1)
+	}()
+	wg.Wait()
+	if handled.Load() != 1 {
+		t.Fatalf("expected exactly one worker to process the job, got %d", handled.Load())
 	}
 }

@@ -6,9 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
@@ -60,6 +63,7 @@ func newRuntimeFixture(t *testing.T, config bot.VersionConfiguration) runtimeFix
 		&core.OrderEvent{},
 		&core.Payment{},
 		&core.Fulfilment{},
+		&core.CommerceNotification{},
 		&core.Channel{},
 		&bot.Bot{},
 		&bot.BotVersion{},
@@ -310,6 +314,17 @@ func TestRuntimeHandoffPausesAutomation(t *testing.T) {
 	if handoffs != 1 {
 		t.Fatalf("expected one open support handoff, got %d", handoffs)
 	}
+	var handoff SupportHandoff
+	if err := fx.db.Where("organization_id = ? AND session_id = ?", fx.actor.OrganizationID, result.ConversationID).First(&handoff).Error; err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := fx.service.ResolveSupportHandoff(context.Background(), fx.actor, handoff.ID, SupportHandoffResolveInput{ResolutionNote: "Handled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Status != "resolved" || resolved.ResolvedAt == nil {
+		t.Fatalf("expected resolved handoff, got %+v", resolved)
+	}
 }
 
 func TestRuntimePinsExistingSessionToOriginalPublishedVersion(t *testing.T) {
@@ -489,6 +504,83 @@ func TestRuntimeQueuesOutboundAndWorkerSendsIt(t *testing.T) {
 	}
 	if updated.Status != OutboundSent || updated.ProviderMessageID == "" {
 		t.Fatalf("expected outbound sent after worker, got %+v", updated)
+	}
+}
+
+func TestRuntimeDispatchOutboundIsIdempotentForDuplicateWebhookResult(t *testing.T) {
+	config := bot.VersionConfiguration{Version: bot.BotVersion{StartStepKey: "start"}, Steps: []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepEnd, Title: "Done", Message: "Done."}}}
+	fx := newRuntimeFixture(t, config)
+	sender := &MockChannelSender{}
+	fx.service.RegisterChannelSender("test", sender)
+	input := inbound(fx.channel.ID, "same-webhook", "conv-duplicate-webhook", "hi")
+	result, err := fx.service.ProcessMessage(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.DispatchOutbound(context.Background(), fx.channel, input, result); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.DispatchOutbound(context.Background(), fx.channel, input, result); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.Sent) != 1 {
+		t.Fatalf("expected one provider send for duplicate dispatch, got %d", len(sender.Sent))
+	}
+	var deliveries int64
+	if err := fx.db.Model(&ChannelOutboundMessage{}).Where("organization_id = ? AND idempotency_key <> ''", fx.actor.OrganizationID).Count(&deliveries).Error; err != nil {
+		t.Fatal(err)
+	}
+	if deliveries != 1 {
+		t.Fatalf("expected one outbound delivery row, got %d", deliveries)
+	}
+}
+
+func TestRuntimeDuplicateOutboundJobsSendOnce(t *testing.T) {
+	config := bot.VersionConfiguration{Version: bot.BotVersion{StartStepKey: "start"}, Steps: []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepEnd, Title: "Done", Message: "Done."}}}
+	fx := newRuntimeFixture(t, config)
+	sender := &MockChannelSender{Delay: 25 * time.Millisecond}
+	fx.service.RegisterChannelSender("test", sender)
+	delivery := ChannelOutboundMessage{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, ChannelID: fx.channel.ID, Recipient: "customer", Provider: "test", MessageType: MessageText, Status: OutboundQueued, Payload: jsonValue(map[string]any{"to": "customer", "type": MessageText, "text": "Hello"}), ProviderResponse: "{}"}
+	if err := fx.db.Create(&delivery).Error; err != nil {
+		t.Fatal(err)
+	}
+	job := jobs.Job{ID: uuid.New(), JobType: jobs.JobTypeChannelOutbound, Payload: jsonValue(map[string]any{"outbound_message_id": delivery.ID.String()}), MaxAttempts: 3}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_ = fx.service.ProcessOutboundJob(context.Background(), job)
+	}()
+	go func() {
+		defer wg.Done()
+		_ = fx.service.ProcessOutboundJob(context.Background(), job)
+	}()
+	wg.Wait()
+	if len(sender.Sent) != 1 {
+		t.Fatalf("expected duplicate outbound jobs to send once, got %d sends", len(sender.Sent))
+	}
+}
+
+func TestRuntimeNotificationPermanentFailureIsRecorded(t *testing.T) {
+	config := bot.VersionConfiguration{Version: bot.BotVersion{StartStepKey: "start"}, Steps: []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepEnd, Title: "Done", Message: "Done."}}}
+	fx := newRuntimeFixture(t, config)
+	sender := &MockChannelSender{Errors: []error{errors.New("provider unavailable")}}
+	fx.service.RegisterChannelSender("test", sender)
+	channelID := fx.channel.ID
+	notification := core.CommerceNotification{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, ChannelID: &channelID, NotificationType: "order_paid", Recipient: "customer", Status: "queued", Payload: jsonValue(map[string]any{"message": "Paid"})}
+	if err := fx.db.Create(&notification).Error; err != nil {
+		t.Fatal(err)
+	}
+	job := jobs.Job{ID: uuid.New(), JobType: jobs.JobTypeNotificationDelivery, Payload: jsonValue(map[string]any{"notification_id": notification.ID.String()}), MaxAttempts: 1}
+	if err := fx.service.ProcessNotificationJob(context.Background(), job); err == nil {
+		t.Fatal("expected notification send failure")
+	}
+	var updated core.CommerceNotification
+	if err := fx.db.Where("id = ?", notification.ID).First(&updated).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "failed_permanently" {
+		t.Fatalf("expected failed_permanently notification, got %+v", updated)
 	}
 }
 

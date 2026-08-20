@@ -38,6 +38,7 @@ const groups = [
     items: [
       ["Bots", "/automation/bots"],
       ["Bot Versions", "/automation/versions"],
+      ["Support Handoffs", "/automation/support-handoffs"],
     ],
   },
   {

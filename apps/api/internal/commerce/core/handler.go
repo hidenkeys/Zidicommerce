@@ -79,6 +79,7 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Get("/channels", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.listChannels)
 	router.Post("/channels", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.createChannel)
 
+	router.Get("/merchant-imports", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.listMerchantImportJobs)
 	router.Post("/merchant-imports/configuration", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.importMerchantConfiguration)
 }
 
@@ -593,6 +594,11 @@ func (h *Handler) importMerchantConfiguration(c *fiber.Ctx) error {
 		return err
 	}
 	data, err := h.service.ImportMerchantConfiguration(c.UserContext(), mustUser(c), input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) listMerchantImportJobs(c *fiber.Ctx) error {
+	data, err := h.service.ListMerchantImportJobs(c.UserContext(), mustUser(c))
 	return respond(c, data, err)
 }
 

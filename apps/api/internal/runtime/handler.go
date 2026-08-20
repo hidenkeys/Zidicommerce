@@ -23,6 +23,8 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Get("/runtime/conversations", h.listConversations)
 	router.Get("/runtime/conversations/:id", h.getConversation)
 	router.Get("/runtime/conversations/:id/messages", h.listConversationMessages)
+	router.Get("/runtime/support-handoffs", h.listSupportHandoffs)
+	router.Post("/runtime/support-handoffs/:id/resolve", h.resolveSupportHandoff)
 }
 
 func (h *Handler) RegisterPublic(router fiber.Router) {
@@ -68,6 +70,26 @@ func (h *Handler) listConversationMessages(c *fiber.Ctx) error {
 		return err
 	}
 	data, err := h.service.ListConversationMessages(c.UserContext(), currentUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) listSupportHandoffs(c *fiber.Ctx) error {
+	data, err := h.service.ListSupportHandoffs(c.UserContext(), currentUser(c), c.Query("status"))
+	return respond(c, data, err)
+}
+
+func (h *Handler) resolveSupportHandoff(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input SupportHandoffResolveInput
+	if len(c.BodyRaw()) > 0 {
+		if err := bind(c, &input); err != nil {
+			return err
+		}
+	}
+	data, err := h.service.ResolveSupportHandoff(c.UserContext(), currentUser(c), id, input)
 	return respond(c, data, err)
 }
 

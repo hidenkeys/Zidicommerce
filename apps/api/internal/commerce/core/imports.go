@@ -166,6 +166,15 @@ func (s *Service) ImportMerchantConfiguration(ctx context.Context, actor auth.Cu
 	return result, err
 }
 
+func (s *Service) ListMerchantImportJobs(ctx context.Context, actor auth.CurrentUser) ([]MerchantImportJob, error) {
+	if !actor.Role.CanManageOrganization() {
+		return nil, httperror.Forbidden("You cannot view merchant imports")
+	}
+	var jobs []MerchantImportJob
+	err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("created_at DESC").Limit(50).Find(&jobs).Error
+	return jobs, err
+}
+
 func validateMerchantImport(input MerchantImportInput) error {
 	stores := map[string]bool{}
 	for _, store := range input.Stores {
