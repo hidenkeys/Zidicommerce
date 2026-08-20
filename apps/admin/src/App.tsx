@@ -10,7 +10,7 @@ type Member = Row & { id: string; role?: string; status?: string; user?: Row };
 type Store = Row & { id: string; name?: string };
 type Bot = Row & { id: string; name: string; status: string; published_version_id?: string };
 type BotVersion = Row & { id: string; bot_id: string; version_number: number; status: string; start_step_key: string };
-type BotModule = Row & { id: string; module_key: string; name: string; parameters?: string };
+type BotModule = Row & { id: string; module_key: string; name: string; parameters?: string; metadata?: string; sort_order?: number };
 type BotVariable = Row & { id: string; name: string; type: string; scope: string };
 type BotQuestion = Row & { id: string; question_key: string; text: string; type: string; response_mode: string; variable_name?: string };
 type BotAction = Row & { id: string; action_key: string; action_type: string; name: string };
@@ -30,6 +30,12 @@ type ValidationResult = { valid: boolean; issues: { path: string; message: strin
 type BotModuleSpec = { key: string; name: string; category: string; description: string };
 type ActionSpec = { key: string; name: string; description: string };
 type QuestionTypeSpec = { key: string; name: string; response_modes: string[] };
+type BotFAQ = Row & { id: string; question: string; answer: string; keywords?: string; status: string };
+type ShareLink = { available: boolean; url?: string; encoded_text?: string; display_number?: string; message?: string; reason?: string };
+type SetupStatus = { complete_count: number; total_count: number; ready: boolean; items: { key: string; label: string; complete: boolean; description: string }[] };
+type Channel = Row & { id: string; provider: string; display_name: string; phone_number_id?: string; display_number?: string; status: string };
+type PaymentConfiguration = Row & { id: string; provider: string; display_name: string; status: string; enabled: boolean; public_config?: string; secret_source?: string; has_secret?: boolean };
+type RuntimeMessage = { from: "customer" | "bot" | "debug"; text: string };
 type Endpoint = {
   title: string;
   description: string;
@@ -54,6 +60,14 @@ const onboardingSteps = [
   ["channels", "Channels"],
   ["payments", "Payments"],
 ];
+
+function parseJSON<T>(value: string, fallback: T): T {
+  try {
+    return JSON.parse(value || "{}") as T;
+  } catch {
+    return fallback;
+  }
+}
 
 const endpoints: Record<string, Endpoint> = {
   organizations: {
@@ -870,12 +884,26 @@ function BotBuilderScreen() {
   const [bots, setBots] = useState<Bot[]>([]);
   const [versions, setVersions] = useState<BotVersion[]>([]);
   const [config, setConfig] = useState<BotConfig | null>(null);
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
+  const [faqs, setFaqs] = useState<BotFAQ[]>([]);
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [paymentConfigs, setPaymentConfigs] = useState<PaymentConfiguration[]>([]);
+  const [shareLink, setShareLink] = useState<ShareLink | null>(null);
   const [modules, setModules] = useState<BotModuleSpec[]>([]);
   const [actions, setActions] = useState<ActionSpec[]>([]);
   const [questionTypes, setQuestionTypes] = useState<QuestionTypeSpec[]>([]);
+  const [activeTab, setActiveTab] = useState("overview");
   const [selectedBotID, setSelectedBotID] = useState("");
   const [selectedVersionID, setSelectedVersionID] = useState("");
   const [botForm, setBotForm] = useState({ name: "", description: "" });
+  const [faqForm, setFaqForm] = useState({ question: "", answer: "", keywords: "" });
+  const [faqQuery, setFaqQuery] = useState("");
+  const [faqMatch, setFaqMatch] = useState<Row | null>(null);
+  const [channelForm, setChannelForm] = useState({ provider: "whatsapp", display_name: "WhatsApp", phone_number_id: "", display_number: "", status: "active", config: "" });
+  const [paymentForm, setPaymentForm] = useState({ provider: "paystack", display_name: "Paystack", enabled: true, public_key: "", secret_key: "", public_config: "{\"mode\":\"test\"}", secret_source: "environment" });
+  const [testSessionID, setTestSessionID] = useState("");
+  const [testInput, setTestInput] = useState("");
+  const [testMessages, setTestMessages] = useState<RuntimeMessage[]>([]);
   const [moduleForm, setModuleForm] = useState({ module_key: "ORDER", require_payment: true });
   const [variableForm, setVariableForm] = useState({ name: "", type: "string", scope: "user", description: "" });
   const [questionForm, setQuestionForm] = useState({ question_key: "", text: "", type: "text", response_mode: "free_text", variable_name: "", options: "" });
@@ -898,6 +926,25 @@ function BotBuilderScreen() {
     setQuestionTypes(questionResponse.data);
   }
 
+  async function loadAuxiliary(nextBotID = selectedBotID) {
+    const [setupResponse, faqResponse, channelResponse, paymentResponse] = await Promise.all([
+      apiGet<SetupStatus>("/bot-setup/status"),
+      apiGet<BotFAQ[]>("/bot-faqs"),
+      apiGet<Channel[]>("/channels"),
+      apiGet<PaymentConfiguration[]>("/payment-configurations"),
+    ]);
+    setSetupStatus(setupResponse.data);
+    setFaqs(faqResponse.data);
+    setChannels(channelResponse.data);
+    setPaymentConfigs(paymentResponse.data);
+    if (nextBotID) {
+      const linkResponse = await apiGet<ShareLink>(`/bots/${nextBotID}/share-link`);
+      setShareLink(linkResponse.data);
+    } else {
+      setShareLink(null);
+    }
+  }
+
   async function loadBots(nextBotID = selectedBotID) {
     const response = await apiGet<Bot[]>("/bots");
     setBots(response.data);
@@ -905,9 +952,11 @@ function BotBuilderScreen() {
     setSelectedBotID(resolvedBotID);
     if (resolvedBotID) {
       await loadVersions(resolvedBotID);
+      await loadAuxiliary(resolvedBotID);
     } else {
       setVersions([]);
       setConfig(null);
+      await loadAuxiliary("");
     }
   }
 
@@ -940,6 +989,28 @@ function BotBuilderScreen() {
     await loadBots(response.data.id);
   }
 
+  async function createEmptyBot() {
+    const response = await apiPost<Bot>("/bots", { ...botForm, default_language: "en", timezone: "Africa/Lagos" });
+    setBotForm({ name: "", description: "" });
+    setMessage("Empty bot created with a draft version.");
+    await loadBots(response.data.id);
+  }
+
+  async function createSelfServiceBot(event: FormEvent) {
+    event.preventDefault();
+    const response = await apiPost<Bot>("/bots/self-service", {
+      ...botForm,
+      welcome_message: "Welcome. I can help you place an order, track an order, answer questions, or contact support.",
+      require_payment: true,
+      allow_pickup: true,
+      allow_customer_rider: true,
+      allow_merchant_rider: false,
+    });
+    setBotForm({ name: "", description: "" });
+    setMessage("Self-service commerce bot created with starter modules.");
+    await loadBots(response.data.id);
+  }
+
   async function createVersion() {
     const response = await apiPost<BotVersion>(`/bots/${selectedBotID}/versions`, { source_version_id: selectedVersionID || undefined });
     setMessage(`Draft v${response.data.version_number} created from the selected version.`);
@@ -953,6 +1024,29 @@ function BotBuilderScreen() {
       parameters: JSON.stringify({ require_payment: moduleForm.require_payment }),
     });
     await refreshAfterMutation("Module added.");
+  }
+
+  async function updateModule(module: BotModule, patch: Partial<BotModule>) {
+    await apiPatch<BotModule>(`/bot-modules/${module.id}`, patch);
+    await refreshAfterMutation("Module updated.");
+  }
+
+  async function setModuleEnabled(module: BotModule, enabled: boolean) {
+    await apiPost<BotModule>(`/bot-modules/${module.id}/${enabled ? "enable" : "disable"}`, {});
+    await refreshAfterMutation(enabled ? "Module enabled." : "Module disabled.");
+  }
+
+  async function moveModule(module: BotModule, direction: -1 | 1) {
+    if (!config) return;
+    const sorted = [...config.modules].sort((left, right) => Number(left.sort_order ?? 0) - Number(right.sort_order ?? 0));
+    const index = sorted.findIndex((item) => item.id === module.id);
+    const nextIndex = index + direction;
+    if (index < 0 || nextIndex < 0 || nextIndex >= sorted.length) return;
+    [sorted[index], sorted[nextIndex]] = [sorted[nextIndex], sorted[index]];
+    await apiPost<BotModule[]>(`/bot-versions/${selectedVersionID}/modules/reorder`, {
+      modules: sorted.map((item, position) => ({ module_id: item.id, sort_order: (position + 1) * 10 })),
+    });
+    await refreshAfterMutation("Modules reordered.");
   }
 
   async function addVariable(event: FormEvent) {
@@ -1042,6 +1136,99 @@ function BotBuilderScreen() {
     await loadBots(selectedBotID);
   }
 
+  async function addFAQ(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<BotFAQ>("/bot-faqs", { question: faqForm.question, answer: faqForm.answer, keywords: faqForm.keywords.split(",").map((item) => item.trim()).filter(Boolean), status: "active" });
+    setFaqForm({ question: "", answer: "", keywords: "" });
+    setMessage("FAQ added to bot knowledge.");
+    await loadAuxiliary(selectedBotID);
+  }
+
+  async function runFAQMatch() {
+    const response = await apiPost<Row>("/bot-faqs/match", { query: faqQuery });
+    setFaqMatch(response.data);
+  }
+
+  async function saveChannel(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<Channel>("/channels", { ...clean(channelForm), config: channelForm.config || "{}" });
+    setChannelForm({ provider: "whatsapp", display_name: "WhatsApp", phone_number_id: "", display_number: "", status: "active", config: "" });
+    setMessage("Channel saved.");
+    await loadAuxiliary(selectedBotID);
+  }
+
+  async function testChannel(channelID: string) {
+    const response = await apiPost<Row>(`/channels/${channelID}/test`, {});
+    setMessage(`Channel test: ${String(response.data.status)}`);
+  }
+
+  async function disconnectChannel(channelID: string) {
+    await apiPost<Channel>(`/channels/${channelID}/disconnect`, {});
+    setMessage("Channel disconnected.");
+    await loadAuxiliary(selectedBotID);
+  }
+
+  async function savePayment(event: FormEvent) {
+    event.preventDefault();
+    const publicConfig = parseJSON<Record<string, unknown>>(paymentForm.public_config, {});
+    if (paymentForm.public_key.trim()) {
+      publicConfig.public_key = paymentForm.public_key.trim();
+    }
+    const payload = {
+      provider: paymentForm.provider,
+      display_name: paymentForm.display_name,
+      enabled: paymentForm.enabled,
+      public_config: JSON.stringify(publicConfig),
+      secret_source: paymentForm.secret_key.trim() ? "merchant_secret" : paymentForm.secret_source,
+      secret_config: paymentForm.secret_key.trim() ? JSON.stringify({ secret_key: paymentForm.secret_key.trim() }) : "",
+    };
+    await apiPost<PaymentConfiguration>("/payment-configurations", payload);
+    setPaymentForm({ ...paymentForm, secret_key: "", secret_source: payload.secret_source, public_config: payload.public_config });
+    setMessage("Payment configuration saved.");
+    await loadAuxiliary(selectedBotID);
+  }
+
+  async function testPayment(provider: string) {
+    const response = await apiPost<PaymentConfiguration>(`/payment-configurations/${provider}/test`, {});
+    setMessage(`Payment configuration test: ${response.data.status}`);
+    await loadAuxiliary(selectedBotID);
+  }
+
+  async function startRuntimeTest() {
+    const channelID = channels[0]?.id;
+    if (!selectedBotID || !channelID) {
+      setMessage("Select a bot and create a channel before testing.");
+      return;
+    }
+    const response = await apiPost<Row>("/runtime/test/start", {
+      bot_id: selectedBotID,
+      channel_id: channelID,
+      external_conversation_id: `admin-test-${Date.now()}`,
+      sender: "2348000000000",
+    });
+    setTestSessionID(String(response.data.id));
+    setTestMessages([{ from: "debug", text: `Started session ${String(response.data.id)}` }]);
+  }
+
+  async function sendRuntimeTest(event: FormEvent) {
+    event.preventDefault();
+    if (!testSessionID || !testInput.trim()) return;
+    const text = testInput.trim();
+    setTestInput("");
+    setTestMessages((items) => [...items, { from: "customer", text }]);
+    const response = await apiPost<Row>("/runtime/test/message", {
+      session_id: testSessionID,
+      external_message_id: `admin-message-${Date.now()}`,
+      text,
+    });
+    const outbound = Array.isArray(response.data.messages) ? response.data.messages as Row[] : [];
+    setTestMessages((items) => [
+      ...items,
+      ...outbound.map((msg) => ({ from: "bot" as const, text: [String(msg.text ?? ""), Array.isArray(msg.options) ? `Options: ${(msg.options as Row[]).map((option) => option.label ?? option.id).join(", ")}` : ""].filter(Boolean).join("\n") })),
+      { from: "debug", text: `Status: ${String(response.data.status ?? "unknown")}` },
+    ]);
+  }
+
   async function loadPreview() {
     const response = await apiGet<Row>(`/bot-versions/${selectedVersionID}/preview`);
     setPreview(response.data);
@@ -1055,26 +1242,29 @@ function BotBuilderScreen() {
   }
 
   const editable = config?.version.status !== "published" && config?.version.status !== "archived";
+  const customerMenu = config ? customerMenuModules(config.modules) : [];
   const selectedQuestionType = questionTypes.find((item) => item.key === questionForm.type);
+  const tabs = ["overview", "conversations", "modules", "knowledge", "variables", "integrations", "test", "publish", "advanced"];
 
   return (
     <section className="content bot-builder">
       <div className="section-heading">
         <h2>Bots</h2>
-        <p>Configure reusable merchant bot flows, validate them, and publish immutable snapshots for later runtime execution.</p>
+        <p>Build customer conversations, connect commerce actions, test safely, and publish immutable bot versions.</p>
       </div>
       {message ? <p className="error-text">{message}</p> : null}
       <div className="split">
-        <form className="resource-form" onSubmit={createBot}>
-          <strong>Create bot</strong>
+        <form className="resource-form" onSubmit={createSelfServiceBot}>
+          <strong>Create self-service bot</strong>
           <input placeholder="Bot name" value={botForm.name} onChange={(event) => setBotForm({ ...botForm, name: event.target.value })} />
           <input placeholder="Description" value={botForm.description} onChange={(event) => setBotForm({ ...botForm, description: event.target.value })} />
-          <button type="submit">Create bot</button>
+          <button type="submit">Create guided bot</button>
+          <button type="button" onClick={createEmptyBot}>Create empty bot</button>
         </form>
         <div className="table-wrap bot-toolbar">
           <label>
             Bot
-            <select value={selectedBotID} onChange={(event) => { setSelectedBotID(event.target.value); void loadVersions(event.target.value, ""); }}>
+            <select value={selectedBotID} onChange={(event) => { setSelectedBotID(event.target.value); void loadVersions(event.target.value, ""); void loadAuxiliary(event.target.value); }}>
               <option value="">Select bot</option>
               {bots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name} · {bot.status}</option>)}
             </select>
@@ -1092,6 +1282,13 @@ function BotBuilderScreen() {
           <button type="button" disabled={!selectedVersionID || validation?.valid === false} onClick={publishVersion}>Publish</button>
         </div>
       </div>
+      <div className="tab-bar">
+        {tabs.map((tab) => (
+          <button key={tab} type="button" className={activeTab === tab ? "tab active" : "tab"} onClick={() => setActiveTab(tab)}>
+            {tab}
+          </button>
+        ))}
+      </div>
 
       {config ? (
         <>
@@ -1103,6 +1300,191 @@ function BotBuilderScreen() {
           </div>
           {!editable ? <p className="muted">This version is immutable. Create a new draft from it to make changes.</p> : null}
 
+          {activeTab === "overview" ? (
+            <div className="split">
+              <div className="table-wrap checklist-panel">
+                <h3>Launch checklist</h3>
+                <div className="checklist compact">
+                  {(setupStatus?.items ?? []).map((item) => (
+                    <button key={item.key} className={item.complete ? "step complete" : "step"} type="button">
+                      <span>{item.complete ? "✓" : "○"}</span>
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="muted">{setupStatus ? `${setupStatus.complete_count} of ${setupStatus.total_count} setup checks complete.` : "Loading setup state..."}</p>
+              </div>
+              <div className="table-wrap share-panel">
+                <h3>Customer entry link</h3>
+                {shareLink?.available && shareLink.url ? (
+                  <>
+                    <code>{shareLink.url}</code>
+                    <div className="qr-placeholder" aria-label="QR payload">{shareLink.display_number}</div>
+                    <button type="button" onClick={() => navigator.clipboard.writeText(shareLink.url ?? "")}>Copy link</button>
+                  </>
+                ) : (
+                  <p className="muted">{shareLink?.reason ?? "Publish the bot and connect WhatsApp to generate a share link."}</p>
+                )}
+              </div>
+            </div>
+          ) : null}
+
+          {activeTab === "conversations" ? (
+            <div className="split">
+              <ResourceTable rows={config.steps} title="Conversation steps" />
+              <ResourceTable rows={config.questions} title="Questions" />
+            </div>
+          ) : null}
+
+          {activeTab === "modules" ? (
+            <div className="module-manager">
+              <section className="module-menu-preview">
+                <div>
+                  <span className="eyebrow">Customer entry menu</span>
+                  <h3>Published runtime order</h3>
+                  <p>
+                    Enabled modules appear in this order in the customer-facing bot menu. Disabled modules are hidden from new published snapshots.
+                  </p>
+                  <p className="muted">
+                    {editable ? "You are editing a draft. Publish this version before customers see these module changes." : "This version is published and immutable. Create a new draft for changes."}
+                  </p>
+                </div>
+                <ol>
+                  {customerMenu.length ? customerMenu.map((module) => (
+                    <li key={`${module.intent}-${module.id}`}>
+                      <span>{module.label}</span>
+                      <code>{module.intent}</code>
+                    </li>
+                  )) : <li className="muted">No enabled customer menu modules.</li>}
+                </ol>
+              </section>
+              {[...config.modules].sort((left, right) => Number(left.sort_order ?? 0) - Number(right.sort_order ?? 0)).map((module, index) => {
+                const enabled = moduleIsEnabled(module);
+                return (
+                  <article className="module-row" key={module.id}>
+                    <div>
+                      <span className={enabled ? "status-pill active" : "status-pill"}>{enabled ? "Enabled" : "Disabled"}</span>
+                      <h3>{module.name}</h3>
+                      <p>{String(module.description ?? "Configured module")}</p>
+                      <code>{module.module_key}</code>
+                    </div>
+                    <div className="module-controls">
+                      <input disabled={!editable} value={module.name} onChange={(event) => void updateModule(module, { name: event.target.value })} />
+                      <input disabled={!editable} type="number" value={Number(module.sort_order ?? 0)} onChange={(event) => void updateModule(module, { sort_order: Number(event.target.value) })} />
+                      <button type="button" disabled={!editable || index === 0} onClick={() => moveModule(module, -1)}>Move up</button>
+                      <button type="button" disabled={!editable || index === config.modules.length - 1} onClick={() => moveModule(module, 1)}>Move down</button>
+                      <button type="button" disabled={!editable} onClick={() => setModuleEnabled(module, !enabled)}>{enabled ? "Disable" : "Enable"}</button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : null}
+
+          {activeTab === "knowledge" ? (
+            <div className="split">
+              <form className="resource-form" onSubmit={addFAQ}>
+                <strong>Knowledge / FAQs</strong>
+                <input placeholder="Customer question" value={faqForm.question} onChange={(event) => setFaqForm({ ...faqForm, question: event.target.value })} />
+                <textarea placeholder="Answer" value={faqForm.answer} onChange={(event) => setFaqForm({ ...faqForm, answer: event.target.value })} />
+                <input placeholder="Keywords, comma separated" value={faqForm.keywords} onChange={(event) => setFaqForm({ ...faqForm, keywords: event.target.value })} />
+                <button type="submit">Add FAQ</button>
+              </form>
+              <div className="table-wrap match-panel">
+                <h3>Test FAQ match</h3>
+                <input placeholder="Ask a sample question" value={faqQuery} onChange={(event) => setFaqQuery(event.target.value)} />
+                <button type="button" onClick={runFAQMatch}>Match</button>
+                {faqMatch ? <pre>{JSON.stringify(faqMatch, null, 2)}</pre> : null}
+              </div>
+              <ResourceTable rows={faqs} title="Configured FAQs" />
+            </div>
+          ) : null}
+
+          {activeTab === "variables" ? (
+            <div className="split">
+              <ResourceTable rows={config.variables} title="Bot variables" />
+              <div className="table-wrap">
+                <h3>System variables</h3>
+                <p className="muted">System variables are read-only runtime values, such as the WhatsApp sender phone and channel context. Merchant variables are editable in Advanced.</p>
+              </div>
+            </div>
+          ) : null}
+
+          {activeTab === "integrations" ? (
+            <div className="split">
+              <form className="resource-form" onSubmit={saveChannel}>
+                <strong>WhatsApp channel</strong>
+                <input placeholder="Display name" value={channelForm.display_name} onChange={(event) => setChannelForm({ ...channelForm, display_name: event.target.value })} />
+                <input placeholder="Phone number ID" value={channelForm.phone_number_id} onChange={(event) => setChannelForm({ ...channelForm, phone_number_id: event.target.value })} />
+                <input placeholder="Display number" value={channelForm.display_number} onChange={(event) => setChannelForm({ ...channelForm, display_number: event.target.value })} />
+                <textarea placeholder='Public config JSON, e.g. {"webhook_path":"/runtime/webhooks/whatsapp"}' value={channelForm.config} onChange={(event) => setChannelForm({ ...channelForm, config: event.target.value })} />
+                <button type="submit">Save channel</button>
+              </form>
+              <form className="resource-form" onSubmit={savePayment}>
+                <strong>Payment provider</strong>
+                <input placeholder="Provider" value={paymentForm.provider} onChange={(event) => setPaymentForm({ ...paymentForm, provider: event.target.value })} />
+                <input placeholder="Display name" value={paymentForm.display_name} onChange={(event) => setPaymentForm({ ...paymentForm, display_name: event.target.value })} />
+                <input placeholder="Paystack public key" value={paymentForm.public_key} onChange={(event) => setPaymentForm({ ...paymentForm, public_key: event.target.value })} />
+                <input type="password" placeholder="Paystack secret key" value={paymentForm.secret_key} onChange={(event) => setPaymentForm({ ...paymentForm, secret_key: event.target.value })} />
+                <input placeholder="Secret source" value={paymentForm.secret_source} onChange={(event) => setPaymentForm({ ...paymentForm, secret_source: event.target.value })} />
+                <textarea value={paymentForm.public_config} onChange={(event) => setPaymentForm({ ...paymentForm, public_config: event.target.value })} />
+                <label className="inline-check"><input type="checkbox" checked={paymentForm.enabled} onChange={(event) => setPaymentForm({ ...paymentForm, enabled: event.target.checked })} /> Enabled</label>
+                <button type="submit">Save payment config</button>
+              </form>
+              <div className="table-wrap">
+                <h3>Channels</h3>
+                {channels.map((channel) => (
+                  <div className="row-actions" key={channel.id}>
+                    <span>{channel.display_name} · {channel.status}</span>
+                    <button type="button" onClick={() => testChannel(channel.id)}>Test</button>
+                    <button type="button" onClick={() => disconnectChannel(channel.id)}>Disconnect</button>
+                  </div>
+                ))}
+              </div>
+              <div className="table-wrap">
+                <h3>Payments</h3>
+                {paymentConfigs.map((payment) => (
+                  <div className="row-actions" key={payment.id}>
+                    <span>{payment.display_name} · {payment.status} · {payment.enabled ? "enabled" : "disabled"} · {payment.has_secret ? "secret saved" : payment.secret_source || "environment"}</span>
+                    <button type="button" onClick={() => testPayment(payment.provider)}>Test</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {activeTab === "test" ? (
+            <div className="table-wrap tester">
+              <h3>Bot test</h3>
+              <button type="button" onClick={startRuntimeTest}>Start test session</button>
+              <div className="test-transcript">
+                {testMessages.map((item, index) => <p key={`${item.from}-${index}`} className={`test-message ${item.from}`}>{item.text}</p>)}
+              </div>
+              <form className="test-send" onSubmit={sendRuntimeTest}>
+                <input placeholder="Send a customer message" value={testInput} onChange={(event) => setTestInput(event.target.value)} />
+                <button type="submit" disabled={!testSessionID}>Send</button>
+              </form>
+            </div>
+          ) : null}
+
+          {activeTab === "publish" ? (
+            <div className="split">
+              <div className="table-wrap">
+                <h3>Validate and publish</h3>
+                <button type="button" onClick={validateVersion}>Validate version</button>
+                <button type="button" disabled={validation?.valid === false} onClick={publishVersion}>Publish immutable snapshot</button>
+                {validation ? <pre>{JSON.stringify(validation, null, 2)}</pre> : <p className="muted">Run validation before publishing.</p>}
+              </div>
+              <div className="table-wrap">
+                <h3>Preview</h3>
+                <button type="button" onClick={loadPreview}>Load preview</button>
+                {preview ? <pre>{JSON.stringify(preview, null, 2)}</pre> : null}
+              </div>
+            </div>
+          ) : null}
+
+          {activeTab === "advanced" ? (
+          <>
           <div className="bot-panel">
             <form className="resource-form" onSubmit={addModule}>
               <strong>Module</strong>
@@ -1225,6 +1607,8 @@ function BotBuilderScreen() {
               {preview ? <pre>{JSON.stringify(preview, null, 2)}</pre> : null}
             </div>
           </div>
+          </>
+          ) : null}
         </>
       ) : (
         <div className="empty-state">
@@ -1316,6 +1700,59 @@ function parseState(raw?: string) {
   } catch {
     return {} as Record<string, boolean>;
   }
+}
+
+function parseObject(raw?: string) {
+  if (!raw) return {} as Record<string, unknown>;
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return {} as Record<string, unknown>;
+  }
+}
+
+function moduleIsEnabled(module: BotModule) {
+  const metadata = parseObject(module.metadata);
+  return metadata.enabled !== false;
+}
+
+function customerMenuModules(modules: BotModule[]) {
+  const seen = new Set<string>();
+  return [...modules]
+    .filter(moduleIsEnabled)
+    .sort((left, right) => Number(left.sort_order ?? 0) - Number(right.sort_order ?? 0))
+    .map((module) => ({ id: module.id, intent: moduleMenuIntent(module), label: moduleMenuLabel(module) }))
+    .filter((module) => {
+      if (!module.intent || seen.has(module.intent)) return false;
+      seen.add(module.intent);
+      return true;
+    });
+}
+
+function moduleMenuIntent(module: BotModule) {
+  const parameters = parseObject(module.parameters);
+  const explicit = String(parameters.menu_intent ?? "").trim();
+  if (explicit) return explicit;
+  switch (module.module_key) {
+    case "ORDER":
+      return "order";
+    case "TRACK_ORDER":
+      return "track_order";
+    case "FAQ":
+      return "faq";
+    case "COMPLAINT":
+      return "complaint";
+    case "CONTACT_SUPPORT":
+    case "HUMAN_HANDOFF":
+      return "support";
+    default:
+      return "";
+  }
+}
+
+function moduleMenuLabel(module: BotModule) {
+  const parameters = parseObject(module.parameters);
+  return String(parameters.menu_label ?? module.name ?? module.module_key).trim();
 }
 
 function memberName(member: Member) {

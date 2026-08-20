@@ -381,3 +381,35 @@ type PaymentReconciliation struct {
 }
 
 func (PaymentReconciliation) TableName() string { return "payment_reconciliations" }
+
+type PaymentConfiguration struct {
+	ID             uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID uuid.UUID  `gorm:"type:uuid;index;uniqueIndex:idx_payment_config_provider" json:"organization_id"`
+	Provider       string     `gorm:"uniqueIndex:idx_payment_config_provider" json:"provider"`
+	DisplayName    string     `json:"display_name"`
+	Status         string     `json:"status"`
+	Enabled        bool       `json:"enabled"`
+	PublicConfig   string     `json:"public_config"`
+	SecretSource   string     `json:"secret_source"`
+	HasSecret      bool       `gorm:"-" json:"has_secret"`
+	TestedAt       *time.Time `json:"tested_at,omitempty"`
+	Metadata       string     `json:"metadata"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+func (PaymentConfiguration) TableName() string { return "payment_configurations" }
+
+type PaymentProviderSecret struct {
+	ID             uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID uuid.UUID `gorm:"type:uuid;index;uniqueIndex:idx_payment_provider_secret" json:"organization_id"`
+	Provider       string    `gorm:"uniqueIndex:idx_payment_provider_secret" json:"provider"`
+	SecretName     string    `gorm:"uniqueIndex:idx_payment_provider_secret" json:"secret_name"`
+	Ciphertext     string    `json:"-"`
+	Nonce          string    `json:"-"`
+	KeyVersion     string    `json:"-"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func (PaymentProviderSecret) TableName() string { return "payment_provider_secrets" }

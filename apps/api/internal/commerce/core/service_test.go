@@ -65,6 +65,8 @@ func newCommerceFixture(t *testing.T, inventory int) commerceFixture {
 		&CommerceNotification{},
 		&MerchantImportJob{},
 		&PaymentReconciliation{},
+		&PaymentConfiguration{},
+		&PaymentProviderSecret{},
 		&jobs.Job{},
 	); err != nil {
 		t.Fatal(err)
@@ -787,6 +789,179 @@ func TestMerchantImportRejectsInvalidReferencesWithoutPartialWrites(t *testing.T
 	}
 	if stores != 0 {
 		t.Fatalf("expected no partial store write, got %d", stores)
+	}
+}
+
+func TestPaymentConfigurationDoesNotExposeSecrets(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	config, err := fx.service.UpsertPaymentConfiguration(context.Background(), fx.actor, PaymentConfigurationInput{
+		Provider:     "paystack",
+		DisplayName:  "Paystack",
+		Enabled:      true,
+		PublicConfig: `{"mode":"test"}`,
+		SecretSource: "environment",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.SecretSource != "environment" || config.Enabled != true {
+		t.Fatalf("unexpected config: %+v", config)
+	}
+	body, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "secret_config") {
+		t.Fatalf("payment config JSON exposed secret field: %s", string(body))
+	}
+	tested, err := fx.service.TestPaymentConfiguration(context.Background(), fx.actor, "paystack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tested.Status != "needs_attention" || tested.TestedAt == nil {
+		t.Fatalf("expected unavailable Paystack config without credentials, got %+v", tested)
+	}
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{CustomerID: fx.customer.ID, StoreID: fx.store.ID, FulfilmentType: FulfilmentPickup, Items: []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}}, IdempotencyKey: "missing-paystack-order"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.InitializePayment(context.Background(), fx.actor, PaymentInput{OrderID: order.ID, Provider: "paystack", Email: "customer@example.com", IdempotencyKey: "missing-paystack-payment"}); err == nil {
+		t.Fatal("expected Paystack initialization to fail when configuration test is not active")
+	}
+}
+
+func TestPaymentConfigurationStatusMatchesProviderResolution(t *testing.T) {
+	t.Run("safe test provider active when configured as test", func(t *testing.T) {
+		fx := newCommerceFixture(t, 5)
+		if _, err := fx.service.UpsertPaymentConfiguration(context.Background(), fx.actor, PaymentConfigurationInput{Provider: "test", DisplayName: "Test provider", Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+		tested, err := fx.service.TestPaymentConfiguration(context.Background(), fx.actor, "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tested.Status != StatusActive {
+			t.Fatalf("expected safe test provider to be active, got %+v", tested)
+		}
+		order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{CustomerID: fx.customer.ID, StoreID: fx.store.ID, FulfilmentType: FulfilmentPickup, Items: []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}}, IdempotencyKey: "test-provider-order"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fx.service.InitializePayment(context.Background(), fx.actor, PaymentInput{OrderID: order.ID, Provider: "test", Email: "customer@example.com", IdempotencyKey: "test-provider-payment"}); err != nil {
+			t.Fatalf("expected active test provider to initialize, got %v", err)
+		}
+	})
+
+	t.Run("environment paystack active only when provider is usable", func(t *testing.T) {
+		fx := newCommerceFixture(t, 5)
+		fx.service.paymentProvider = namedPaymentProvider{name: "paystack", amountMinor: fx.variant.PriceMinor, currency: "NGN"}
+		if _, err := fx.service.UpsertPaymentConfiguration(context.Background(), fx.actor, PaymentConfigurationInput{Provider: "paystack", DisplayName: "Paystack", Enabled: true, SecretSource: "environment"}); err != nil {
+			t.Fatal(err)
+		}
+		tested, err := fx.service.TestPaymentConfiguration(context.Background(), fx.actor, "paystack")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tested.Status != StatusActive {
+			t.Fatalf("expected environment-backed Paystack to be active, got %+v", tested)
+		}
+		order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{CustomerID: fx.customer.ID, StoreID: fx.store.ID, FulfilmentType: FulfilmentPickup, Items: []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}}, IdempotencyKey: "env-paystack-order"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fx.service.InitializePayment(context.Background(), fx.actor, PaymentInput{OrderID: order.ID, Provider: "paystack", Email: "customer@example.com", IdempotencyKey: "env-paystack-payment"}); err != nil {
+			t.Fatalf("expected active environment Paystack to initialize, got %v", err)
+		}
+	})
+
+	t.Run("blank paystack provider is not usable", func(t *testing.T) {
+		fx := newCommerceFixture(t, 5)
+		fx.service.paymentProvider = NewPaystackProvider("")
+		if _, err := fx.service.UpsertPaymentConfiguration(context.Background(), fx.actor, PaymentConfigurationInput{Provider: "paystack", DisplayName: "Paystack", Enabled: true, SecretSource: "environment"}); err != nil {
+			t.Fatal(err)
+		}
+		tested, err := fx.service.TestPaymentConfiguration(context.Background(), fx.actor, "paystack")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tested.Status != "needs_attention" {
+			t.Fatalf("expected blank Paystack provider to need attention, got %+v", tested)
+		}
+	})
+}
+
+func TestPaymentConfigurationStoresMerchantSecretEncryptedAndUsesIt(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	secretStore, err := NewEncryptedPaymentSecretStore(fx.db, []byte("12345678901234567890123456789012"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx.service.ConfigurePaymentSecretStore(secretStore)
+
+	config, err := fx.service.UpsertPaymentConfiguration(context.Background(), fx.actor, PaymentConfigurationInput{
+		Provider:     "paystack",
+		DisplayName:  "Paystack",
+		Enabled:      true,
+		PublicConfig: `{"public_key":"pk_test_public"}`,
+		SecretConfig: `{"secret_key":"sk_test_private"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.SecretSource != "merchant_secret" || !config.HasSecret {
+		t.Fatalf("expected merchant secret config, got %+v", config)
+	}
+	body, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "sk_test_private") || strings.Contains(string(body), "secret_config") {
+		t.Fatalf("payment config response exposed secret material: %s", string(body))
+	}
+	var stored PaymentProviderSecret
+	if err := fx.db.Where("organization_id = ? AND provider = ? AND secret_name = ?", fx.actor.OrganizationID, "paystack", "secret_key").First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stored.Ciphertext, "sk_test_private") {
+		t.Fatalf("secret was stored in plaintext: %+v", stored)
+	}
+	decrypted, err := secretStore.GetSecret(context.Background(), fx.actor.OrganizationID, "paystack", "secret_key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decrypted != "sk_test_private" {
+		t.Fatalf("expected decrypted merchant secret, got %q", decrypted)
+	}
+	configs, err := fx.service.ListPaymentConfigurations(context.Background(), fx.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(configs) != 1 || !configs[0].HasSecret {
+		t.Fatalf("expected listed config to show masked secret presence, got %+v", configs)
+	}
+
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{CustomerID: fx.customer.ID, StoreID: fx.store.ID, FulfilmentType: FulfilmentPickup, Items: []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}}, IdempotencyKey: "merchant-secret-order"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	usedSecret := ""
+	fx.service.paystackProviderFactory = func(secret string) PaymentProvider {
+		usedSecret = secret
+		return namedPaymentProvider{name: "paystack", amountMinor: order.TotalMinor, currency: "NGN"}
+	}
+	payment, err := fx.service.InitializePayment(context.Background(), fx.actor, PaymentInput{OrderID: order.ID, Provider: "paystack", Email: "customer@example.com", IdempotencyKey: "merchant-secret-pay"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usedSecret != "sk_test_private" || payment.Provider != "paystack" || payment.AuthorizationURL == "" {
+		t.Fatalf("expected merchant secret-backed Paystack initialization, usedSecret=%q payment=%+v", usedSecret, payment)
+	}
+	tested, err := fx.service.TestPaymentConfiguration(context.Background(), fx.actor, "paystack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tested.Status != StatusActive {
+		t.Fatalf("expected merchant secret Paystack config to test active, got %+v", tested)
 	}
 }
 

@@ -44,9 +44,6 @@ type paystackWebhookPayload struct {
 }
 
 func (s *Service) HandlePaystackWebhook(ctx context.Context, body []byte, signature string) (PaymentWebhookResult, error) {
-	if !verifyPaystackSignature(s.paystackSecret, signature, body) {
-		return PaymentWebhookResult{}, httperror.Forbidden("Invalid Paystack webhook signature")
-	}
 	var payload paystackWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return PaymentWebhookResult{}, httperror.BadRequest("Invalid Paystack webhook payload")
@@ -54,6 +51,19 @@ func (s *Service) HandlePaystackWebhook(ctx context.Context, body []byte, signat
 	payload.Data.Reference = strings.TrimSpace(payload.Data.Reference)
 	if payload.Event == "" || payload.Data.Reference == "" {
 		return PaymentWebhookResult{}, httperror.BadRequest("Paystack webhook event and reference are required")
+	}
+	var webhookPayment Payment
+	paymentFound := s.db.WithContext(ctx).Where("provider = ? AND reference = ?", "paystack", payload.Data.Reference).First(&webhookPayment).Error == nil
+	signatureSecret := s.paystackSecret
+	if paymentFound && s.paymentSecretStore != nil {
+		if merchantSecret, err := s.paymentSecretStore.GetSecret(ctx, webhookPayment.OrganizationID, "paystack", "secret_key"); err == nil && strings.TrimSpace(merchantSecret) != "" {
+			signatureSecret = merchantSecret
+		} else if err != nil && err != gorm.ErrRecordNotFound {
+			return PaymentWebhookResult{}, err
+		}
+	}
+	if !verifyPaystackSignature(signatureSecret, signature, body) {
+		return PaymentWebhookResult{}, httperror.Forbidden("Invalid Paystack webhook signature")
 	}
 	externalID := paystackEventID(payload)
 	rawPayload := jsonValue(payload)
@@ -114,7 +124,14 @@ func (s *Service) HandlePaystackWebhook(ctx context.Context, body []byte, signat
 			result.Status = paymentWebhookFailed
 			return nil
 		}
-		verification, err := s.paymentProvider.Verify(ctx, payment.Reference)
+		provider, err := s.resolveUsablePaymentProvider(ctx, payment.OrganizationID, payment.Provider)
+		if err != nil {
+			return err
+		}
+		if provider == nil {
+			return httperror.BadRequest("Payment provider is not configured")
+		}
+		verification, err := provider.Verify(ctx, payment.Reference)
 		if err != nil {
 			now := s.now()
 			if updateErr := tx.Model(&event).Updates(map[string]any{"organization_id": payment.OrganizationID, "status": paymentWebhookFailed, "error_message": publicWebhookError(err), "processed_at": &now, "updated_at": now}).Error; updateErr != nil {

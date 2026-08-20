@@ -41,6 +41,15 @@ type ModuleInput struct {
 	SortOrder   int    `json:"sort_order"`
 }
 
+type ModuleOrderInput struct {
+	ModuleID  uuid.UUID `json:"module_id"`
+	SortOrder int       `json:"sort_order"`
+}
+
+type ModuleReorderInput struct {
+	Modules []ModuleOrderInput `json:"modules"`
+}
+
 type VariableInput struct {
 	Name         string `json:"name"`
 	Type         string `json:"type"`
@@ -105,6 +114,56 @@ type StepInput struct {
 	FallbackStepKey string     `json:"fallback_step_key"`
 	SortOrder       int        `json:"sort_order"`
 	Metadata        string     `json:"metadata"`
+}
+
+type SelfServiceBotInput struct {
+	Name               string `json:"name"`
+	Description        string `json:"description"`
+	WelcomeMessage     string `json:"welcome_message"`
+	SupportMessage     string `json:"support_message"`
+	RequirePayment     *bool  `json:"require_payment"`
+	AllowPickup        *bool  `json:"allow_pickup"`
+	AllowCustomerRider *bool  `json:"allow_customer_rider"`
+	AllowMerchantRider *bool  `json:"allow_merchant_rider"`
+}
+
+type FAQInput struct {
+	Question string   `json:"question"`
+	Answer   string   `json:"answer"`
+	Keywords []string `json:"keywords"`
+	Status   string   `json:"status"`
+	Metadata string   `json:"metadata"`
+}
+
+type FAQMatch struct {
+	FAQ        FAQ     `json:"faq"`
+	Score      float64 `json:"score"`
+	MatchedOn  string  `json:"matched_on"`
+	Confidence string  `json:"confidence"`
+}
+
+type ShareLink struct {
+	Available     bool   `json:"available"`
+	URL           string `json:"url"`
+	EncodedText   string `json:"encoded_text"`
+	DisplayNumber string `json:"display_number"`
+	Message       string `json:"message"`
+	Reason        string `json:"reason,omitempty"`
+}
+
+type ChecklistItem struct {
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Complete    bool   `json:"complete"`
+	Description string `json:"description"`
+}
+
+type BotSetupStatus struct {
+	OrganizationID uuid.UUID       `json:"organization_id"`
+	Items          []ChecklistItem `json:"items"`
+	CompleteCount  int             `json:"complete_count"`
+	TotalCount     int             `json:"total_count"`
+	Ready          bool            `json:"ready"`
 }
 
 type ValidationIssue struct {

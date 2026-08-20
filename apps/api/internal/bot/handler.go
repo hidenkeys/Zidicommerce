@@ -19,17 +19,25 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Get("/bot-modules", h.systemModules)
 	router.Get("/bot-actions", h.systemActions)
 	router.Get("/bot-question-types", h.questionTypes)
+	router.Get("/bot-setup/status", h.setupStatus)
+	router.Get("/bot-faqs", h.listFAQs)
+	router.Post("/bot-faqs", h.createFAQ)
+	router.Patch("/bot-faqs/:id", h.updateFAQ)
+	router.Post("/bot-faqs/match", h.matchFAQ)
 
 	router.Get("/bots", h.listBots)
 	router.Post("/bots", h.createBot)
+	router.Post("/bots/self-service", h.createSelfServiceBot)
 	router.Get("/bots/:id", h.getBot)
 	router.Patch("/bots/:id", h.updateBot)
+	router.Get("/bots/:id/share-link", h.shareLink)
 	router.Get("/bots/:id/versions", h.listVersions)
 	router.Post("/bots/:id/versions", h.createVersion)
 
 	router.Get("/bot-versions/:id/configuration", h.getConfiguration)
 	router.Get("/bot-versions/:id/modules", h.listModules)
 	router.Post("/bot-versions/:id/modules", h.addModule)
+	router.Post("/bot-versions/:id/modules/reorder", h.reorderModules)
 	router.Get("/bot-versions/:id/variables", h.listVariables)
 	router.Post("/bot-versions/:id/variables", h.createVariable)
 	router.Get("/bot-versions/:id/questions", h.listQuestions)
@@ -47,6 +55,9 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Get("/bot-versions/:id/preview", h.previewVersion)
 
 	router.Patch("/bot-steps/:id", h.updateStep)
+	router.Patch("/bot-modules/:id", h.updateModule)
+	router.Post("/bot-modules/:id/enable", h.enableModule)
+	router.Post("/bot-modules/:id/disable", h.disableModule)
 }
 
 func (h *Handler) systemModules(c *fiber.Ctx) error {
@@ -75,6 +86,15 @@ func (h *Handler) createBot(c *fiber.Ctx) error {
 	return respond(c, data, err)
 }
 
+func (h *Handler) createSelfServiceBot(c *fiber.Ctx) error {
+	var input SelfServiceBotInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.CreateSelfServiceBot(c.UserContext(), currentUser(c), input)
+	return respond(c, data, err)
+}
+
 func (h *Handler) getBot(c *fiber.Ctx) error {
 	id, err := paramID(c, "id")
 	if err != nil {
@@ -94,6 +114,20 @@ func (h *Handler) updateBot(c *fiber.Ctx) error {
 		return err
 	}
 	data, err := h.service.UpdateBot(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) shareLink(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.GetShareLink(c.UserContext(), currentUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) setupStatus(c *fiber.Ctx) error {
+	data, err := h.service.GetSetupStatus(c.UserContext(), currentUser(c))
 	return respond(c, data, err)
 }
 
@@ -147,6 +181,50 @@ func (h *Handler) listModules(c *fiber.Ctx) error {
 		return err
 	}
 	data, err := h.service.ListModules(c.UserContext(), currentUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) updateModule(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input ModuleInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.UpdateModule(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) enableModule(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.SetModuleEnabled(c.UserContext(), currentUser(c), id, true)
+	return respond(c, data, err)
+}
+
+func (h *Handler) disableModule(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.SetModuleEnabled(c.UserContext(), currentUser(c), id, false)
+	return respond(c, data, err)
+}
+
+func (h *Handler) reorderModules(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input ModuleReorderInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.ReorderModules(c.UserContext(), currentUser(c), id, input)
 	return respond(c, data, err)
 }
 
@@ -319,6 +397,44 @@ func (h *Handler) previewVersion(c *fiber.Ctx) error {
 		return err
 	}
 	data, err := h.service.PreviewVersion(c.UserContext(), currentUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) listFAQs(c *fiber.Ctx) error {
+	data, err := h.service.ListFAQs(c.UserContext(), currentUser(c))
+	return respond(c, data, err)
+}
+
+func (h *Handler) createFAQ(c *fiber.Ctx) error {
+	var input FAQInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.CreateFAQ(c.UserContext(), currentUser(c), input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) updateFAQ(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input FAQInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.UpdateFAQ(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) matchFAQ(c *fiber.Ctx) error {
+	var input struct {
+		Query string `json:"query"`
+	}
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.MatchFAQ(c.UserContext(), currentUser(c), input.Query)
 	return respond(c, data, err)
 }
 

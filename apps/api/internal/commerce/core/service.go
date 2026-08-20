@@ -49,17 +49,19 @@ type PaymentVerification struct {
 }
 
 type Service struct {
-	db              *gorm.DB
-	paymentProvider PaymentProvider
-	paystackSecret  string
-	mailer          email.Sender
-	appBaseURL      string
-	jobs            *jobs.Service
-	now             func() time.Time
+	db                      *gorm.DB
+	paymentProvider         PaymentProvider
+	paymentSecretStore      PaymentProviderSecretStore
+	paystackProviderFactory func(secret string) PaymentProvider
+	paystackSecret          string
+	mailer                  email.Sender
+	appBaseURL              string
+	jobs                    *jobs.Service
+	now                     func() time.Time
 }
 
 func NewService(db *gorm.DB, provider PaymentProvider) *Service {
-	return &Service{db: db, paymentProvider: provider, now: func() time.Time { return time.Now().UTC() }}
+	return &Service{db: db, paymentProvider: provider, paystackProviderFactory: func(secret string) PaymentProvider { return NewPaystackProvider(secret) }, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func (s *Service) ConfigureNotifications(mailer email.Sender, appBaseURL string) {
@@ -69,6 +71,10 @@ func (s *Service) ConfigureNotifications(mailer email.Sender, appBaseURL string)
 
 func (s *Service) ConfigurePaymentWebhooks(paystackSecret string) {
 	s.paystackSecret = strings.TrimSpace(paystackSecret)
+}
+
+func (s *Service) ConfigurePaymentSecretStore(store PaymentProviderSecretStore) {
+	s.paymentSecretStore = store
 }
 
 func (s *Service) ConfigureJobs(jobService *jobs.Service) {
@@ -1001,7 +1007,11 @@ func (s *Service) InitializePayment(ctx context.Context, actor auth.CurrentUser,
 		return Payment{}, err
 	}
 	providerName := defaultString(strings.ToLower(strings.TrimSpace(input.Provider)), s.paymentProvider.Name())
-	if providerName != s.paymentProvider.Name() {
+	provider, err := s.resolveUsablePaymentProvider(ctx, actor.OrganizationID, providerName)
+	if err != nil {
+		return Payment{}, err
+	}
+	if provider == nil {
 		return Payment{}, httperror.BadRequest("Payment provider is not configured")
 	}
 	var existing Payment
@@ -1013,7 +1023,7 @@ func (s *Service) InitializePayment(ctx context.Context, actor auth.CurrentUser,
 		return Payment{}, err
 	}
 	reference := fmt.Sprintf("zc_%s", uuid.NewString())
-	init, err := s.paymentProvider.Initialize(ctx, PaymentInitializeRequest{Reference: reference, Email: input.Email, AmountMinor: order.TotalMinor, Currency: order.Currency, CallbackURL: input.CallbackURL})
+	init, err := provider.Initialize(ctx, PaymentInitializeRequest{Reference: reference, Email: input.Email, AmountMinor: order.TotalMinor, Currency: order.Currency, CallbackURL: input.CallbackURL})
 	if err != nil {
 		return Payment{}, err
 	}
@@ -1033,7 +1043,14 @@ func (s *Service) VerifyPayment(ctx context.Context, actor auth.CurrentUser, inp
 		if payment.Status == PaymentPaid {
 			return nil
 		}
-		verification, err := s.paymentProvider.Verify(ctx, payment.Reference)
+		provider, err := s.resolveUsablePaymentProvider(ctx, actor.OrganizationID, payment.Provider)
+		if err != nil {
+			return err
+		}
+		if provider == nil {
+			return httperror.BadRequest("Payment provider is not configured")
+		}
+		verification, err := provider.Verify(ctx, payment.Reference)
 		if err != nil {
 			return err
 		}
@@ -1077,7 +1094,14 @@ func (s *Service) ReconcilePayment(ctx context.Context, actor auth.CurrentUser, 
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", actor.OrganizationID, paymentID).First(&payment).Error; err != nil {
 			return mapNotFound(err, "Payment not found")
 		}
-		verification, err := s.paymentProvider.Verify(ctx, payment.Reference)
+		provider, err := s.resolveUsablePaymentProvider(ctx, actor.OrganizationID, payment.Provider)
+		if err != nil {
+			return err
+		}
+		if provider == nil {
+			return httperror.BadRequest("Payment provider is not configured")
+		}
+		verification, err := provider.Verify(ctx, payment.Reference)
 		if err != nil {
 			return err
 		}
@@ -1134,6 +1158,34 @@ func (s *Service) GetPaymentByReference(ctx context.Context, actor auth.CurrentU
 	return payment, mapNotFound(err, "Payment not found")
 }
 
+func (s *Service) resolvePaymentProvider(ctx context.Context, organizationID uuid.UUID, providerName string) (PaymentProvider, error) {
+	providerName = strings.ToLower(strings.TrimSpace(providerName))
+	if providerName == "paystack" && s.paymentSecretStore != nil {
+		secret, err := s.paymentSecretStore.GetSecret(ctx, organizationID, "paystack", "secret_key")
+		if err == nil && strings.TrimSpace(secret) != "" {
+			return s.paystackProviderFactory(secret), nil
+		}
+		if err != nil && err != gorm.ErrRecordNotFound {
+			return nil, err
+		}
+	}
+	if s.paymentProvider != nil && providerName == s.paymentProvider.Name() {
+		return s.paymentProvider, nil
+	}
+	return nil, nil
+}
+
+func (s *Service) resolveUsablePaymentProvider(ctx context.Context, organizationID uuid.UUID, providerName string) (PaymentProvider, error) {
+	provider, err := s.resolvePaymentProvider(ctx, organizationID, providerName)
+	if err != nil || provider == nil {
+		return provider, err
+	}
+	if paystack, ok := provider.(*PaystackProvider); ok && strings.TrimSpace(paystack.secretKey) == "" {
+		return nil, nil
+	}
+	return provider, nil
+}
+
 func (s *Service) GetFulfilment(ctx context.Context, actor auth.CurrentUser, orderID uuid.UUID) (Fulfilment, error) {
 	if _, err := s.GetOrder(ctx, actor, orderID); err != nil {
 		return Fulfilment{}, err
@@ -1185,13 +1237,174 @@ func (s *Service) CreateChannel(ctx context.Context, actor auth.CurrentUser, inp
 		return Channel{}, httperror.BadRequest("Channel provider and display name are required")
 	}
 	channel := Channel{ID: uuid.New(), OrganizationID: actor.OrganizationID, Provider: input.Provider, DisplayName: input.DisplayName, PhoneNumberID: input.PhoneNumberID, DisplayNumber: input.DisplayNumber, Status: defaultString(input.Status, "draft"), Config: jsonObject(input.Config), SecretConfig: jsonObject(input.SecretConfig)}
-	return channel, s.db.WithContext(ctx).Create(&channel).Error
+	err := s.db.WithContext(ctx).Create(&channel).Error
+	if err == nil {
+		_ = s.auditTx(s.db.WithContext(ctx), &actor.OrganizationID, &actor.ID, "channel", &channel.ID, "channel_created", fmt.Sprintf(`{"provider":%q}`, channel.Provider))
+	}
+	return channel, err
 }
 
 func (s *Service) ListChannels(ctx context.Context, actor auth.CurrentUser) ([]Channel, error) {
 	var channels []Channel
 	err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("created_at DESC").Find(&channels).Error
 	return channels, err
+}
+
+func (s *Service) UpdateChannel(ctx context.Context, actor auth.CurrentUser, channelID uuid.UUID, input ChannelInput) (Channel, error) {
+	if !actor.Role.CanManageOrganization() {
+		return Channel{}, httperror.Forbidden("You cannot manage channels")
+	}
+	var channel Channel
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, channelID).First(&channel).Error; err != nil {
+		return Channel{}, mapNotFound(err, "Channel not found")
+	}
+	input.normalize()
+	updates := map[string]any{"updated_at": s.now()}
+	if input.DisplayName != "" {
+		updates["display_name"] = input.DisplayName
+	}
+	if input.PhoneNumberID != "" {
+		updates["phone_number_id"] = input.PhoneNumberID
+	}
+	if input.DisplayNumber != "" {
+		updates["display_number"] = input.DisplayNumber
+	}
+	if input.Status != "" {
+		updates["status"] = input.Status
+	}
+	if input.Config != "" {
+		updates["config"] = jsonObject(input.Config)
+	}
+	if err := s.db.WithContext(ctx).Model(&channel).Updates(updates).Error; err != nil {
+		return Channel{}, err
+	}
+	_ = s.auditTx(s.db.WithContext(ctx), &actor.OrganizationID, &actor.ID, "channel", &channel.ID, "channel_updated", fmt.Sprintf(`{"provider":%q}`, channel.Provider))
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, channelID).First(&channel).Error; err != nil {
+		return Channel{}, err
+	}
+	return channel, nil
+}
+
+func (s *Service) TestChannel(ctx context.Context, actor auth.CurrentUser, channelID uuid.UUID) (map[string]any, error) {
+	if !actor.Role.CanManageOrganization() {
+		return nil, httperror.Forbidden("You cannot test channels")
+	}
+	var channel Channel
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, channelID).First(&channel).Error; err != nil {
+		return nil, mapNotFound(err, "Channel not found")
+	}
+	issues := []string{}
+	if channel.Provider != "whatsapp" {
+		issues = append(issues, "Only WhatsApp channel testing is currently supported.")
+	}
+	if strings.TrimSpace(channel.PhoneNumberID) == "" {
+		issues = append(issues, "Phone number ID is missing.")
+	}
+	if strings.TrimSpace(channel.DisplayNumber) == "" {
+		issues = append(issues, "Display number is missing.")
+	}
+	status := "ok"
+	if len(issues) > 0 {
+		status = "needs_attention"
+	}
+	_ = s.auditTx(s.db.WithContext(ctx), &actor.OrganizationID, &actor.ID, "channel", &channel.ID, "channel_tested", fmt.Sprintf(`{"status":%q}`, status))
+	return map[string]any{"status": status, "issues": issues, "provider": channel.Provider, "display_number": channel.DisplayNumber}, nil
+}
+
+func (s *Service) DisconnectChannel(ctx context.Context, actor auth.CurrentUser, channelID uuid.UUID) (Channel, error) {
+	return s.UpdateChannel(ctx, actor, channelID, ChannelInput{Status: StatusInactive})
+}
+
+func (s *Service) ListPaymentConfigurations(ctx context.Context, actor auth.CurrentUser) ([]PaymentConfiguration, error) {
+	if !actor.Role.CanManageOrganization() {
+		return nil, httperror.Forbidden("You cannot view payment configuration")
+	}
+	var configs []PaymentConfiguration
+	if err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("provider ASC").Find(&configs).Error; err != nil {
+		return nil, err
+	}
+	return s.annotatePaymentConfigurations(ctx, configs), nil
+}
+
+func (s *Service) UpsertPaymentConfiguration(ctx context.Context, actor auth.CurrentUser, input PaymentConfigurationInput) (PaymentConfiguration, error) {
+	if !actor.Role.CanManageOrganization() {
+		return PaymentConfiguration{}, httperror.Forbidden("You cannot manage payment configuration")
+	}
+	input.normalize()
+	if input.Provider == "" {
+		return PaymentConfiguration{}, httperror.BadRequest("Payment provider is required")
+	}
+	secretConfig := jsonMap(input.SecretConfig)
+	if rawSecret := stringFromAny(secretConfig["secret_key"]); rawSecret != "" {
+		if s.paymentSecretStore == nil {
+			return PaymentConfiguration{}, httperror.BadRequest("Secure payment secret storage is not configured")
+		}
+		if err := s.paymentSecretStore.SaveSecret(ctx, actor.OrganizationID, input.Provider, "secret_key", rawSecret); err != nil {
+			return PaymentConfiguration{}, err
+		}
+		if input.SecretSource == "" {
+			input.SecretSource = "merchant_secret"
+		}
+	}
+	config := PaymentConfiguration{ID: uuid.New(), OrganizationID: actor.OrganizationID, Provider: input.Provider, DisplayName: defaultString(input.DisplayName, input.Provider), Status: defaultString(input.Status, "draft"), Enabled: input.Enabled, PublicConfig: jsonObject(input.PublicConfig), SecretSource: defaultString(input.SecretSource, "environment"), Metadata: jsonObject(input.Metadata)}
+	err := s.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "organization_id"}, {Name: "provider"}}, DoUpdates: clause.Assignments(map[string]any{"display_name": config.DisplayName, "status": config.Status, "enabled": config.Enabled, "public_config": config.PublicConfig, "secret_source": config.SecretSource, "metadata": config.Metadata, "updated_at": s.now()})}).Create(&config).Error
+	if err != nil {
+		return PaymentConfiguration{}, err
+	}
+	var saved PaymentConfiguration
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND provider = ?", actor.OrganizationID, input.Provider).First(&saved).Error; err != nil {
+		return PaymentConfiguration{}, err
+	}
+	s.annotatePaymentConfiguration(ctx, &saved)
+	_ = s.auditTx(s.db.WithContext(ctx), &actor.OrganizationID, &actor.ID, "payment_configuration", &saved.ID, "payment_configuration_saved", fmt.Sprintf(`{"provider":%q,"enabled":%t}`, input.Provider, input.Enabled))
+	return saved, nil
+}
+
+func (s *Service) TestPaymentConfiguration(ctx context.Context, actor auth.CurrentUser, provider string) (PaymentConfiguration, error) {
+	if !actor.Role.CanManageOrganization() {
+		return PaymentConfiguration{}, httperror.Forbidden("You cannot test payment configuration")
+	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	var config PaymentConfiguration
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND provider = ?", actor.OrganizationID, provider).First(&config).Error; err != nil {
+		return PaymentConfiguration{}, mapNotFound(err, "Payment configuration not found")
+	}
+	s.annotatePaymentConfiguration(ctx, &config)
+	status := "needs_attention"
+	resolved, err := s.resolveUsablePaymentProvider(ctx, actor.OrganizationID, provider)
+	if err != nil {
+		return PaymentConfiguration{}, err
+	}
+	if resolved != nil {
+		status = StatusActive
+	}
+	now := s.now()
+	if err := s.db.WithContext(ctx).Model(&config).Updates(map[string]any{"status": status, "tested_at": &now, "updated_at": now}).Error; err != nil {
+		return PaymentConfiguration{}, err
+	}
+	_ = s.auditTx(s.db.WithContext(ctx), &actor.OrganizationID, &actor.ID, "payment_configuration", &config.ID, "payment_configuration_tested", fmt.Sprintf(`{"provider":%q,"status":%q}`, provider, status))
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND provider = ?", actor.OrganizationID, provider).First(&config).Error; err != nil {
+		return PaymentConfiguration{}, err
+	}
+	s.annotatePaymentConfiguration(ctx, &config)
+	return config, nil
+}
+
+func (s *Service) annotatePaymentConfigurations(ctx context.Context, configs []PaymentConfiguration) []PaymentConfiguration {
+	for index := range configs {
+		s.annotatePaymentConfiguration(ctx, &configs[index])
+	}
+	return configs
+}
+
+func (s *Service) annotatePaymentConfiguration(ctx context.Context, config *PaymentConfiguration) {
+	if config == nil || s.paymentSecretStore == nil {
+		return
+	}
+	hasSecret, err := s.paymentSecretStore.HasSecret(ctx, config.OrganizationID, config.Provider, "secret_key")
+	if err == nil {
+		config.HasSecret = hasSecret
+	}
 }
 
 func (s *Service) RecordNotification(ctx context.Context, actor auth.CurrentUser, input NotificationInput) (CommerceNotification, error) {
@@ -1489,6 +1702,29 @@ func jsonValue(value any) string {
 		return "{}"
 	}
 	return string(body)
+}
+
+func jsonMap(raw string) map[string]any {
+	result := map[string]any{}
+	if strings.TrimSpace(raw) == "" {
+		return result
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return map[string]any{}
+	}
+	return result
+}
+
+func stringFromAny(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	default:
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
 }
 
 func defaultString(value, fallback string) string {

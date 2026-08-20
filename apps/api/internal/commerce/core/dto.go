@@ -265,6 +265,24 @@ type PaymentVerifyInput struct {
 	Reference string `json:"reference"`
 }
 
+type PaymentConfigurationInput struct {
+	Provider     string `json:"provider"`
+	DisplayName  string `json:"display_name"`
+	Status       string `json:"status"`
+	Enabled      bool   `json:"enabled"`
+	PublicConfig string `json:"public_config"`
+	SecretConfig string `json:"secret_config"`
+	SecretSource string `json:"secret_source"`
+	Metadata     string `json:"metadata"`
+}
+
+func (i *PaymentConfigurationInput) normalize() {
+	i.Provider = strings.ToLower(strings.TrimSpace(i.Provider))
+	i.DisplayName = strings.TrimSpace(i.DisplayName)
+	i.Status = strings.ToLower(strings.TrimSpace(i.Status))
+	i.SecretSource = strings.TrimSpace(i.SecretSource)
+}
+
 type FulfilmentInput struct {
 	Status          string `json:"status"`
 	RecipientName   string `json:"recipient_name"`

@@ -36,6 +36,15 @@ func (c RuntimeContext) Resolve(path string) (any, bool) {
 		return c.Session.ID.String(), true
 	case "session.status":
 		return c.Session.Status, true
+	case "session.customer_id":
+		if c.Session.CustomerID == nil {
+			return nil, false
+		}
+		return c.Session.CustomerID.String(), true
+	case "session.channel_id":
+		return c.Session.ChannelID.String(), true
+	case "session.organization_id":
+		return c.Session.OrganizationID.String(), true
 	default:
 		return nil, false
 	}
@@ -123,6 +132,9 @@ func setPath(root map[string]any, path string, value any) {
 }
 
 func stringValue(value any) string {
+	if value == nil {
+		return ""
+	}
 	switch v := value.(type) {
 	case string:
 		return strings.TrimSpace(v)

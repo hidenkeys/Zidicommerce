@@ -203,3 +203,17 @@ type PublishedSnapshot struct {
 }
 
 func (PublishedSnapshot) TableName() string { return "bot_published_snapshots" }
+
+type FAQ struct {
+	ID             uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID uuid.UUID `gorm:"type:uuid;index" json:"organization_id"`
+	Question       string    `json:"question"`
+	Answer         string    `json:"answer"`
+	Keywords       string    `json:"keywords"`
+	Status         string    `json:"status"`
+	Metadata       string    `json:"metadata"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func (FAQ) TableName() string { return "bot_faqs" }

@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
 	"gorm.io/gorm"
@@ -65,6 +68,275 @@ func (s *Service) CreateBot(ctx context.Context, actor auth.CurrentUser, input B
 		return auditTx(tx, actor.OrganizationID, actor.ID, "bot", bot.ID, "bot_created", "{}")
 	})
 	return bot, err
+}
+
+func (s *Service) CreateSelfServiceBot(ctx context.Context, actor auth.CurrentUser, input SelfServiceBotInput) (Bot, error) {
+	if !canManageBots(actor.Role) {
+		return Bot{}, httperror.Forbidden("You cannot create bots")
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = "Customer assistant"
+	}
+	welcome := defaultString(input.WelcomeMessage, "Welcome. I can help you place an order, track an order, answer questions, or contact support.")
+	support := defaultString(input.SupportMessage, "A team member will take over this conversation shortly.")
+	requirePayment := boolDefault(input.RequirePayment, true)
+	allowPickup := boolDefault(input.AllowPickup, true)
+	allowCustomerRider := boolDefault(input.AllowCustomerRider, true)
+	allowMerchantRider := boolDefault(input.AllowMerchantRider, false)
+
+	botRecord := Bot{
+		ID:              uuid.New(),
+		OrganizationID:  actor.OrganizationID,
+		Name:            name,
+		Description:     input.Description,
+		Status:          BotStatusDraft,
+		DefaultLanguage: "en",
+		Timezone:        "Africa/Lagos",
+		FallbackConfig:  `{"message":"I did not understand that yet. Please choose one of the available options or type start to begin again.","missing_variable":"not available"}`,
+		HandoffConfig:   `{"enabled":true,"message":"A team member will take over this conversation shortly."}`,
+		Metadata:        `{"builder":"self_service","phase":"8"}`,
+	}
+	var version BotVersion
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&botRecord).Error; err != nil {
+			return err
+		}
+		version = BotVersion{ID: uuid.New(), OrganizationID: actor.OrganizationID, BotID: botRecord.ID, VersionNumber: 1, Status: VersionStatusDraft, StartStepKey: "start", ValidationErrors: "[]", Metadata: `{"template":"commerce_support"}`, CreatedByUserID: &actor.ID}
+		if err := tx.Create(&version).Error; err != nil {
+			return err
+		}
+
+		modules := []VersionModule{
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ModuleKey: "WELCOME", Name: "Welcome", Category: "Entry", Source: ModuleSourceOrganization, Description: "Customer entry menu.", Parameters: "{}", Metadata: `{"enabled":true}`, SortOrder: 10},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ModuleKey: "ORDER", Name: "Order", Category: "Commerce", Source: ModuleSourceSystem, Description: "Customer order flow.", Parameters: jsonValue(map[string]any{"entry_step": "order_get_stores", "menu_intent": "order", "menu_label": "Place order", "require_payment": requirePayment, "allow_pickup": allowPickup, "allow_customer_rider": allowCustomerRider, "allow_merchant_rider": allowMerchantRider}), Metadata: `{"enabled":true}`, SortOrder: 20},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ModuleKey: "TRACK_ORDER", Name: "Track Order", Category: "Commerce", Source: ModuleSourceSystem, Description: "Track order status.", Parameters: jsonValue(map[string]any{"entry_step": "track_get_orders", "menu_intent": "track_order", "menu_label": "Track order"}), Metadata: `{"enabled":true}`, SortOrder: 30},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ModuleKey: "FAQ", Name: "FAQ", Category: "Support", Source: ModuleSourceSystem, Description: "Answer configured FAQs.", Parameters: jsonValue(map[string]any{"menu_intent": "faq", "menu_label": "Ask a question"}), Metadata: `{"enabled":true}`, SortOrder: 40},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ModuleKey: "COMPLAINT", Name: "Complaint", Category: "Support", Source: ModuleSourceSystem, Description: "Collect customer complaints.", Parameters: jsonValue(map[string]any{"menu_intent": "complaint", "menu_label": "Report a complaint"}), Metadata: `{"enabled":true}`, SortOrder: 50},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ModuleKey: "CONTACT_SUPPORT", Name: "Contact Support", Category: "Support", Source: ModuleSourceSystem, Description: "Share support options.", Parameters: jsonValue(map[string]any{"menu_intent": "support", "menu_label": "Contact support"}), Metadata: `{"enabled":true}`, SortOrder: 60},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ModuleKey: "HUMAN_HANDOFF", Name: "Human Handoff", Category: "Support", Source: ModuleSourceSystem, Description: "Pause automation for staff takeover.", Parameters: jsonValue(map[string]any{"menu_intent": "support", "menu_label": "Contact support"}), Metadata: `{"enabled":true}`, SortOrder: 70},
+		}
+		if err := tx.Create(&modules).Error; err != nil {
+			return err
+		}
+
+		variables := []Variable{
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "intent", Type: "string", Scope: "conversation", Description: "Customer selected entry path.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "order_reference", Type: "string", Scope: "conversation", Description: "Order number or reference for tracking.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "faq_query", Type: "string", Scope: "conversation", Description: "Customer FAQ question.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "faq_answer", Type: "string", Scope: "conversation", Description: "Matched FAQ answer.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "complaint_message", Type: "string", Scope: "conversation", Description: "Customer complaint details.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "stores", Type: "array", Scope: "conversation", Description: "Available stores shown to the customer.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "store_choice", Type: "string", Scope: "conversation", Description: "Customer store selection.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "store_id", Type: "string", Scope: "conversation", Description: "Selected store id.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "store_name", Type: "string", Scope: "conversation", Description: "Selected store name.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "store_address", Type: "string", Scope: "conversation", Description: "Selected store address.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "categories", Type: "array", Scope: "conversation", Description: "Available categories shown to the customer.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "category_choice", Type: "string", Scope: "conversation", Description: "Customer category selection.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "category_id", Type: "string", Scope: "conversation", Description: "Selected category id.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "category_name", Type: "string", Scope: "conversation", Description: "Selected category name.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "product_options", Type: "array", Scope: "conversation", Description: "Available products shown to the customer.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "product_choice", Type: "string", Scope: "conversation", Description: "Customer product selection.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "product_id", Type: "string", Scope: "conversation", Description: "Selected product id.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "product_name", Type: "string", Scope: "conversation", Description: "Selected product name.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "variant_id", Type: "string", Scope: "conversation", Description: "Selected variant id.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "variant_name", Type: "string", Scope: "conversation", Description: "Selected variant name.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "price_minor", Type: "number", Scope: "conversation", Description: "Selected variant price in minor units.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "quantity", Type: "number", Scope: "conversation", Description: "Selected quantity.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "cart_id", Type: "string", Scope: "conversation", Description: "Active cart id.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "cart_choice", Type: "string", Scope: "conversation", Description: "Continue shopping or review cart.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "cart_total_minor", Type: "number", Scope: "conversation", Description: "Cart total in minor units.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "fulfilment_options", Type: "array", Scope: "conversation", Description: "Enabled fulfilment modes.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "fulfilment_choice", Type: "string", Scope: "conversation", Description: "Customer fulfilment selection.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "fulfilment_mode", Type: "string", Scope: "conversation", Description: "Selected fulfilment mode.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "delivery_fee_minor", Type: "number", Scope: "conversation", Description: "Delivery fee in minor units.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "delivery_address", Type: "string", Scope: "conversation", Description: "Delivery address when required.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "customer_email", Type: "string", Scope: "conversation", Description: "Customer email for payment receipt.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "order_id", Type: "string", Scope: "conversation", Description: "Created order id.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "order_number", Type: "string", Scope: "conversation", Description: "Created order number.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "order_total_minor", Type: "number", Scope: "conversation", Description: "Order total in minor units.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "payment_url", Type: "string", Scope: "conversation", Description: "Payment authorization URL.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "payment_reference", Type: "string", Scope: "conversation", Description: "Payment reference.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "payment_status", Type: "string", Scope: "conversation", Description: "Payment status.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "payment_choice", Type: "string", Scope: "conversation", Description: "Customer payment follow-up choice.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "orders", Type: "array", Scope: "conversation", Description: "Customer orders shown during tracking.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "track_order_choice", Type: "string", Scope: "conversation", Description: "Customer track-order selection.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "order_status", Type: "string", Scope: "conversation", Description: "Tracked order status.", Metadata: `{"read_only":false}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "system.customer.phone", Type: "string", Scope: "system", Description: "Current WhatsApp sender phone.", Metadata: `{"read_only":true}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Name: "system.channel", Type: "string", Scope: "system", Description: "Inbound channel provider.", Metadata: `{"read_only":true}`},
+		}
+		if err := tx.Create(&variables).Error; err != nil {
+			return err
+		}
+
+		menuQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "main_menu", Text: welcome, Type: "single_choice", ResponseMode: "list", Required: true, VariableName: "intent", Options: jsonValue([]map[string]string{
+			{"id": "order", "label": "Place order"},
+			{"id": "track_order", "label": "Track order"},
+			{"id": "faq", "label": "Ask a question"},
+			{"id": "complaint", "label": "Report a complaint"},
+			{"id": "support", "label": "Contact support"},
+		}), Validation: "{}", Metadata: "{}"}
+		storeQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "store_choice", Text: "Choose a store using its number.", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "store_choice", Options: "[]", Validation: "{}", Metadata: "{}"}
+		categoryQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "category_choice", Text: "Choose a category using its number.", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "category_choice", Options: "[]", Validation: "{}", Metadata: "{}"}
+		productQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "product_choice", Text: "Choose a product using its number.", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "product_choice", Options: "[]", Validation: "{}", Metadata: "{}"}
+		quantityQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "quantity", Text: "How many would you like? Enter a quantity from 1 to 100.", Type: "number", ResponseMode: "free_text", Required: true, VariableName: "quantity", Options: "[]", Validation: `{"min":1,"max":100}`, Metadata: "{}"}
+		cartQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "cart_choice", Text: "Would you like to add another item or review your cart?", Type: "single_choice", ResponseMode: "buttons", Required: true, VariableName: "cart_choice", Options: jsonValue([]map[string]string{
+			{"id": "add_more", "label": "Add another item"},
+			{"id": "review", "label": "Review cart"},
+		}), Validation: "{}", Metadata: "{}"}
+		fulfilmentQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "fulfilment_choice", Text: "Choose a fulfilment option using its number.", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "fulfilment_choice", Options: "[]", Validation: "{}", Metadata: "{}"}
+		deliveryAddressQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "delivery_address", Text: "Please enter the delivery address. The delivery fee is paid by the customer and will be included in the order total.", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "delivery_address", Options: "[]", Validation: "{}", Metadata: "{}"}
+		emailQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "customer_email", Text: "Enter an email address for your order confirmation and receipt.", Type: "email", ResponseMode: "free_text", Required: true, VariableName: "customer_email", Options: "[]", Validation: "{}", Metadata: "{}"}
+		paymentQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "payment_choice", Text: "After opening the payment link, choose what you want to do next.", Type: "single_choice", ResponseMode: "buttons", Required: true, VariableName: "payment_choice", Options: jsonValue([]map[string]string{
+			{"id": "paid", "label": "I have paid"},
+			{"id": "retry", "label": "Send payment link again"},
+			{"id": "cancel", "label": "Cancel order"},
+			{"id": "support", "label": "Talk to support"},
+		}), Validation: "{}", Metadata: "{}"}
+		trackOrderQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "track_order_choice", Text: "Choose an order using its number.", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "track_order_choice", Options: "[]", Validation: "{}", Metadata: "{}"}
+		faqQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "faq_query", Text: "What would you like to know?", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "faq_query", Options: "[]", Validation: "{}", Metadata: "{}"}
+		complaintQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "complaint_message", Text: "Tell us what happened. Include your order number if you have one.", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "complaint_message", Options: "[]", Validation: "{}", Metadata: "{}"}
+		questions := []Question{menuQuestion, storeQuestion, categoryQuestion, productQuestion, quantityQuestion, cartQuestion, fulfilmentQuestion, deliveryAddressQuestion, emailQuestion, paymentQuestion, trackOrderQuestion, faqQuestion, complaintQuestion}
+		if err := tx.Create(&questions).Error; err != nil {
+			return err
+		}
+
+		conditions := []Condition{
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ConditionKey: "intent_order", Name: "Customer wants to order", Combinator: "and", Rules: conditionJSON("intent", "equals", "order"), Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ConditionKey: "intent_track", Name: "Customer wants to track an order", Combinator: "and", Rules: conditionJSON("intent", "equals", "track_order"), Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ConditionKey: "intent_faq", Name: "Customer wants FAQs", Combinator: "and", Rules: conditionJSON("intent", "equals", "faq"), Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ConditionKey: "intent_complaint", Name: "Customer wants complaint support", Combinator: "and", Rules: conditionJSON("intent", "equals", "complaint"), Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ConditionKey: "cart_add_more", Name: "Customer wants another item", Combinator: "and", Rules: conditionJSON("cart_choice", "equals", "add_more"), Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ConditionKey: "merchant_delivery", Name: "Merchant delivery requires address", Combinator: "and", Rules: conditionJSON("fulfilment_mode", "equals", core.FulfilmentMerchantRider), Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ConditionKey: "payment_paid_choice", Name: "Customer says payment is complete", Combinator: "and", Rules: conditionJSON("payment_choice", "equals", "paid"), Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ConditionKey: "payment_retry_choice", Name: "Customer wants payment link again", Combinator: "and", Rules: conditionJSON("payment_choice", "equals", "retry"), Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ConditionKey: "payment_cancel_choice", Name: "Customer cancels order before payment", Combinator: "and", Rules: conditionJSON("payment_choice", "equals", "cancel"), Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ConditionKey: "payment_success", Name: "Payment is confirmed", Combinator: "and", Rules: conditionJSON("payment_status", "equals", core.PaymentPaid), Metadata: "{}"},
+		}
+		if err := tx.Create(&conditions).Error; err != nil {
+			return err
+		}
+
+		actions := []Action{
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "handoff_support", ActionType: "handoff_to_agent", Name: "Handoff to support", InputMappings: `{"reason":"support"}`, OutputMappings: "{}", Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "answer_faq", ActionType: "match_faq", Name: "Answer FAQ", InputMappings: `{"query":"faq_query"}`, OutputMappings: `{"answer":"variables.faq_answer"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "record_complaint", ActionType: "create_complaint", Name: "Record complaint", InputMappings: `{"message":"complaint_message"}`, OutputMappings: `{"complaint_id":"complaint_id"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_get_stores", ActionType: "get_stores", Name: "Get open stores", InputMappings: `{}`, OutputMappings: `{"stores":"variables.stores"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_select_store", ActionType: "select_store", Name: "Select store", InputMappings: `{"stores":"variables.stores","selection":"store_choice"}`, OutputMappings: `{"store_id":"variables.store_id","store_name":"variables.store_name","store_address":"variables.store_address"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_create_cart", ActionType: "get_or_create_cart", Name: "Create cart", InputMappings: `{"customer_id":"session.customer_id","store_id":"variables.store_id","currency":"NGN"}`, OutputMappings: `{"cart_id":"variables.cart_id"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_get_categories", ActionType: "get_categories", Name: "Get categories", InputMappings: `{}`, OutputMappings: `{"categories":"variables.categories"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_select_category", ActionType: "select_category", Name: "Select category", InputMappings: `{"categories":"variables.categories","selection":"category_choice"}`, OutputMappings: `{"category_id":"variables.category_id","category_name":"variables.category_name"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_get_products", ActionType: "get_products", Name: "Get products", InputMappings: `{"category_id":"variables.category_id","store_id":"variables.store_id"}`, OutputMappings: `{"product_options":"variables.product_options"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_select_product", ActionType: "select_product", Name: "Select product", InputMappings: `{"product_options":"variables.product_options","selection":"product_choice"}`, OutputMappings: `{"product_id":"variables.product_id","product_name":"variables.product_name","variant_id":"variables.variant_id","variant_name":"variables.variant_name","price_minor":"variables.price_minor"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_add_to_cart", ActionType: "add_to_cart", Name: "Add to cart", InputMappings: `{"cart_id":"variables.cart_id","variant_id":"variables.variant_id","quantity":"quantity"}`, OutputMappings: `{"total_minor":"variables.cart_total_minor"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_review_cart", ActionType: "calculate_cart", Name: "Review cart", InputMappings: `{"cart_id":"variables.cart_id"}`, OutputMappings: `{"total_minor":"variables.cart_total_minor"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_get_fulfilment", ActionType: "get_fulfilment_modes", Name: "Get fulfilment options", InputMappings: `{"store_id":"variables.store_id"}`, OutputMappings: `{"fulfilment_options":"variables.fulfilment_options"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_select_fulfilment", ActionType: "select_fulfilment_mode", Name: "Select fulfilment", InputMappings: `{"store_id":"variables.store_id","fulfilment_options":"variables.fulfilment_options","selection":"fulfilment_choice"}`, OutputMappings: `{"fulfilment_type":"variables.fulfilment_mode","delivery_fee_minor":"variables.delivery_fee_minor"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_create_order", ActionType: "create_order", Name: "Create order", InputMappings: `{"cart_id":"variables.cart_id","customer_id":"session.customer_id","store_id":"variables.store_id","fulfilment_type":"variables.fulfilment_mode","currency":"NGN"}`, OutputMappings: `{"order_id":"variables.order_id","order_number":"variables.order_number","total_minor":"variables.order_total_minor"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_create_delivery_order", ActionType: "create_order", Name: "Create delivery order", InputMappings: `{"cart_id":"variables.cart_id","customer_id":"session.customer_id","store_id":"variables.store_id","fulfilment_type":"variables.fulfilment_mode","delivery_address":"delivery_address","currency":"NGN"}`, OutputMappings: `{"order_id":"variables.order_id","order_number":"variables.order_number","total_minor":"variables.order_total_minor"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "track_get_orders", ActionType: "get_customer_orders", Name: "Get customer orders", InputMappings: `{"customer_id":"session.customer_id"}`, OutputMappings: `{"orders":"variables.orders"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "track_select_order", ActionType: "select_order", Name: "Select order", InputMappings: `{"orders":"variables.orders","selection":"track_order_choice"}`, OutputMappings: `{"order_id":"variables.order_id","order_number":"variables.order_number"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "track_get_status", ActionType: "get_order_status", Name: "Get order status", InputMappings: `{"order_id":"variables.order_id"}`, OutputMappings: `{"order_status":"variables.order_status"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_check_payment", ActionType: "check_payment", Name: "Check payment", InputMappings: `{"payment_reference":"variables.payment_reference"}`, OutputMappings: `{"payment_status":"variables.payment_status"}`, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_cancel", ActionType: "cancel_order", Name: "Cancel order", InputMappings: `{"order_id":"variables.order_id"}`, OutputMappings: `{"order_status":"variables.order_status"}`, Metadata: "{}"},
+		}
+		if requirePayment {
+			actions = append(actions, Action{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, ActionKey: "order_initialize_payment", ActionType: "initialize_payment", Name: "Initialize payment", InputMappings: `{"order_id":"variables.order_id","email":"customer_email","provider":"paystack"}`, OutputMappings: `{"payment_url":"variables.payment_url","payment_reference":"variables.payment_reference","payment_status":"variables.payment_status"}`, Metadata: "{}"})
+		}
+		if err := tx.Create(&actions).Error; err != nil {
+			return err
+		}
+		if requirePayment {
+			integration := Integration{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, Provider: "paystack", DisplayName: "Paystack", Required: true, Config: `{"source":"payment_configuration"}`, Metadata: "{}"}
+			if err := tx.Create(&integration).Error; err != nil {
+				return err
+			}
+		}
+
+		moduleByKey := map[string]uuid.UUID{}
+		for _, module := range modules {
+			moduleByKey[module.ModuleKey] = module.ID
+		}
+		conditionByKey := map[string]uuid.UUID{}
+		for _, condition := range conditions {
+			conditionByKey[condition.ConditionKey] = condition.ID
+		}
+		actionByKey := map[string]uuid.UUID{}
+		for _, action := range actions {
+			actionByKey[action.ActionKey] = action.ID
+		}
+		steps := []Step{
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "start", Type: StepChoice, Title: "Main menu", QuestionID: &menuQuestion.ID, NextStepKey: "route_order", SortOrder: 10, ResponseMode: "list", Options: menuQuestion.Options, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "route_order", Type: StepCondition, Title: "Route order", ConditionID: idPtr(conditionByKey["intent_order"]), NextStepKey: "order_module", FallbackStepKey: "route_track", SortOrder: 20, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "route_track", Type: StepCondition, Title: "Route tracking", ConditionID: idPtr(conditionByKey["intent_track"]), NextStepKey: "track_module", FallbackStepKey: "route_faq", SortOrder: 30, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "route_faq", Type: StepCondition, Title: "Route FAQ", ConditionID: idPtr(conditionByKey["intent_faq"]), NextStepKey: "ask_faq", FallbackStepKey: "route_complaint", SortOrder: 40, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "route_complaint", Type: StepCondition, Title: "Route complaint", ConditionID: idPtr(conditionByKey["intent_complaint"]), NextStepKey: "ask_complaint", FallbackStepKey: "support_handoff", SortOrder: 50, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_module", Type: StepModule, Title: "Order module", ModuleID: idPtr(moduleByKey["ORDER"]), SortOrder: 60, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "track_module", Type: StepModule, Title: "Track order module", ModuleID: idPtr(moduleByKey["TRACK_ORDER"]), SortOrder: 70, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_get_stores", Type: StepAction, Title: "Get stores", ActionID: idPtr(actionByKey["order_get_stores"]), NextStepKey: "ask_store", SortOrder: 80, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "ask_store", Type: StepQuestion, Title: "Ask store", QuestionID: &storeQuestion.ID, NextStepKey: "order_select_store", SortOrder: 90, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_select_store", Type: StepAction, Title: "Select store", ActionID: idPtr(actionByKey["order_select_store"]), NextStepKey: "order_create_cart", SortOrder: 100, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_create_cart", Type: StepAction, Title: "Create cart", ActionID: idPtr(actionByKey["order_create_cart"]), NextStepKey: "order_get_categories", SortOrder: 110, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_get_categories", Type: StepAction, Title: "Get categories", ActionID: idPtr(actionByKey["order_get_categories"]), NextStepKey: "ask_category", SortOrder: 120, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "ask_category", Type: StepQuestion, Title: "Ask category", QuestionID: &categoryQuestion.ID, NextStepKey: "order_select_category", SortOrder: 130, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_select_category", Type: StepAction, Title: "Select category", ActionID: idPtr(actionByKey["order_select_category"]), NextStepKey: "order_get_products", SortOrder: 140, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_get_products", Type: StepAction, Title: "Get products", ActionID: idPtr(actionByKey["order_get_products"]), NextStepKey: "ask_product", SortOrder: 150, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "ask_product", Type: StepQuestion, Title: "Ask product", QuestionID: &productQuestion.ID, NextStepKey: "order_select_product", SortOrder: 160, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_select_product", Type: StepAction, Title: "Select product", ActionID: idPtr(actionByKey["order_select_product"]), NextStepKey: "ask_quantity", SortOrder: 170, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "ask_quantity", Type: StepQuestion, Title: "Ask quantity", QuestionID: &quantityQuestion.ID, NextStepKey: "order_add_to_cart", SortOrder: 180, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_add_to_cart", Type: StepAction, Title: "Add to cart", ActionID: idPtr(actionByKey["order_add_to_cart"]), NextStepKey: "ask_cart_choice", SortOrder: 190, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "ask_cart_choice", Type: StepChoice, Title: "Ask cart choice", QuestionID: &cartQuestion.ID, NextStepKey: "route_cart_choice", SortOrder: 200, ResponseMode: "buttons", Options: cartQuestion.Options, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "route_cart_choice", Type: StepCondition, Title: "Route cart choice", ConditionID: idPtr(conditionByKey["cart_add_more"]), NextStepKey: "order_get_categories", FallbackStepKey: "order_review_cart", SortOrder: 210, Metadata: `{"allow_cycle":true}`},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_review_cart", Type: StepAction, Title: "Review cart", ActionID: idPtr(actionByKey["order_review_cart"]), NextStepKey: "order_get_fulfilment", SortOrder: 220, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_get_fulfilment", Type: StepAction, Title: "Get fulfilment", ActionID: idPtr(actionByKey["order_get_fulfilment"]), NextStepKey: "ask_fulfilment", SortOrder: 230, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "ask_fulfilment", Type: StepQuestion, Title: "Ask fulfilment", QuestionID: &fulfilmentQuestion.ID, NextStepKey: "order_select_fulfilment", SortOrder: 240, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_select_fulfilment", Type: StepAction, Title: "Select fulfilment", ActionID: idPtr(actionByKey["order_select_fulfilment"]), NextStepKey: "route_delivery_address", SortOrder: 250, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "route_delivery_address", Type: StepCondition, Title: "Route delivery address", ConditionID: idPtr(conditionByKey["merchant_delivery"]), NextStepKey: "ask_delivery_address", FallbackStepKey: "ask_customer_email", SortOrder: 260, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "ask_delivery_address", Type: StepQuestion, Title: "Ask delivery address", QuestionID: &deliveryAddressQuestion.ID, NextStepKey: "ask_customer_email_delivery", SortOrder: 270, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "ask_customer_email", Type: StepQuestion, Title: "Ask customer email", QuestionID: &emailQuestion.ID, NextStepKey: "order_create_order", SortOrder: 280, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_create_order", Type: StepAction, Title: "Create order", ActionID: idPtr(actionByKey["order_create_order"]), NextStepKey: "order_finish", SortOrder: 290, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "ask_customer_email_delivery", Type: StepQuestion, Title: "Ask delivery customer email", QuestionID: &emailQuestion.ID, NextStepKey: "order_create_delivery_order", SortOrder: 292, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_create_delivery_order", Type: StepAction, Title: "Create delivery order", ActionID: idPtr(actionByKey["order_create_delivery_order"]), NextStepKey: "order_finish", SortOrder: 294, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "track_get_orders", Type: StepAction, Title: "Get customer orders", ActionID: idPtr(actionByKey["track_get_orders"]), NextStepKey: "ask_track_order", SortOrder: 320, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "ask_track_order", Type: StepQuestion, Title: "Ask tracked order", QuestionID: &trackOrderQuestion.ID, NextStepKey: "track_select_order", SortOrder: 330, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "track_select_order", Type: StepAction, Title: "Select tracked order", ActionID: idPtr(actionByKey["track_select_order"]), NextStepKey: "track_get_status", SortOrder: 340, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "track_get_status", Type: StepAction, Title: "Get tracked order status", ActionID: idPtr(actionByKey["track_get_status"]), NextStepKey: "end", SortOrder: 350, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "ask_faq", Type: StepQuestion, Title: "Ask FAQ", QuestionID: &faqQuestion.ID, NextStepKey: "answer_faq", SortOrder: 360, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "answer_faq", Type: StepAction, Title: "Answer FAQ", ActionID: idPtr(actionByKey["answer_faq"]), NextStepKey: "end", SortOrder: 370, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "ask_complaint", Type: StepQuestion, Title: "Ask complaint", QuestionID: &complaintQuestion.ID, NextStepKey: "record_complaint", SortOrder: 380, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "record_complaint", Type: StepAction, Title: "Record complaint", ActionID: idPtr(actionByKey["record_complaint"]), NextStepKey: "complaint_done", SortOrder: 390, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "complaint_done", Type: StepMessage, Title: "Complaint received", Message: "Thank you. Your complaint has been recorded and support will follow up.", NextStepKey: "end", SortOrder: 400, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "support_handoff", Type: StepHandoff, Title: "Support handoff", ActionID: idPtr(actionByKey["handoff_support"]), Message: support, SortOrder: 410, Metadata: "{}"},
+			{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "end", Type: StepEnd, Title: "End", Message: "Thanks for chatting with us.", SortOrder: 420, Metadata: "{}"},
+		}
+		if requirePayment {
+			for index := range steps {
+				if steps[index].StepKey == "order_create_order" || steps[index].StepKey == "order_create_delivery_order" {
+					steps[index].NextStepKey = "order_initialize_payment"
+				}
+			}
+			steps = append(steps,
+				Step{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_initialize_payment", Type: StepAction, Title: "Initialize payment", ActionID: idPtr(actionByKey["order_initialize_payment"]), NextStepKey: "ask_payment_choice", SortOrder: 300, Metadata: "{}"},
+				Step{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "ask_payment_choice", Type: StepChoice, Title: "Ask payment choice", QuestionID: &paymentQuestion.ID, NextStepKey: "route_payment_paid_choice", SortOrder: 302, ResponseMode: "buttons", Options: paymentQuestion.Options, Metadata: "{}"},
+				Step{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "route_payment_paid_choice", Type: StepCondition, Title: "Route paid choice", ConditionID: idPtr(conditionByKey["payment_paid_choice"]), NextStepKey: "order_check_payment", FallbackStepKey: "route_payment_retry_choice", SortOrder: 304, Metadata: "{}"},
+				Step{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "route_payment_retry_choice", Type: StepCondition, Title: "Route payment retry", ConditionID: idPtr(conditionByKey["payment_retry_choice"]), NextStepKey: "order_initialize_payment", FallbackStepKey: "route_payment_cancel_choice", SortOrder: 306, Metadata: `{"allow_cycle":true}`},
+				Step{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "route_payment_cancel_choice", Type: StepCondition, Title: "Route payment cancel", ConditionID: idPtr(conditionByKey["payment_cancel_choice"]), NextStepKey: "order_cancel", FallbackStepKey: "support_handoff", SortOrder: 308, Metadata: "{}"},
+				Step{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_check_payment", Type: StepAction, Title: "Check payment", ActionID: idPtr(actionByKey["order_check_payment"]), NextStepKey: "route_payment_success", SortOrder: 310, Metadata: "{}"},
+				Step{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "route_payment_success", Type: StepCondition, Title: "Route payment status", ConditionID: idPtr(conditionByKey["payment_success"]), NextStepKey: "order_payment_confirmed", FallbackStepKey: "order_payment_pending", SortOrder: 312, Metadata: "{}"},
+				Step{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_payment_pending", Type: StepMessage, Title: "Payment pending", Message: "Your payment has not been completed yet. You can retry the payment link, cancel the order, or talk to support.", NextStepKey: "ask_payment_choice", SortOrder: 314, Metadata: `{"allow_cycle":true}`},
+				Step{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_payment_confirmed", Type: StepEnd, Title: "Payment confirmed", SortOrder: 316, Metadata: "{}"},
+				Step{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_cancel", Type: StepAction, Title: "Cancel order", ActionID: idPtr(actionByKey["order_cancel"]), NextStepKey: "end", SortOrder: 318, Metadata: "{}"},
+			)
+		}
+		if !requirePayment {
+			steps = append(steps, Step{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_finish", Type: StepEnd, Title: "Order finished", Message: "Your order has been received. We will send updates here as it progresses.", SortOrder: 310, Metadata: "{}"})
+		}
+		if err := tx.Create(&steps).Error; err != nil {
+			return err
+		}
+		return auditTx(tx, actor.OrganizationID, actor.ID, "bot", botRecord.ID, "self_service_bot_created", `{"template":"commerce_support"}`)
+	})
+	return botRecord, err
 }
 
 func (s *Service) GetBot(ctx context.Context, actor auth.CurrentUser, botID uuid.UUID) (Bot, error) {
@@ -208,6 +480,93 @@ func (s *Service) ListModules(ctx context.Context, actor auth.CurrentUser, versi
 	var modules []VersionModule
 	err := s.db.WithContext(ctx).Where("organization_id = ? AND version_id = ?", actor.OrganizationID, versionID).Order("sort_order ASC, created_at ASC").Find(&modules).Error
 	return modules, err
+}
+
+func (s *Service) UpdateModule(ctx context.Context, actor auth.CurrentUser, moduleID uuid.UUID, input ModuleInput) (VersionModule, error) {
+	var module VersionModule
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, moduleID).First(&module).Error; err != nil {
+		return VersionModule{}, mapNotFound(err, "Module not found")
+	}
+	if err := s.ensureEditable(ctx, actor, module.VersionID); err != nil {
+		return VersionModule{}, err
+	}
+	updates := map[string]any{"updated_at": s.now()}
+	if input.Name != "" {
+		updates["name"] = strings.TrimSpace(input.Name)
+	}
+	if input.Category != "" {
+		updates["category"] = strings.TrimSpace(input.Category)
+	}
+	if input.Source != "" {
+		updates["source"] = strings.TrimSpace(input.Source)
+	}
+	if input.Description != "" {
+		updates["description"] = input.Description
+	}
+	if input.Parameters != "" {
+		updates["parameters"] = jsonObject(input.Parameters)
+	}
+	if input.Metadata != "" {
+		updates["metadata"] = jsonObject(input.Metadata)
+	}
+	if input.SortOrder != 0 {
+		updates["sort_order"] = input.SortOrder
+	}
+	if err := s.db.WithContext(ctx).Model(&module).Updates(updates).Error; err != nil {
+		return VersionModule{}, err
+	}
+	_ = auditTx(s.db.WithContext(ctx), actor.OrganizationID, actor.ID, "bot_module", module.ID, "bot_module_updated", fmt.Sprintf(`{"module_key":%q}`, module.ModuleKey))
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, moduleID).First(&module).Error; err != nil {
+		return VersionModule{}, err
+	}
+	return module, nil
+}
+
+func (s *Service) SetModuleEnabled(ctx context.Context, actor auth.CurrentUser, moduleID uuid.UUID, enabled bool) (VersionModule, error) {
+	var module VersionModule
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, moduleID).First(&module).Error; err != nil {
+		return VersionModule{}, mapNotFound(err, "Module not found")
+	}
+	if err := s.ensureEditable(ctx, actor, module.VersionID); err != nil {
+		return VersionModule{}, err
+	}
+	metadata := jsonWithBool(module.Metadata, "enabled", enabled)
+	if err := s.db.WithContext(ctx).Model(&module).Updates(map[string]any{"metadata": metadata, "updated_at": s.now()}).Error; err != nil {
+		return VersionModule{}, err
+	}
+	_ = auditTx(s.db.WithContext(ctx), actor.OrganizationID, actor.ID, "bot_module", module.ID, "bot_module_enabled_changed", fmt.Sprintf(`{"module_key":%q,"enabled":%t}`, module.ModuleKey, enabled))
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, moduleID).First(&module).Error; err != nil {
+		return VersionModule{}, err
+	}
+	return module, nil
+}
+
+func (s *Service) ReorderModules(ctx context.Context, actor auth.CurrentUser, versionID uuid.UUID, input ModuleReorderInput) ([]VersionModule, error) {
+	if err := s.ensureEditable(ctx, actor, versionID); err != nil {
+		return nil, err
+	}
+	if len(input.Modules) == 0 {
+		return nil, httperror.BadRequest("At least one module order is required")
+	}
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, item := range input.Modules {
+			if item.ModuleID == uuid.Nil {
+				return httperror.BadRequest("Module ID is required")
+			}
+			result := tx.Model(&VersionModule{}).Where("organization_id = ? AND version_id = ? AND id = ?", actor.OrganizationID, versionID, item.ModuleID).Updates(map[string]any{"sort_order": item.SortOrder, "updated_at": s.now()})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return httperror.BadRequest("Module order contains an unknown module")
+			}
+		}
+		return auditTx(tx, actor.OrganizationID, actor.ID, "bot_version", versionID, "bot_modules_reordered", fmt.Sprintf(`{"count":%d}`, len(input.Modules)))
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.ListModules(ctx, actor, versionID)
 }
 
 func (s *Service) CreateVariable(ctx context.Context, actor auth.CurrentUser, versionID uuid.UUID, input VariableInput) (Variable, error) {
@@ -474,6 +833,154 @@ func (s *Service) PreviewVersion(ctx context.Context, actor auth.CurrentUser, ve
 	return Preview{BotID: version.BotID, VersionID: version.ID, StartStepKey: version.StartStepKey, Steps: steps, Validation: result, RuntimeNotice: "Configuration preview only. No WhatsApp, payments, orders, or live runtime actions are executed."}, nil
 }
 
+func (s *Service) ListFAQs(ctx context.Context, actor auth.CurrentUser) ([]FAQ, error) {
+	if !canViewBots(actor.Role) {
+		return nil, httperror.Forbidden("You cannot view bot knowledge")
+	}
+	var faqs []FAQ
+	err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("updated_at DESC").Find(&faqs).Error
+	return faqs, err
+}
+
+func (s *Service) CreateFAQ(ctx context.Context, actor auth.CurrentUser, input FAQInput) (FAQ, error) {
+	if !canManageBots(actor.Role) {
+		return FAQ{}, httperror.Forbidden("You cannot manage bot knowledge")
+	}
+	question := strings.TrimSpace(input.Question)
+	answer := strings.TrimSpace(input.Answer)
+	if question == "" || answer == "" {
+		return FAQ{}, httperror.BadRequest("FAQ question and answer are required")
+	}
+	faq := FAQ{ID: uuid.New(), OrganizationID: actor.OrganizationID, Question: question, Answer: answer, Keywords: jsonValue(cleanKeywords(input.Keywords)), Status: defaultString(strings.ToLower(strings.TrimSpace(input.Status)), core.StatusActive), Metadata: jsonObject(input.Metadata)}
+	if faq.Status != core.StatusActive && faq.Status != "draft" && faq.Status != "archived" {
+		return FAQ{}, httperror.BadRequest("FAQ status is not valid")
+	}
+	err := s.db.WithContext(ctx).Create(&faq).Error
+	if err == nil {
+		_ = auditTx(s.db.WithContext(ctx), actor.OrganizationID, actor.ID, "bot_faq", faq.ID, "faq_created", "{}")
+	}
+	return faq, err
+}
+
+func (s *Service) UpdateFAQ(ctx context.Context, actor auth.CurrentUser, faqID uuid.UUID, input FAQInput) (FAQ, error) {
+	if !canManageBots(actor.Role) {
+		return FAQ{}, httperror.Forbidden("You cannot manage bot knowledge")
+	}
+	var faq FAQ
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, faqID).First(&faq).Error; err != nil {
+		return FAQ{}, mapNotFound(err, "FAQ not found")
+	}
+	updates := map[string]any{"updated_at": s.now()}
+	if strings.TrimSpace(input.Question) != "" {
+		updates["question"] = strings.TrimSpace(input.Question)
+	}
+	if strings.TrimSpace(input.Answer) != "" {
+		updates["answer"] = strings.TrimSpace(input.Answer)
+	}
+	if input.Keywords != nil {
+		updates["keywords"] = jsonValue(cleanKeywords(input.Keywords))
+	}
+	if strings.TrimSpace(input.Status) != "" {
+		status := strings.ToLower(strings.TrimSpace(input.Status))
+		if status != core.StatusActive && status != "draft" && status != "archived" {
+			return FAQ{}, httperror.BadRequest("FAQ status is not valid")
+		}
+		updates["status"] = status
+	}
+	if input.Metadata != "" {
+		updates["metadata"] = jsonObject(input.Metadata)
+	}
+	if err := s.db.WithContext(ctx).Model(&faq).Updates(updates).Error; err != nil {
+		return FAQ{}, err
+	}
+	_ = auditTx(s.db.WithContext(ctx), actor.OrganizationID, actor.ID, "bot_faq", faq.ID, "faq_updated", "{}")
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, faqID).First(&faq).Error; err != nil {
+		return FAQ{}, err
+	}
+	return faq, nil
+}
+
+func (s *Service) MatchFAQ(ctx context.Context, actor auth.CurrentUser, query string) (FAQMatch, error) {
+	if !canViewBots(actor.Role) {
+		return FAQMatch{}, httperror.Forbidden("You cannot view bot knowledge")
+	}
+	query = normalizeSearchText(query)
+	if query == "" {
+		return FAQMatch{}, httperror.BadRequest("FAQ query is required")
+	}
+	var faqs []FAQ
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND status = ?", actor.OrganizationID, core.StatusActive).Find(&faqs).Error; err != nil {
+		return FAQMatch{}, err
+	}
+	best := FAQMatch{}
+	for _, faq := range faqs {
+		score, matchedOn := scoreFAQ(query, faq)
+		if score > best.Score {
+			best = FAQMatch{FAQ: faq, Score: score, MatchedOn: matchedOn, Confidence: faqConfidence(score)}
+		}
+	}
+	if best.FAQ.ID == uuid.Nil || best.Score < 0.24 {
+		return FAQMatch{}, httperror.NotFound("No FAQ answer matched that question")
+	}
+	return best, nil
+}
+
+func (s *Service) GetShareLink(ctx context.Context, actor auth.CurrentUser, botID uuid.UUID) (ShareLink, error) {
+	botRecord, err := s.GetBot(ctx, actor, botID)
+	if err != nil {
+		return ShareLink{}, err
+	}
+	if botRecord.PublishedVersionID == nil {
+		return ShareLink{Available: false, Reason: "Publish a bot version first."}, nil
+	}
+	var channel core.Channel
+	err = s.db.WithContext(ctx).Where("organization_id = ? AND provider = ? AND status = ?", actor.OrganizationID, "whatsapp", core.StatusActive).Order("updated_at DESC").First(&channel).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return ShareLink{Available: false, Reason: "Connect an active WhatsApp channel first."}, nil
+		}
+		return ShareLink{}, err
+	}
+	number := strings.TrimPrefix(strings.ReplaceAll(channel.DisplayNumber, " ", ""), "+")
+	if number == "" {
+		return ShareLink{Available: false, Reason: "Add a WhatsApp display number to the active channel."}, nil
+	}
+	message := "Hi Zidi, I would like to place an order."
+	if botRecord.Name != "" {
+		message = "Hi Zidi, I would like to chat with " + botRecord.Name + "."
+	}
+	encoded := url.QueryEscape(message)
+	return ShareLink{Available: true, URL: "https://wa.me/" + number + "?text=" + encoded, EncodedText: encoded, DisplayNumber: number, Message: message}, nil
+}
+
+func (s *Service) GetSetupStatus(ctx context.Context, actor auth.CurrentUser) (BotSetupStatus, error) {
+	if !canViewBots(actor.Role) {
+		return BotSetupStatus{}, httperror.Forbidden("You cannot view setup status")
+	}
+	count := func(model any, where string, args ...any) int64 {
+		var total int64
+		_ = s.db.WithContext(ctx).Model(model).Where(where, args...).Count(&total).Error
+		return total
+	}
+	orgID := actor.OrganizationID
+	items := []ChecklistItem{
+		{Key: "stores", Label: "Stores", Complete: count(&core.Store{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0, Description: "At least one active store is available."},
+		{Key: "catalogue", Label: "Catalogue", Complete: count(&core.Product{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0 && count(&core.Variant{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0, Description: "Products and sellable variants exist."},
+		{Key: "inventory", Label: "Inventory", Complete: count(&core.InventoryLevel{}, "organization_id = ? AND on_hand > reserved", orgID) > 0, Description: "At least one item has available stock."},
+		{Key: "whatsapp", Label: "WhatsApp", Complete: count(&core.Channel{}, "organization_id = ? AND provider = ? AND status = ?", orgID, "whatsapp", core.StatusActive) > 0, Description: "An active WhatsApp channel is connected."},
+		{Key: "payments", Label: "Payments", Complete: count(&core.PaymentConfiguration{}, "organization_id = ? AND provider = ? AND enabled = ? AND status = ?", orgID, "paystack", true, core.StatusActive) > 0, Description: "A Paystack configuration is enabled."},
+		{Key: "bot", Label: "Bot", Complete: count(&Bot{}, "organization_id = ? AND published_version_id IS NOT NULL AND status = ?", orgID, BotStatusActive) > 0, Description: "A customer bot has a published version."},
+		{Key: "faqs", Label: "FAQs", Complete: count(&FAQ{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0, Description: "At least one FAQ answer is configured."},
+	}
+	done := 0
+	for _, item := range items {
+		if item.Complete {
+			done++
+		}
+	}
+	return BotSetupStatus{OrganizationID: orgID, Items: items, CompleteCount: done, TotalCount: len(items), Ready: done == len(items)}, nil
+}
+
 func (s *Service) ensureEditable(ctx context.Context, actor auth.CurrentUser, versionID uuid.UUID) error {
 	if !canManageBots(actor.Role) {
 		return httperror.Forbidden("You cannot edit bot configuration")
@@ -710,8 +1217,10 @@ func validateConfiguration(config VersionConfiguration) ValidationResult {
 			}
 		}
 		if step.ModuleID != nil {
-			if _, ok := moduleIDs[*step.ModuleID]; !ok {
+			if module, ok := moduleIDs[*step.ModuleID]; !ok {
 				issues = append(issues, ValidationIssue{Path: "steps." + step.StepKey, Message: "Step references a missing module"})
+			} else if module.Source == ModuleSourceSystem && findModule(module.ModuleKey).Key == "" {
+				issues = append(issues, ValidationIssue{Path: "steps." + step.StepKey, Message: "Step references an unknown system module"})
 			}
 		}
 		if step.ActionID != nil {
@@ -742,7 +1251,64 @@ func validateConfiguration(config VersionConfiguration) ValidationResult {
 			}
 		}
 	}
+	if _, ok := stepKeys[config.Version.StartStepKey]; ok {
+		reachable := map[string]bool{}
+		visiting := map[string]bool{}
+		visited := map[string]bool{}
+		var visit func(string)
+		visit = func(stepKey string) {
+			if stepKey == "" {
+				return
+			}
+			if visiting[stepKey] {
+				issues = append(issues, ValidationIssue{Path: "steps." + stepKey, Message: "Step flow contains a circular path"})
+				return
+			}
+			if visited[stepKey] {
+				return
+			}
+			step, ok := stepKeys[stepKey]
+			if !ok {
+				return
+			}
+			visiting[stepKey] = true
+			reachable[stepKey] = true
+			for _, next := range stepGraphEdges(step, moduleIDs) {
+				if visiting[next] && jsonBool(step.Metadata, "allow_cycle") {
+					continue
+				}
+				visit(next)
+			}
+			visiting[stepKey] = false
+			visited[stepKey] = true
+		}
+		visit(config.Version.StartStepKey)
+		for _, step := range config.Steps {
+			if !reachable[step.StepKey] {
+				issues = append(issues, ValidationIssue{Path: "steps." + step.StepKey, Message: "Step is not reachable from the start step"})
+			}
+		}
+	}
 	return ValidationResult{Valid: len(issues) == 0, Issues: issues}
+}
+
+func stepGraphEdges(step Step, modules map[uuid.UUID]VersionModule) []string {
+	edges := []string{}
+	if step.NextStepKey != "" {
+		edges = append(edges, step.NextStepKey)
+	}
+	if step.FallbackStepKey != "" {
+		edges = append(edges, step.FallbackStepKey)
+	}
+	if step.Type == StepModule && step.ModuleID != nil {
+		module, ok := modules[*step.ModuleID]
+		if ok {
+			if entry := jsonString(module.Parameters, "entry_step"); entry != "" {
+				edges = append(edges, entry)
+			}
+		}
+	}
+	return edges
 }
 
 func canManageBots(role authz.Role) bool {
@@ -866,16 +1432,50 @@ func parseStringOptions(raw string) []string {
 }
 
 func jsonBool(raw, key string) bool {
+	value, ok := jsonBoolValue(raw, key)
+	return ok && value
+}
+
+func moduleEnabled(raw string) bool {
+	value, ok := jsonBoolValue(raw, "enabled")
+	if !ok {
+		return true
+	}
+	return value
+}
+
+func jsonBoolValue(raw, key string) (bool, bool) {
 	var obj map[string]any
 	if err := json.Unmarshal([]byte(jsonObject(raw)), &obj); err != nil {
-		return false
+		return false, false
 	}
 	value, ok := obj[key]
 	if !ok {
-		return false
+		return false, false
 	}
 	asBool, ok := value.(bool)
-	return ok && asBool
+	return asBool, ok
+}
+
+func jsonWithBool(raw, key string, value bool) string {
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(jsonObject(raw)), &obj); err != nil {
+		obj = map[string]any{}
+	}
+	obj[key] = value
+	return jsonValue(obj)
+}
+
+func jsonString(raw, key string) string {
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(jsonObject(raw)), &obj); err != nil {
+		return ""
+	}
+	value, ok := obj[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func jsonIsObject(raw string) bool {
@@ -929,6 +1529,135 @@ func remapOptional(value *uuid.UUID, mapping map[uuid.UUID]uuid.UUID) *uuid.UUID
 		return &next
 	}
 	return nil
+}
+
+func idPtr(value uuid.UUID) *uuid.UUID {
+	return &value
+}
+
+func boolDefault(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func conditionJSON(field, operator string, value any) string {
+	return jsonValue([]map[string]any{{"field": field, "operator": operator, "value": value}})
+}
+
+func jsonValue(value any) string {
+	if value == nil {
+		return "{}"
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(body)
+}
+
+func cleanKeywords(values []string) []string {
+	keywords := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		keyword := normalizeSearchText(value)
+		if keyword == "" {
+			continue
+		}
+		if _, ok := seen[keyword]; ok {
+			continue
+		}
+		seen[keyword] = struct{}{}
+		keywords = append(keywords, keyword)
+	}
+	sort.Strings(keywords)
+	return keywords
+}
+
+func scoreFAQ(query string, faq FAQ) (float64, string) {
+	question := normalizeSearchText(faq.Question)
+	answer := normalizeSearchText(faq.Answer)
+	keywords := parseKeywords(faq.Keywords)
+	if question == query {
+		return 1, "question"
+	}
+	if strings.Contains(question, query) || strings.Contains(query, question) {
+		return 0.86, "question"
+	}
+	queryTokens := tokenSet(query)
+	questionScore := overlapScore(queryTokens, tokenSet(question))
+	answerScore := overlapScore(queryTokens, tokenSet(answer)) * 0.35
+	keywordScore := 0.0
+	for _, keyword := range keywords {
+		if keyword == query || strings.Contains(query, keyword) || strings.Contains(keyword, query) {
+			keywordScore = 0.92
+			break
+		}
+		keywordScore = maxFloat(keywordScore, overlapScore(queryTokens, tokenSet(keyword))*0.8)
+	}
+	score := maxFloat(questionScore, maxFloat(answerScore, keywordScore))
+	matchedOn := "question"
+	if score == keywordScore && keywordScore > 0 {
+		matchedOn = "keyword"
+	} else if score == answerScore && answerScore > 0 {
+		matchedOn = "answer"
+	}
+	return score, matchedOn
+}
+
+func parseKeywords(raw string) []string {
+	var keywords []string
+	_ = json.Unmarshal([]byte(jsonArray(raw)), &keywords)
+	return cleanKeywords(keywords)
+}
+
+func tokenSet(value string) map[string]struct{} {
+	tokens := map[string]struct{}{}
+	for _, part := range strings.Fields(normalizeSearchText(value)) {
+		if len(part) < 3 {
+			continue
+		}
+		tokens[part] = struct{}{}
+	}
+	return tokens
+}
+
+func overlapScore(a, b map[string]struct{}) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	hits := 0
+	for token := range a {
+		if _, ok := b[token]; ok {
+			hits++
+		}
+	}
+	return float64(hits) / float64(len(a))
+}
+
+func normalizeSearchText(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	replacer := strings.NewReplacer(".", " ", ",", " ", "?", " ", "!", " ", "-", " ", "_", " ", ":", " ", ";", " ", "\n", " ")
+	return strings.Join(strings.Fields(replacer.Replace(value)), " ")
+}
+
+func faqConfidence(score float64) string {
+	switch {
+	case score >= 0.8:
+		return "high"
+	case score >= 0.5:
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func auditTx(tx *gorm.DB, organizationID, actorID uuid.UUID, targetType string, targetID uuid.UUID, action string, metadata string) error {

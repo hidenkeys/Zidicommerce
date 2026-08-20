@@ -2,11 +2,13 @@ package bot
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -29,6 +31,13 @@ func newBotFixture(t *testing.T) botFixture {
 		&organization.User{},
 		&organization.OrganizationMembership{},
 		&organization.AuditLog{},
+		&core.Store{},
+		&core.Product{},
+		&core.Variant{},
+		&core.InventoryLevel{},
+		&core.Channel{},
+		&core.PaymentConfiguration{},
+		&core.PaymentProviderSecret{},
 		&Bot{},
 		&BotVersion{},
 		&VersionModule{},
@@ -39,6 +48,7 @@ func newBotFixture(t *testing.T) botFixture {
 		&Integration{},
 		&Step{},
 		&PublishedSnapshot{},
+		&FAQ{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +130,33 @@ func TestValidationReportsMissingStartStep(t *testing.T) {
 	}
 }
 
+func TestValidationReportsUnreachableAndCircularSteps(t *testing.T) {
+	fx := newBotFixture(t)
+	_, version := createBotWithVersion(t, fx)
+	if _, err := fx.service.CreateStep(context.Background(), fx.actor, version.ID, StepInput{StepKey: "start", Type: StepMessage, Title: "Start", NextStepKey: "loop_a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.CreateStep(context.Background(), fx.actor, version.ID, StepInput{StepKey: "loop_a", Type: StepMessage, Title: "Loop A", NextStepKey: "loop_b"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.CreateStep(context.Background(), fx.actor, version.ID, StepInput{StepKey: "loop_b", Type: StepMessage, Title: "Loop B", NextStepKey: "loop_a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.CreateStep(context.Background(), fx.actor, version.ID, StepInput{StepKey: "unused", Type: StepMessage, Title: "Unused"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := fx.service.ValidateVersion(context.Background(), fx.actor, version.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Valid {
+		t.Fatalf("expected graph validation issues, got %+v", result)
+	}
+	if !hasValidationMessage(result.Issues, "circular") || !hasValidationMessage(result.Issues, "not reachable") {
+		t.Fatalf("expected circular and unreachable validation issues, got %+v", result.Issues)
+	}
+}
+
 func TestStoreStaffCannotManageBots(t *testing.T) {
 	fx := newBotFixture(t)
 	staff := auth.CurrentUser{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Role: authz.StoreStaff}
@@ -160,6 +197,168 @@ func TestDraftCopyPreservesPublishedSnapshot(t *testing.T) {
 	if len(steps) != 1 || steps[0].Message != "Published message" {
 		t.Fatalf("expected copied step, got %+v", steps)
 	}
+}
+
+func TestCreateSelfServiceBotBuildsMerchantFriendlyDraft(t *testing.T) {
+	fx := newBotFixture(t)
+	bot, err := fx.service.CreateSelfServiceBot(context.Background(), fx.actor, SelfServiceBotInput{Name: "Bing Chun Bot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions, err := fx.service.ListVersions(context.Background(), fx.actor, bot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 1 {
+		t.Fatalf("expected one version, got %d", len(versions))
+	}
+	config, err := fx.service.GetConfiguration(context.Background(), fx.actor, versions[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Modules) < 6 || len(config.Steps) < 8 {
+		t.Fatalf("expected populated modules and steps, got modules=%d steps=%d", len(config.Modules), len(config.Steps))
+	}
+	foundSystemVariable := false
+	for _, variable := range config.Variables {
+		if variable.Scope == "system" && variable.Name == "system.customer.phone" {
+			foundSystemVariable = true
+		}
+	}
+	if !foundSystemVariable {
+		t.Fatal("expected read-only system variables in template")
+	}
+	foundFAQQuestion := false
+	foundFAQAction := false
+	foundFAQStep := false
+	for _, question := range config.Questions {
+		if question.QuestionKey == "faq_query" && question.VariableName == "faq_query" {
+			foundFAQQuestion = true
+		}
+	}
+	for _, action := range config.Actions {
+		if action.ActionKey == "answer_faq" && action.ActionType == "match_faq" {
+			foundFAQAction = true
+		}
+	}
+	for _, step := range config.Steps {
+		if step.StepKey == "answer_faq" && step.Type == StepAction {
+			foundFAQStep = true
+		}
+	}
+	if !foundFAQQuestion || !foundFAQAction || !foundFAQStep {
+		t.Fatalf("expected scaffolded FAQ path to execute match_faq, question=%v action=%v step=%v", foundFAQQuestion, foundFAQAction, foundFAQStep)
+	}
+	result, err := fx.service.ValidateVersion(context.Background(), fx.actor, versions[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Valid {
+		t.Fatalf("expected template to validate, got %+v", result.Issues)
+	}
+}
+
+func TestModuleManagementUpdatesEnablementAndOrder(t *testing.T) {
+	fx := newBotFixture(t)
+	_, version := createBotWithVersion(t, fx)
+	first, err := fx.service.AddModule(context.Background(), fx.actor, version.ID, ModuleInput{ModuleKey: "ORDER", SortOrder: 20, Metadata: `{"enabled":true}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := fx.service.AddModule(context.Background(), fx.actor, version.ID, ModuleInput{ModuleKey: "FAQ", SortOrder: 10, Metadata: `{"enabled":true}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := fx.service.UpdateModule(context.Background(), fx.actor, first.ID, ModuleInput{Name: "Sales order", SortOrder: 30, Parameters: `{"entry_step":"done"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "Sales order" || updated.SortOrder != 30 || !strings.Contains(updated.Parameters, "entry_step") {
+		t.Fatalf("expected module update, got %+v", updated)
+	}
+	disabled, err := fx.service.SetModuleEnabled(context.Background(), fx.actor, first.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moduleEnabled(disabled.Metadata) {
+		t.Fatalf("expected disabled module metadata, got %s", disabled.Metadata)
+	}
+	reordered, err := fx.service.ReorderModules(context.Background(), fx.actor, version.ID, ModuleReorderInput{Modules: []ModuleOrderInput{{ModuleID: first.ID, SortOrder: 10}, {ModuleID: second.ID, SortOrder: 20}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reordered) != 2 || reordered[0].ID != first.ID || reordered[1].ID != second.ID {
+		t.Fatalf("expected reordered modules, got %+v", reordered)
+	}
+	if _, err := fx.service.CreateStep(context.Background(), fx.actor, version.ID, StepInput{StepKey: "start", Type: StepModule, Title: "Start module", ModuleID: &first.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.CreateStep(context.Background(), fx.actor, version.ID, StepInput{StepKey: "done", Type: StepEnd, Title: "Done", Message: "Done."}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := fx.service.ValidateVersion(context.Background(), fx.actor, version.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Valid {
+		t.Fatalf("expected disabled module reference to remain publishable for safe runtime handling, got %+v", result.Issues)
+	}
+}
+
+func TestFAQMatchingIsDeterministicAndTenantScoped(t *testing.T) {
+	fx := newBotFixture(t)
+	if _, err := fx.service.CreateFAQ(context.Background(), fx.actor, FAQInput{Question: "What time do you open?", Answer: "We open by 10am.", Keywords: []string{"opening hours", "open"}}); err != nil {
+		t.Fatal(err)
+	}
+	match, err := fx.service.MatchFAQ(context.Background(), fx.actor, "opening hours")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if match.FAQ.Answer != "We open by 10am." || match.Confidence == "" {
+		t.Fatalf("unexpected match: %+v", match)
+	}
+	otherActor := auth.CurrentUser{ID: uuid.New(), OrganizationID: uuid.New(), Role: authz.MerchantAdmin}
+	if _, err := fx.service.MatchFAQ(context.Background(), otherActor, "opening hours"); err == nil {
+		t.Fatal("expected cross-tenant FAQ lookup to miss")
+	}
+}
+
+func TestShareLinkRequiresPublishedBotAndActiveWhatsAppChannel(t *testing.T) {
+	fx := newBotFixture(t)
+	bot, version := createBotWithVersion(t, fx)
+	link, err := fx.service.GetShareLink(context.Background(), fx.actor, bot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.Available || link.Reason == "" {
+		t.Fatalf("expected unavailable link before publish, got %+v", link)
+	}
+	if _, err := fx.service.CreateStep(context.Background(), fx.actor, version.ID, StepInput{StepKey: "start", Type: StepMessage, Title: "Start", Message: "Hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.PublishVersion(context.Background(), fx.actor, version.ID); err != nil {
+		t.Fatal(err)
+	}
+	channel := core.Channel{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Provider: "whatsapp", DisplayName: "WhatsApp", PhoneNumberID: "phone-id", DisplayNumber: "+2348012345678", Status: core.StatusActive, Config: "{}", SecretConfig: `{"token":"hidden"}`}
+	if err := fx.db.Create(&channel).Error; err != nil {
+		t.Fatal(err)
+	}
+	link, err = fx.service.GetShareLink(context.Background(), fx.actor, bot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !link.Available || link.URL == "" || link.DisplayNumber != "2348012345678" {
+		t.Fatalf("expected available wa.me link, got %+v", link)
+	}
+}
+
+func hasValidationMessage(issues []ValidationIssue, fragment string) bool {
+	for _, issue := range issues {
+		if strings.Contains(issue.Message, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func createBotWithVersion(t *testing.T, fx botFixture) (Bot, BotVersion) {

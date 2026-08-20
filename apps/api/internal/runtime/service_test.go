@@ -35,6 +35,10 @@ type runtimeFixture struct {
 }
 
 func newRuntimeFixture(t *testing.T, config bot.VersionConfiguration) runtimeFixture {
+	return newRuntimeFixtureWithPaymentProvider(t, config, runtimeTestPaymentProvider{name: "paystack"})
+}
+
+func newRuntimeFixtureWithPaymentProvider(t *testing.T, config bot.VersionConfiguration, provider core.PaymentProvider) runtimeFixture {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -62,6 +66,8 @@ func newRuntimeFixture(t *testing.T, config bot.VersionConfiguration) runtimeFix
 		&core.OrderItem{},
 		&core.OrderEvent{},
 		&core.Payment{},
+		&core.PaymentConfiguration{},
+		&core.PaymentProviderSecret{},
 		&core.Fulfilment{},
 		&core.CommerceNotification{},
 		&core.Channel{},
@@ -74,6 +80,7 @@ func newRuntimeFixture(t *testing.T, config bot.VersionConfiguration) runtimeFix
 		&bot.Condition{},
 		&bot.Integration{},
 		&bot.Step{},
+		&bot.FAQ{},
 		&bot.PublishedSnapshot{},
 		&ConversationSession{},
 		&ConversationMessage{},
@@ -112,8 +119,28 @@ func newRuntimeFixture(t *testing.T, config bot.VersionConfiguration) runtimeFix
 	if err := db.Create(&channel).Error; err != nil {
 		t.Fatal(err)
 	}
-	commerce := core.NewService(db, core.SafeTestProvider{})
+	commerce := core.NewService(db, provider)
 	return runtimeFixture{db: db, commerce: commerce, service: NewService(db, commerce, nil), actor: actor, channel: channel, bot: botRecord, version: version}
+}
+
+type runtimeTestPaymentProvider struct {
+	name        string
+	forceUnpaid bool
+}
+
+func (p runtimeTestPaymentProvider) Name() string {
+	return p.name
+}
+
+func (p runtimeTestPaymentProvider) Initialize(_ context.Context, req core.PaymentInitializeRequest) (core.PaymentInitializeResponse, error) {
+	return core.PaymentInitializeResponse{Reference: req.Reference, AuthorizationURL: "https://payments.zidicommerce.local/pay/" + req.Reference, ProviderMetadata: "{}"}, nil
+}
+
+func (p runtimeTestPaymentProvider) Verify(_ context.Context, reference string) (core.PaymentVerification, error) {
+	if p.forceUnpaid {
+		return core.PaymentVerification{Reference: reference, Paid: false, Status: "pending"}, nil
+	}
+	return core.PaymentVerification{Reference: reference, Paid: true, Status: "success"}, nil
 }
 
 func TestRuntimeExecutesMessageQuestionAndEnd(t *testing.T) {
@@ -225,6 +252,495 @@ func TestRuntimeExecutesCommerceActionsWithMappings(t *testing.T) {
 	}
 	if len(orders) != 1 || orders[0].TotalMinor != 840000 {
 		t.Fatalf("expected one mapped order, got %+v", orders)
+	}
+}
+
+func TestRuntimeExecutesGeneratedSelfServiceOrderAndTrackingFlow(t *testing.T) {
+	config := bot.VersionConfiguration{Version: bot.BotVersion{StartStepKey: "start"}, Steps: []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepEnd, Title: "Done", Message: "Done."}}}
+	fx := newRuntimeFixture(t, config)
+	botService := bot.NewService(fx.db)
+	createdBot, err := botService.CreateSelfServiceBot(context.Background(), fx.actor, bot.SelfServiceBotInput{Name: "Acme Assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions, err := botService.ListVersions(context.Background(), fx.actor, createdBot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validation, err := botService.ValidateVersion(context.Background(), fx.actor, versions[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validation.Valid {
+		t.Fatalf("expected generated self-service bot to validate, got %+v", validation.Issues)
+	}
+	if _, err := botService.PublishVersion(context.Background(), fx.actor, versions[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Model(&core.Channel{}).Where("id = ?", fx.channel.ID).Update("config", `{"bot_id":"`+createdBot.ID.String()+`"}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	customer, store, firstVariant := seedCommerce(t, fx)
+	var firstProduct core.Product
+	if err := fx.db.Where("organization_id = ? AND id = ?", fx.actor.OrganizationID, firstVariant.ProductID).First(&firstProduct).Error; err != nil {
+		t.Fatal(err)
+	}
+	secondProduct, err := fx.commerce.CreateProduct(context.Background(), fx.actor, core.ProductInput{CategoryID: firstProduct.CategoryID, Name: "Iced Tea", Slug: "iced-tea", Status: core.StatusActive, Variants: []core.VariantInput{{SKU: "TEA-REG", Name: "Regular", PriceMinor: 150000, Currency: "NGN", Status: core.StatusActive}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.commerce.UpsertInventory(context.Background(), fx.actor, core.InventoryCreateInput{StoreID: store.ID, VariantID: secondProduct.Variants[0].ID, OnHand: 5, ReorderThreshold: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	send := func(id string, text string) RuntimeResult {
+		t.Helper()
+		result, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, id, "conv-self-service", text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	first := send("ss-1", "start")
+	if len(first.Messages) == 0 || !strings.Contains(first.Messages[0].Text, "Welcome") {
+		t.Fatalf("expected welcome menu, got %+v", first.Messages)
+	}
+	var last RuntimeResult
+	for index, text := range []string{"order", "1", "1", "2", "2", "add_more", "1", "1", "1", "review", "1", "customer@example.com"} {
+		last = send("ss-order-"+strconv.Itoa(index), text)
+	}
+	var orders []core.Order
+	if err := fx.db.Where("organization_id = ? AND customer_id = ?", fx.actor.OrganizationID, customer.ID).Find(&orders).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(orders) == 0 {
+		session, err := fx.service.GetConversation(context.Background(), fx.actor, last.ConversationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("expected order to be created, session step=%s expected_input=%s messages=%s variables=%s", session.CurrentStepKey, session.ExpectedInput, joinMessageTexts(last.Messages), session.Variables)
+	}
+	if len(orders) != 1 || orders[0].Status != core.OrderAwaitingPayment || orders[0].TotalMinor != 990000 {
+		t.Fatalf("expected one awaiting-payment order, got %+v", orders)
+	}
+	var orderItems []core.OrderItem
+	if err := fx.db.Where("organization_id = ? AND order_id = ?", fx.actor.OrganizationID, orders[0].ID).Order("created_at ASC").Find(&orderItems).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(orderItems) != 2 {
+		t.Fatalf("expected two order items, got %+v", orderItems)
+	}
+	var firstInventory core.InventoryLevel
+	if err := fx.db.Where("organization_id = ? AND store_id = ? AND variant_id = ?", fx.actor.OrganizationID, store.ID, firstVariant.ID).First(&firstInventory).Error; err != nil {
+		t.Fatal(err)
+	}
+	if firstInventory.OnHand != 3 {
+		t.Fatalf("expected first product inventory decremented to 3, got %d", firstInventory.OnHand)
+	}
+	var secondInventory core.InventoryLevel
+	if err := fx.db.Where("organization_id = ? AND store_id = ? AND variant_id = ?", fx.actor.OrganizationID, store.ID, secondProduct.Variants[0].ID).First(&secondInventory).Error; err != nil {
+		t.Fatal(err)
+	}
+	if secondInventory.OnHand != 4 {
+		t.Fatalf("expected second product inventory decremented to 4, got %d", secondInventory.OnHand)
+	}
+	var payments []core.Payment
+	if err := fx.db.Where("organization_id = ? AND order_id = ?", fx.actor.OrganizationID, orders[0].ID).Find(&payments).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(payments) != 1 || !strings.Contains(payments[0].AuthorizationURL, "https://payments.zidicommerce.local/pay/") {
+		t.Fatalf("expected initialized payment, got %+v", payments)
+	}
+	confirmed := send("ss-payment-paid", "paid")
+	confirmationText := joinMessageTexts(confirmed.Messages)
+	if !strings.Contains(confirmationText, "Payment confirmed") ||
+		!strings.Contains(confirmationText, orders[0].OrderNumber) ||
+		!strings.Contains(confirmationText, "Milkshake x2") ||
+		!strings.Contains(confirmationText, "Iced Tea x1") ||
+		!strings.Contains(confirmationText, "Main Store") ||
+		!strings.Contains(confirmationText, "Total: NGN 9900") ||
+		!strings.Contains(confirmationText, "Payment status: Paid") {
+		t.Fatalf("expected authoritative payment confirmation summary, got %+v", confirmed.Messages)
+	}
+	if err := fx.db.Where("organization_id = ? AND id = ?", fx.actor.OrganizationID, orders[0].ID).First(&orders[0]).Error; err != nil {
+		t.Fatal(err)
+	}
+	if orders[0].Status != core.OrderPaid {
+		t.Fatalf("expected paid order after customer confirmation, got %+v", orders[0])
+	}
+	if err := fx.db.Where("organization_id = ? AND order_id = ?", fx.actor.OrganizationID, orders[0].ID).Find(&payments).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(payments) != 1 || payments[0].Status != core.PaymentPaid {
+		t.Fatalf("expected paid payment, got %+v", payments)
+	}
+
+	trackStart := send("ss-track-start", "start")
+	if trackStart.SessionStatus != SessionActive {
+		t.Fatalf("expected reset to reactivate session, got %+v", trackStart)
+	}
+	trackMenu := send("ss-track-menu", "track_order")
+	if len(trackMenu.Messages) == 0 || !strings.Contains(joinMessageTexts(trackMenu.Messages), orders[0].OrderNumber) {
+		t.Fatalf("expected recent order list, got %+v", trackMenu.Messages)
+	}
+	trackStatus := send("ss-track-select", "1")
+	if !strings.Contains(joinMessageTexts(trackStatus.Messages), "Order confirmed") {
+		t.Fatalf("expected order status message, got %+v", trackStatus.Messages)
+	}
+	sendOther := func(id string, text string) RuntimeResult {
+		t.Helper()
+		result, err := fx.service.ProcessMessage(context.Background(), InboundMessage{ChannelID: &fx.channel.ID, ExternalMessageID: id, ExternalConversationID: "conv-self-service-other", Sender: "other-self-service", Text: text})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	otherTrack := sendOther("ss-track-other", "start")
+	if otherTrack.SessionStatus != SessionActive {
+		t.Fatalf("expected reset for other customer track test, got %+v", otherTrack)
+	}
+	otherTrack = sendOther("ss-track-other-menu", "track_order")
+	if strings.Contains(joinMessageTexts(otherTrack.Messages), orders[0].OrderNumber) {
+		t.Fatalf("expected other customer not to see first customer's order, got %+v", otherTrack.Messages)
+	}
+}
+
+func TestRuntimeEntryMenuUsesEnabledModulesInSnapshotOrder(t *testing.T) {
+	config := moduleMenuConfig([]bot.VersionModule{
+		moduleForMenu("ORDER", "Place order", "order", 10, true),
+		moduleForMenu("TRACK_ORDER", "Track order", "track_order", 30, true),
+		moduleForMenu("FAQ", "Ask a question", "faq", 20, true),
+		moduleForMenu("COMPLAINT", "Report a complaint", "complaint", 40, false),
+	})
+	fx := newRuntimeFixture(t, config)
+	result, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, "menu-1", "conv-menu", "start"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Messages) != 1 {
+		t.Fatalf("expected one menu message, got %+v", result.Messages)
+	}
+	got := optionLabels(result.Messages[0].Options)
+	want := []string{"Place order", "Ask a question", "Track order"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("expected enabled module menu order %v, got %v", want, got)
+	}
+}
+
+func TestRuntimeDisabledModuleCannotBeReachedFromEntryMenu(t *testing.T) {
+	config := moduleMenuConfig([]bot.VersionModule{
+		moduleForMenu("ORDER", "Place order", "order", 10, true),
+		moduleForMenu("FAQ", "Ask a question", "faq", 20, false),
+	})
+	fx := newRuntimeFixture(t, config)
+	if _, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, "disabled-1", "conv-disabled-menu", "start")); err != nil {
+		t.Fatal(err)
+	}
+	result, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, "disabled-2", "conv-disabled-menu", "faq"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0].Text, "available options") {
+		t.Fatalf("expected disabled module option to be rejected at entry, got %+v", result.Messages)
+	}
+	var session ConversationSession
+	if err := fx.db.Where("id = ?", result.ConversationID).First(&session).Error; err != nil {
+		t.Fatal(err)
+	}
+	if session.CurrentStepKey != "start" || session.ExpectedInput == "" {
+		t.Fatalf("expected session to remain at entry menu, got step=%s expected=%s", session.CurrentStepKey, session.ExpectedInput)
+	}
+}
+
+func TestRuntimePublishedModuleSnapshotIsImmutableAfterDraftEdit(t *testing.T) {
+	config := bot.VersionConfiguration{Version: bot.BotVersion{StartStepKey: "start"}, Steps: []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepEnd, Title: "Done", Message: "Done."}}}
+	fx := newRuntimeFixture(t, config)
+	botService := bot.NewService(fx.db)
+	createdBot, err := botService.CreateSelfServiceBot(context.Background(), fx.actor, bot.SelfServiceBotInput{Name: "Acme Assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions, err := botService.ListVersions(context.Background(), fx.actor, createdBot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draftID := versions[0].ID
+	modules, err := botService.ListModules(context.Background(), fx.actor, draftID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, module := range modules {
+		if module.ModuleKey == "FAQ" {
+			if _, err := botService.UpdateModule(context.Background(), fx.actor, module.ID, bot.ModuleInput{SortOrder: 25}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if module.ModuleKey == "COMPLAINT" {
+			if _, err := botService.SetModuleEnabled(context.Background(), fx.actor, module.ID, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := botService.PublishVersion(context.Background(), fx.actor, draftID); err != nil {
+		t.Fatal(err)
+	}
+	nextDraft, err := botService.CreateVersion(context.Background(), fx.actor, createdBot.ID, bot.VersionInput{SourceVersionID: &draftID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextModules, err := botService.ListModules(context.Background(), fx.actor, nextDraft.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, module := range nextModules {
+		if module.ModuleKey == "FAQ" {
+			if _, err := botService.UpdateModule(context.Background(), fx.actor, module.ID, bot.ModuleInput{SortOrder: 90}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if module.ModuleKey == "COMPLAINT" {
+			if _, err := botService.SetModuleEnabled(context.Background(), fx.actor, module.ID, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := fx.db.Model(&core.Channel{}).Where("id = ?", fx.channel.ID).Update("config", `{"bot_id":"`+createdBot.ID.String()+`"}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, "immutable-1", "conv-immutable-menu", "start"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := optionLabels(result.Messages[0].Options)
+	if strings.Contains(strings.Join(labels, "|"), "Report a complaint") {
+		t.Fatalf("expected published snapshot to keep complaint disabled after draft edit, got %v", labels)
+	}
+	if len(labels) < 3 || strings.Join(labels[:3], "|") != "Place order|Ask a question|Track order" {
+		t.Fatalf("expected published order to remain immutable, got %v", labels)
+	}
+}
+
+func TestRuntimeTenantModuleMenusAreIsolated(t *testing.T) {
+	config := moduleMenuConfig([]bot.VersionModule{
+		moduleForMenu("ORDER", "Tenant A order", "order", 10, true),
+		moduleForMenu("FAQ", "Tenant A FAQ", "faq", 20, true),
+	})
+	fx := newRuntimeFixture(t, config)
+	otherOrg := uuid.New()
+	otherBotID := uuid.New()
+	otherVersionID := uuid.New()
+	otherQuestionID := uuid.New()
+	otherConfig := moduleMenuConfig([]bot.VersionModule{
+		moduleForMenu("ORDER", "Tenant B order", "order", 10, true),
+		moduleForMenu("FAQ", "Tenant B FAQ", "faq", 20, false),
+	})
+	otherConfig.Version = bot.BotVersion{ID: otherVersionID, OrganizationID: otherOrg, BotID: otherBotID, VersionNumber: 1, Status: bot.VersionStatusPublished, StartStepKey: "start", ValidationErrors: "[]", Metadata: "{}"}
+	for index := range otherConfig.Questions {
+		otherConfig.Questions[index].ID = otherQuestionID
+	}
+	for index := range otherConfig.Steps {
+		if otherConfig.Steps[index].StepKey == "start" {
+			otherConfig.Steps[index].QuestionID = &otherQuestionID
+		}
+	}
+	raw, err := json.Marshal(otherConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherChannel := core.Channel{ID: uuid.New(), OrganizationID: otherOrg, Provider: "test", DisplayName: "Other", PhoneNumberID: "other-phone", DisplayNumber: "other", Status: core.StatusActive, Config: `{"bot_id":"` + otherBotID.String() + `"}`, SecretConfig: "{}"}
+	if err := fx.db.Create(&organization.Organization{ID: otherOrg, Name: "Other Merchant", Slug: "other", Currency: "NGN", Timezone: "Africa/Lagos", Status: "active", Metadata: "{}"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Create(&bot.Bot{ID: otherBotID, OrganizationID: otherOrg, Name: "Other Bot", Status: bot.BotStatusActive, DefaultLanguage: "en", Timezone: "Africa/Lagos", PublishedVersionID: &otherVersionID, FallbackConfig: "{}", HandoffConfig: "{}", Metadata: "{}"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Create(&bot.BotVersion{ID: otherVersionID, OrganizationID: otherOrg, BotID: otherBotID, VersionNumber: 1, Status: bot.VersionStatusPublished, StartStepKey: "start", ValidationErrors: "[]", Metadata: "{}"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Create(&bot.PublishedSnapshot{ID: uuid.New(), OrganizationID: otherOrg, BotID: otherBotID, VersionID: otherVersionID, VersionNumber: 1, Snapshot: string(raw)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Create(&otherChannel).Error; err != nil {
+		t.Fatal(err)
+	}
+	tenantA, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, "tenant-a", "conv-tenant-a", "start"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantB, err := fx.service.ProcessMessage(context.Background(), inbound(otherChannel.ID, "tenant-b", "conv-tenant-b", "start"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(optionLabels(tenantA.Messages[0].Options), "|"), "Tenant B") {
+		t.Fatalf("tenant A menu leaked tenant B data: %+v", tenantA.Messages[0].Options)
+	}
+	if strings.Contains(strings.Join(optionLabels(tenantB.Messages[0].Options), "|"), "Tenant A") || strings.Contains(strings.Join(optionLabels(tenantB.Messages[0].Options), "|"), "FAQ") {
+		t.Fatalf("tenant B menu leaked tenant A or disabled data: %+v", tenantB.Messages[0].Options)
+	}
+}
+
+func TestRuntimeGeneratedOrderPaymentFailureCanCancel(t *testing.T) {
+	config := bot.VersionConfiguration{Version: bot.BotVersion{StartStepKey: "start"}, Steps: []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepEnd, Title: "Done", Message: "Done."}}}
+	fx := newRuntimeFixtureWithPaymentProvider(t, config, runtimeTestPaymentProvider{name: "paystack", forceUnpaid: true})
+	botService := bot.NewService(fx.db)
+	createdBot, err := botService.CreateSelfServiceBot(context.Background(), fx.actor, bot.SelfServiceBotInput{Name: "Acme Assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions, err := botService.ListVersions(context.Background(), fx.actor, createdBot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := botService.PublishVersion(context.Background(), fx.actor, versions[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Model(&core.Channel{}).Where("id = ?", fx.channel.ID).Update("config", `{"bot_id":"`+createdBot.ID.String()+`"}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	customer, _, _ := seedCommerce(t, fx)
+
+	send := func(id string, text string) RuntimeResult {
+		t.Helper()
+		result, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, id, "conv-payment-failure", text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	send("pf-start", "start")
+	for index, text := range []string{"order", "1", "1", "1", "1", "review", "1", "customer@example.com"} {
+		send("pf-order-"+strconv.Itoa(index), text)
+	}
+	paidAttempt := send("pf-paid", "paid")
+	if !strings.Contains(joinMessageTexts(paidAttempt.Messages), "not been completed") {
+		t.Fatalf("expected payment failure recovery message, got %+v", paidAttempt.Messages)
+	}
+	var order core.Order
+	if err := fx.db.Where("organization_id = ? AND customer_id = ?", fx.actor.OrganizationID, customer.ID).First(&order).Error; err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != core.OrderAwaitingPayment {
+		t.Fatalf("expected order to remain awaiting payment, got %+v", order)
+	}
+	cancelled := send("pf-cancel", "cancel")
+	if !strings.Contains(joinMessageTexts(cancelled.Messages), "cancelled") {
+		t.Fatalf("expected cancellation message, got %+v", cancelled.Messages)
+	}
+	if err := fx.db.Where("organization_id = ? AND id = ?", fx.actor.OrganizationID, order.ID).First(&order).Error; err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != core.OrderCancelled {
+		t.Fatalf("expected cancelled order, got %+v", order)
+	}
+}
+
+func TestRuntimeFAQActionReturnsConfiguredTenantAnswer(t *testing.T) {
+	questionID := uuid.New()
+	actionID := uuid.New()
+	config := bot.VersionConfiguration{
+		Version:   bot.BotVersion{StartStepKey: "ask_faq"},
+		Questions: []bot.Question{{ID: questionID, QuestionKey: "faq_query", Text: "What would you like to know?", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "faq_query"}},
+		Actions:   []bot.Action{{ID: actionID, ActionKey: "answer_faq", ActionType: "match_faq", Name: "Answer FAQ", InputMappings: `{"query":"faq_query"}`, OutputMappings: `{"answer":"variables.faq_answer"}`}},
+		Steps: []bot.Step{
+			{ID: uuid.New(), StepKey: "ask_faq", Type: bot.StepQuestion, Title: "Ask FAQ", QuestionID: &questionID, NextStepKey: "answer_faq"},
+			{ID: uuid.New(), StepKey: "answer_faq", Type: bot.StepAction, Title: "Answer FAQ", ActionID: &actionID, NextStepKey: "done"},
+			{ID: uuid.New(), StepKey: "done", Type: bot.StepEnd, Title: "Done", Message: "Done."},
+		},
+	}
+	fx := newRuntimeFixture(t, config)
+	if err := fx.db.Create(&bot.FAQ{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Question: "What time do you open?", Answer: "We open by 10am.", Keywords: `["opening hours"]`, Status: core.StatusActive, Metadata: "{}"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, "m1", "conv-faq", "start")); err != nil {
+		t.Fatal(err)
+	}
+	result, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, "m2", "conv-faq", "opening hours"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Messages) < 1 || result.Messages[0].Text != "We open by 10am." {
+		t.Fatalf("expected configured FAQ answer, got %+v", result.Messages)
+	}
+	session, err := fx.service.GetConversation(context.Background(), fx.actor, result.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(session.Variables, "We open by 10am.") {
+		t.Fatalf("expected FAQ answer to be persisted, got %s", session.Variables)
+	}
+}
+
+func TestRuntimeFAQActionIgnoresDisabledFAQ(t *testing.T) {
+	actionID := uuid.New()
+	config := bot.VersionConfiguration{
+		Version: bot.BotVersion{StartStepKey: "answer_faq"},
+		Actions: []bot.Action{{ID: actionID, ActionKey: "answer_faq", ActionType: "match_faq", Name: "Answer FAQ", InputMappings: `{"query":"opening hours"}`, OutputMappings: `{"answer":"variables.faq_answer"}`}},
+		Steps:   []bot.Step{{ID: uuid.New(), StepKey: "answer_faq", Type: bot.StepAction, Title: "Answer FAQ", ActionID: &actionID}},
+	}
+	fx := newRuntimeFixture(t, config)
+	if err := fx.db.Create(&bot.FAQ{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Question: "What time do you open?", Answer: "We open by 10am.", Keywords: `["opening hours"]`, Status: core.StatusInactive, Metadata: "{}"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, "m1", "conv-faq-disabled", "start"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0].Text, "do not have a configured answer") {
+		t.Fatalf("expected disabled FAQ to be ignored, got %+v", result.Messages)
+	}
+}
+
+func TestRuntimeCommerceActionsRejectOtherCustomerOrderAndCart(t *testing.T) {
+	config := bot.VersionConfiguration{Version: bot.BotVersion{StartStepKey: "start"}, Steps: []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepEnd, Title: "Done", Message: "Done."}}}
+	fx := newRuntimeFixture(t, config)
+	currentCustomer, store, variant := seedCommerce(t, fx)
+	otherCustomer, err := fx.commerce.CreateCustomer(context.Background(), fx.actor, core.CustomerInput{Name: "Other", Phone: "2348000000001", Email: "other@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cart, err := fx.commerce.CreateCart(context.Background(), fx.actor, core.CartInput{CustomerID: otherCustomer.ID, StoreID: store.ID, Currency: "NGN"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.commerce.AddCartItem(context.Background(), fx.actor, cart.ID, core.CartItemInput{VariantID: variant.ID, Quantity: 1}); err != nil {
+		t.Fatal(err)
+	}
+	order, err := fx.commerce.CreateOrder(context.Background(), fx.actor, core.OrderInput{CartID: &cart.ID, CustomerID: otherCustomer.ID, StoreID: store.ID, FulfilmentType: core.FulfilmentPickup, Currency: "NGN", IdempotencyKey: "other-order"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := ConversationSession{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, ChannelID: fx.channel.ID, BotID: fx.bot.ID, BotVersionID: fx.version.ID, CustomerID: &currentCustomer.ID, Status: SessionActive}
+	runtimeContext := RuntimeContext{Session: session, Variables: map[string]any{}, System: map[string]any{}}
+	if _, err := fx.service.actions.Execute(context.Background(), bot.Action{ActionType: "get_order", InputMappings: `{"order_id":"` + order.ID.String() + `"}`, OutputMappings: "{}"}, runtimeContext); err == nil {
+		t.Fatal("expected get_order to reject another customer's order")
+	}
+	if _, err := fx.service.actions.Execute(context.Background(), bot.Action{ActionType: "add_to_cart", InputMappings: `{"cart_id":"` + cart.ID.String() + `","variant_id":"` + variant.ID.String() + `","quantity":"1"}`, OutputMappings: "{}"}, runtimeContext); err == nil {
+		t.Fatal("expected add_to_cart to reject another customer's cart")
+	}
+}
+
+func TestRuntimeCustomerSensitiveActionsFailClosedWithoutSessionCustomer(t *testing.T) {
+	config := bot.VersionConfiguration{Version: bot.BotVersion{StartStepKey: "start"}, Steps: []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepEnd, Title: "Done", Message: "Done."}}}
+	fx := newRuntimeFixture(t, config)
+	customer, store, variant := seedCommerce(t, fx)
+	session := ConversationSession{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, ChannelID: fx.channel.ID, BotID: fx.bot.ID, BotVersionID: fx.version.ID, Status: SessionActive}
+	runtimeContext := RuntimeContext{Session: session, Variables: map[string]any{}, System: map[string]any{}}
+	cartID := uuid.New()
+	orderID := uuid.New()
+	actions := []bot.Action{
+		{ActionType: "create_cart", InputMappings: `{"customer_id":"` + customer.ID.String() + `","store_id":"` + store.ID.String() + `","currency":"NGN"}`, OutputMappings: "{}"},
+		{ActionType: "add_to_cart", InputMappings: `{"cart_id":"` + cartID.String() + `","variant_id":"` + variant.ID.String() + `","quantity":"1"}`, OutputMappings: "{}"},
+		{ActionType: "create_order", InputMappings: `{"cart_id":"` + cartID.String() + `","customer_id":"` + customer.ID.String() + `","store_id":"` + store.ID.String() + `","fulfilment_type":"pickup","currency":"NGN"}`, OutputMappings: "{}"},
+		{ActionType: "initialize_payment", InputMappings: `{"order_id":"` + orderID.String() + `","provider":"paystack","email":"customer@example.com"}`, OutputMappings: "{}"},
+		{ActionType: "check_payment", InputMappings: `{"payment_reference":"ref_missing_customer"}`, OutputMappings: "{}"},
+		{ActionType: "get_order", InputMappings: `{"order_id":"` + orderID.String() + `"}`, OutputMappings: "{}"},
+		{ActionType: "get_order_status", InputMappings: `{"order_id":"` + orderID.String() + `"}`, OutputMappings: "{}"},
+		{ActionType: "get_customer_orders", InputMappings: `{"customer_id":"` + customer.ID.String() + `"}`, OutputMappings: "{}"},
+	}
+	for _, action := range actions {
+		if _, err := fx.service.actions.Execute(context.Background(), action, runtimeContext); err == nil {
+			t.Fatalf("expected %s to fail closed without session customer", action.ActionType)
+		}
 	}
 }
 
@@ -588,6 +1104,45 @@ func inbound(channelID uuid.UUID, messageID, conversationID, text string) Inboun
 	return InboundMessage{ChannelID: &channelID, ExternalMessageID: messageID, ExternalConversationID: conversationID, Sender: "customer", Text: text}
 }
 
+func moduleMenuConfig(modules []bot.VersionModule) bot.VersionConfiguration {
+	questionID := uuid.New()
+	return bot.VersionConfiguration{
+		Version: bot.BotVersion{StartStepKey: "start"},
+		Modules: modules,
+		Questions: []bot.Question{{
+			ID:           questionID,
+			QuestionKey:  "main_menu",
+			Text:         "How can we help?",
+			Type:         "single_choice",
+			ResponseMode: "list",
+			Required:     true,
+			VariableName: "intent",
+			Options:      jsonValue([]map[string]string{{"id": "order", "label": "Static order"}, {"id": "faq", "label": "Static FAQ"}, {"id": "complaint", "label": "Static complaint"}, {"id": "track_order", "label": "Static track"}}),
+		}},
+		Steps: []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepChoice, Title: "Main menu", QuestionID: &questionID, NextStepKey: "done"}, {ID: uuid.New(), StepKey: "done", Type: bot.StepEnd, Title: "Done", Message: "Done."}},
+	}
+}
+
+func moduleForMenu(key, label, intent string, sortOrder int, enabled bool) bot.VersionModule {
+	return bot.VersionModule{ID: uuid.New(), ModuleKey: key, Name: label, Source: bot.ModuleSourceSystem, Parameters: jsonValue(map[string]any{"menu_intent": intent, "menu_label": label}), Metadata: jsonValue(map[string]any{"enabled": enabled}), SortOrder: sortOrder}
+}
+
+func optionLabels(options []MessageOption) []string {
+	labels := make([]string, 0, len(options))
+	for _, option := range options {
+		labels = append(labels, option.Label)
+	}
+	return labels
+}
+
+func joinMessageTexts(messages []OutboundMessage) string {
+	parts := make([]string, 0, len(messages))
+	for _, message := range messages {
+		parts = append(parts, message.Text)
+	}
+	return strings.Join(parts, "\n")
+}
+
 type actionIDs struct {
 	storeQuestion    uuid.UUID
 	customerQuestion uuid.UUID
@@ -646,7 +1201,7 @@ func seedCommerce(t *testing.T, fx runtimeFixture) (core.Customer, core.Store, c
 	if err != nil {
 		t.Fatal(err)
 	}
-	customer, err := fx.commerce.CreateCustomer(context.Background(), fx.actor, core.CustomerInput{Name: "Customer", Phone: "2348000000000", Email: "customer@example.com"})
+	customer, err := fx.commerce.CreateCustomer(context.Background(), fx.actor, core.CustomerInput{Name: "Customer", Phone: "customer", Email: "customer@example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -40,8 +40,9 @@ type JWTConfig struct {
 }
 
 type PaymentConfig struct {
-	Provider       string
-	PaystackSecret string
+	Provider            string
+	PaystackSecret      string
+	SecretEncryptionKey string
 }
 
 type EmailConfig struct {
@@ -76,8 +77,9 @@ func Load() (Config, error) {
 			Issuer: getenv("JWT_ISSUER", "zidicommerce"),
 		},
 		Payment: PaymentConfig{
-			Provider:       getenv("PAYMENT_PROVIDER", "test"),
-			PaystackSecret: os.Getenv("PAYSTACK_SECRET_KEY"),
+			Provider:            getenv("PAYMENT_PROVIDER", "test"),
+			PaystackSecret:      os.Getenv("PAYSTACK_SECRET_KEY"),
+			SecretEncryptionKey: os.Getenv("PAYMENT_SECRET_ENCRYPTION_KEY"),
 		},
 		Email: EmailConfig{
 			Mode:       getenv("EMAIL_MODE", "log"),

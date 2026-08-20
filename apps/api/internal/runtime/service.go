@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/mail"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -41,7 +42,7 @@ func NewService(db *gorm.DB, commerce *core.Service, logger *slog.Logger) *Servi
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{db: db, commerce: commerce, actions: NewActionRegistry(commerce), senders: map[string]ChannelSender{}, log: logger, now: func() time.Time { return time.Now().UTC() }}
+	return &Service{db: db, commerce: commerce, actions: NewActionRegistry(db, commerce), senders: map[string]ChannelSender{}, log: logger, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func (s *Service) ConfigureJobs(jobService *jobs.Service) {
@@ -478,7 +479,7 @@ func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.V
 		if err != nil {
 			return false, err
 		}
-		options := parseOptions(defaultString(step.Options, question.Options))
+		options := parseOptions(s.effectiveQuestionOptions(snapshot, step, question))
 		msgType := MessageText
 		if len(options) > 0 || question.ResponseMode == "buttons" || question.ResponseMode == "single_choice" {
 			msgType = MessageButtons
@@ -529,6 +530,9 @@ func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.V
 		if err != nil {
 			return false, err
 		}
+		if !runtimeModuleEnabled(module.Metadata) {
+			return false, runtimeErrorf(ErrRuntimeConfigurationError, "That option is not available right now.", "module %s is disabled", module.ModuleKey)
+		}
 		s.recordEvent(ctx, *session, EventModuleStarted, "info", step.StepKey, "", map[string]any{"module_key": module.ModuleKey})
 		params := parseJSONMap(module.Parameters)
 		entry := stringValue(params["entry_step"])
@@ -573,7 +577,7 @@ func (s *Service) acceptAnswer(step bot.Step, snapshot bot.VersionConfiguration,
 	if err != nil {
 		return err
 	}
-	value, err := validateAnswer(question, defaultString(step.Options, question.Options), input)
+	value, err := validateAnswer(question, s.effectiveQuestionOptions(snapshot, step, question), input)
 	if err != nil {
 		return err
 	}
@@ -600,6 +604,13 @@ func validateAnswer(question bot.Question, rawOptions string, input InboundMessa
 		n, err := strconv.ParseFloat(text, 64)
 		if err != nil {
 			return nil, runtimeError(ErrInvalidInput, "Please enter a valid number.")
+		}
+		validation := parseJSONMap(question.Validation)
+		if min, ok := numberValue(validation["min"]); ok && n < min {
+			return nil, runtimeErrorf(ErrInvalidInput, fmt.Sprintf("Enter a quantity from %.0f to %.0f.", min, numberOrDefault(validation["max"], min)), "number below minimum for %s", question.QuestionKey)
+		}
+		if max, ok := numberValue(validation["max"]); ok && n > max {
+			return nil, runtimeErrorf(ErrInvalidInput, fmt.Sprintf("Enter a quantity from %.0f to %.0f.", numberOrDefault(validation["min"], max), max), "number above maximum for %s", question.QuestionKey)
 		}
 		return n, nil
 	case "email":
@@ -646,6 +657,13 @@ func validateAnswer(question bot.Question, rawOptions string, input InboundMessa
 	}
 }
 
+func numberOrDefault(value any, fallback float64) float64 {
+	if n, ok := numberValue(value); ok {
+		return n
+	}
+	return fallback
+}
+
 func matchSingleChoice(text string, options []MessageOption) (any, error) {
 	if len(options) == 0 {
 		if text == "" {
@@ -659,6 +677,105 @@ func matchSingleChoice(text string, options []MessageOption) (any, error) {
 		}
 	}
 	return nil, runtimeError(ErrInvalidInput, "Please choose one of the available options.")
+}
+
+func (s *Service) effectiveQuestionOptions(snapshot bot.VersionConfiguration, step bot.Step, question bot.Question) string {
+	if isCustomerEntryMenu(snapshot, step, question) {
+		options := customerEntryMenuOptions(snapshot.Modules)
+		if len(options) > 0 {
+			return jsonValue(options)
+		}
+	}
+	return defaultString(step.Options, question.Options)
+}
+
+func isCustomerEntryMenu(snapshot bot.VersionConfiguration, step bot.Step, question bot.Question) bool {
+	return step.StepKey == snapshot.Version.StartStepKey && question.QuestionKey == "main_menu"
+}
+
+func customerEntryMenuOptions(modules []bot.VersionModule) []MessageOption {
+	ordered := append([]bot.VersionModule(nil), modules...)
+	sort.SliceStable(ordered, func(left, right int) bool {
+		leftOrder := ordered[left].SortOrder
+		rightOrder := ordered[right].SortOrder
+		if leftOrder == rightOrder {
+			return ordered[left].CreatedAt.Before(ordered[right].CreatedAt)
+		}
+		return leftOrder < rightOrder
+	})
+	options := make([]MessageOption, 0, len(ordered))
+	seen := map[string]struct{}{}
+	for _, module := range ordered {
+		if !runtimeModuleEnabled(module.Metadata) {
+			continue
+		}
+		intent := moduleMenuIntent(module)
+		if intent == "" {
+			continue
+		}
+		if _, exists := seen[intent]; exists {
+			continue
+		}
+		seen[intent] = struct{}{}
+		options = append(options, MessageOption{ID: intent, Label: moduleMenuLabel(module), Description: strings.TrimSpace(module.Description)})
+	}
+	return options
+}
+
+func moduleMenuIntent(module bot.VersionModule) string {
+	params := parseJSONMap(module.Parameters)
+	if intent := strings.TrimSpace(stringValue(params["menu_intent"])); intent != "" {
+		return intent
+	}
+	switch strings.ToUpper(strings.TrimSpace(module.ModuleKey)) {
+	case "ORDER":
+		return "order"
+	case "TRACK_ORDER":
+		return "track_order"
+	case "FAQ":
+		return "faq"
+	case "COMPLAINT":
+		return "complaint"
+	case "HUMAN_HANDOFF", "CONTACT_SUPPORT":
+		return "support"
+	default:
+		return ""
+	}
+}
+
+func moduleMenuLabel(module bot.VersionModule) string {
+	params := parseJSONMap(module.Parameters)
+	if label := strings.TrimSpace(stringValue(params["menu_label"])); label != "" {
+		return label
+	}
+	if label := strings.TrimSpace(module.Name); label != "" {
+		return label
+	}
+	words := strings.Fields(strings.ReplaceAll(strings.ToLower(module.ModuleKey), "_", " "))
+	for index, word := range words {
+		if word == "" {
+			continue
+		}
+		words[index] = strings.ToUpper(word[:1]) + word[1:]
+	}
+	return strings.Join(words, " ")
+}
+
+func runtimeModuleEnabled(raw string) bool {
+	metadata := parseJSONMap(raw)
+	value, ok := metadata["enabled"]
+	if !ok || value == nil {
+		return true
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+		return err != nil || parsed
+	default:
+		return true
+	}
 }
 
 func (s *Service) advance(session *ConversationSession, nextStepKey string) bool {

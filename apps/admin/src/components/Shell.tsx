@@ -90,7 +90,7 @@ export function Shell() {
       <main className="main-panel">
         <header className="topbar">
           <div>
-            <span className="eyebrow">Phase 6 Merchant Deployment</span>
+            <span className="eyebrow">Phase 8 Self-Service Bot Builder</span>
             <h1>ZidiCommerce Admin</h1>
           </div>
           <button type="button" onClick={saveToken}>Connect API</button>

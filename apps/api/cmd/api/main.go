@@ -53,6 +53,17 @@ func main() {
 	}
 	commerceService := core.NewService(db, provider)
 	commerceService.ConfigurePaymentWebhooks(cfg.Payment.PaystackSecret)
+	if key, err := core.DecodePaymentSecretKey(cfg.Payment.SecretEncryptionKey); err != nil {
+		log.Error("invalid payment secret encryption key", "error", err)
+		os.Exit(1)
+	} else if len(key) > 0 {
+		store, err := core.NewEncryptedPaymentSecretStore(db, key, "v1")
+		if err != nil {
+			log.Error("failed to configure payment secret store", "error", err)
+			os.Exit(1)
+		}
+		commerceService.ConfigurePaymentSecretStore(store)
+	}
 	jobService := jobs.NewService(db, log)
 	commerceService.ConfigureJobs(jobService)
 	var mailer email.Sender = email.NewLogSender(log, cfg.Email.From)

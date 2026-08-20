@@ -72,12 +72,18 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Post("/payments/initialize", h.initializePayment)
 	router.Post("/payments/verify", h.verifyPayment)
 	router.Post("/payments/:id/reconcile", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.reconcilePayment)
+	router.Get("/payment-configurations", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.listPaymentConfigurations)
+	router.Post("/payment-configurations", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.upsertPaymentConfiguration)
+	router.Post("/payment-configurations/:provider/test", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.testPaymentConfiguration)
 
 	router.Get("/fulfilment/:order_id", h.getFulfilment)
 	router.Patch("/fulfilment/:order_id", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin, authz.StoreManager, authz.StoreStaff), h.updateFulfilment)
 
 	router.Get("/channels", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.listChannels)
 	router.Post("/channels", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.createChannel)
+	router.Patch("/channels/:id", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.updateChannel)
+	router.Post("/channels/:id/test", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.testChannel)
+	router.Post("/channels/:id/disconnect", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.disconnectChannel)
 
 	router.Get("/merchant-imports", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.listMerchantImportJobs)
 	router.Post("/merchant-imports/configuration", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.importMerchantConfiguration)
@@ -552,6 +558,25 @@ func (h *Handler) listPayments(c *fiber.Ctx) error {
 	return respond(c, data, err)
 }
 
+func (h *Handler) listPaymentConfigurations(c *fiber.Ctx) error {
+	data, err := h.service.ListPaymentConfigurations(c.UserContext(), mustUser(c))
+	return respond(c, data, err)
+}
+
+func (h *Handler) upsertPaymentConfiguration(c *fiber.Ctx) error {
+	var input PaymentConfigurationInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.UpsertPaymentConfiguration(c.UserContext(), mustUser(c), input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) testPaymentConfiguration(c *fiber.Ctx) error {
+	data, err := h.service.TestPaymentConfiguration(c.UserContext(), mustUser(c), c.Params("provider"))
+	return respond(c, data, err)
+}
+
 func (h *Handler) getFulfilment(c *fiber.Ctx) error {
 	id, err := paramID(c, "order_id")
 	if err != nil {
@@ -580,6 +605,37 @@ func (h *Handler) createChannel(c *fiber.Ctx) error {
 		return err
 	}
 	data, err := h.service.CreateChannel(c.UserContext(), mustUser(c), input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) updateChannel(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input ChannelInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.UpdateChannel(c.UserContext(), mustUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) testChannel(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.TestChannel(c.UserContext(), mustUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) disconnectChannel(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.DisconnectChannel(c.UserContext(), mustUser(c), id)
 	return respond(c, data, err)
 }
 
