@@ -21,8 +21,11 @@ func NewRepository(db *gorm.DB) *Repository {
 }
 
 func (r *Repository) FindByID(ctx context.Context, scope tenant.Scope, id uuid.UUID) (Organization, error) {
+	if id != scope.OrganizationID {
+		return Organization{}, httperror.NotFound("Organization not found")
+	}
 	var org Organization
-	err := scope.Apply(r.db.WithContext(ctx)).Where("id = ?", id).First(&org).Error
+	err := r.db.WithContext(ctx).Where("id = ?", id).First(&org).Error
 	if err == gorm.ErrRecordNotFound {
 		return Organization{}, httperror.NotFound("Organization not found")
 	}
