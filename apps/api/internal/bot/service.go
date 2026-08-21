@@ -331,6 +331,10 @@ func (s *Service) CreateSelfServiceBot(ctx context.Context, actor auth.CurrentUs
 		if !requirePayment {
 			steps = append(steps, Step{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, StepKey: "order_finish", Type: StepEnd, Title: "Order finished", Message: "Your order has been received. We will send updates here as it progresses.", SortOrder: 310, Metadata: "{}"})
 		}
+		for index := range steps {
+			steps[index].Options = jsonArray(steps[index].Options)
+			steps[index].Metadata = jsonObject(steps[index].Metadata)
+		}
 		if err := tx.Create(&steps).Error; err != nil {
 			return err
 		}

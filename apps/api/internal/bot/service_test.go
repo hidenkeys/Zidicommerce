@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -242,6 +243,9 @@ func TestCreateSelfServiceBotBuildsMerchantFriendlyDraft(t *testing.T) {
 		}
 	}
 	for _, step := range config.Steps {
+		if !json.Valid([]byte(step.Options)) {
+			t.Fatalf("expected step %q options to contain valid JSON, got %q", step.StepKey, step.Options)
+		}
 		if step.StepKey == "answer_faq" && step.Type == StepAction {
 			foundFAQStep = true
 		}
