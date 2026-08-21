@@ -1,0 +1,2 @@
+ALTER TABLE customers
+    ADD COLUMN IF NOT EXISTS default_address TEXT NOT NULL DEFAULT '';
