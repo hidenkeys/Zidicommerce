@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Route, Routes } from "react-router-dom";
 import { API_BASE_URL, apiGet, apiPatch, apiPost, apiPut, setStoredToken } from "./api/client";
+import { RequireAuth } from "./auth";
+import { LoginPage } from "./components/LoginPage";
 import { Shell } from "./components/Shell";
 
 type Row = Record<string, unknown>;
@@ -162,7 +164,7 @@ function Dashboard() {
         </article>
         <article className="summary-card">
           <span>Current role</span>
-          <p>{me?.role ?? "Connect an API token"}</p>
+          <p>{me?.role ?? "Unknown"}</p>
         </article>
         <article className="summary-card">
           <span>Organization</span>
@@ -1890,29 +1892,33 @@ function formatCell(value: unknown) {
 export default function App() {
   return (
     <Routes>
-      <Route element={<Shell />}>
-        <Route index element={<Dashboard />} />
-        <Route path="platform/organizations" element={<BasicResourceScreen resource="organizations" />} />
-        <Route path="commerce/stores" element={<BasicResourceScreen resource="stores" />} />
-        <Route path="commerce/catalogue" element={<CatalogueScreen />} />
-        <Route path="commerce/inventory" element={<InventoryScreen />} />
-        <Route path="commerce/orders" element={<OrdersScreen />} />
-        <Route path="commerce/customers" element={<BasicResourceScreen resource="customers" />} />
-        <Route path="organization/business" element={<BusinessScreen />} />
-        <Route path="organization/team" element={<TeamScreen />} />
-        <Route path="organization/access" element={<StoreAccessScreen />} />
-        <Route path="organization/audit-logs" element={<AuditLogScreen />} />
-        <Route path="configuration/payments" element={<PaymentsScreen />} />
-        <Route path="configuration/fulfilment" element={<FulfilmentScreen />} />
-        <Route path="configuration/channels" element={<BasicResourceScreen resource="channels" />} />
-        <Route path="automation/bots" element={<BotBuilderScreen />} />
-        <Route path="automation/versions" element={<BotBuilderScreen />} />
-        <Route path="automation/conversations" element={<ConversationsScreen />} />
-        <Route path="automation/support-handoffs" element={<SupportHandoffsScreen />} />
-        <Route path="settings/readiness" element={<ReadinessScreen />} />
-        <Route path="settings/import" element={<MerchantImportScreen />} />
-        <Route path="settings" element={<BusinessScreen />} />
-        <Route path="*" element={<Placeholder title="Planned module" />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<LoginPage mode="register" />} />
+      <Route element={<RequireAuth />}>
+        <Route element={<Shell />}>
+          <Route index element={<Dashboard />} />
+          <Route path="platform/organizations" element={<BasicResourceScreen resource="organizations" />} />
+          <Route path="commerce/stores" element={<BasicResourceScreen resource="stores" />} />
+          <Route path="commerce/catalogue" element={<CatalogueScreen />} />
+          <Route path="commerce/inventory" element={<InventoryScreen />} />
+          <Route path="commerce/orders" element={<OrdersScreen />} />
+          <Route path="commerce/customers" element={<BasicResourceScreen resource="customers" />} />
+          <Route path="organization/business" element={<BusinessScreen />} />
+          <Route path="organization/team" element={<TeamScreen />} />
+          <Route path="organization/access" element={<StoreAccessScreen />} />
+          <Route path="organization/audit-logs" element={<AuditLogScreen />} />
+          <Route path="configuration/payments" element={<PaymentsScreen />} />
+          <Route path="configuration/fulfilment" element={<FulfilmentScreen />} />
+          <Route path="configuration/channels" element={<BasicResourceScreen resource="channels" />} />
+          <Route path="automation/bots" element={<BotBuilderScreen />} />
+          <Route path="automation/versions" element={<BotBuilderScreen />} />
+          <Route path="automation/conversations" element={<ConversationsScreen />} />
+          <Route path="automation/support-handoffs" element={<SupportHandoffsScreen />} />
+          <Route path="settings/readiness" element={<ReadinessScreen />} />
+          <Route path="settings/import" element={<MerchantImportScreen />} />
+          <Route path="settings" element={<BusinessScreen />} />
+          <Route path="*" element={<Placeholder title="Planned module" />} />
+        </Route>
       </Route>
     </Routes>
   );

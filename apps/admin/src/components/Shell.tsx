@@ -1,7 +1,13 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { getStoredToken, setStoredToken } from "../api/client";
+import { useAuth } from "../auth";
 
-const groups = [
+type NavGroup = {
+  label: string;
+  items: string[][];
+  roles?: string[];
+};
+
+const groups: NavGroup[] = [
   {
     label: "Overview",
     items: [["Dashboard", "/"]],
@@ -45,6 +51,7 @@ const groups = [
   {
     label: "Platform",
     items: [["Organizations", "/platform/organizations"]],
+    roles: ["platform_admin"],
   },
   {
     label: "System",
@@ -57,12 +64,8 @@ const groups = [
 ];
 
 export function Shell() {
-  function saveToken() {
-    const token = window.prompt("Paste a ZidiCommerce API access token", getStoredToken());
-    if (token !== null) {
-      setStoredToken(token);
-    }
-  }
+  const { user, logout } = useAuth();
+  const visibleGroups = groups.filter((group) => !group.roles || group.roles.includes(user.role));
 
   return (
     <div className="app-shell">
@@ -76,7 +79,7 @@ export function Shell() {
         </div>
 
         <nav className="nav-groups">
-          {groups.map((group) => (
+          {visibleGroups.map((group) => (
             <section key={group.label}>
               <p>{group.label}</p>
               {group.items.map(([label, path]) => (
@@ -95,7 +98,10 @@ export function Shell() {
             <span className="eyebrow">Phase 9 Merchant Pilot</span>
             <h1>ZidiCommerce Admin</h1>
           </div>
-          <button type="button" onClick={saveToken}>Connect API</button>
+          <div className="topbar-actions">
+            <span className="muted">{user.role}</span>
+            <button type="button" onClick={logout}>Log out</button>
+          </div>
         </header>
         <Outlet />
       </main>

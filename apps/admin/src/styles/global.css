@@ -31,6 +31,77 @@ button {
   min-height: 100vh;
 }
 
+.login-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.login-sidebar-copy {
+  color: #98a2b3;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 12px 6px 0;
+}
+
+.login-panel {
+  display: grid;
+  place-items: center;
+  padding: 40px 24px;
+}
+
+.login-card {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 28px;
+  background: #ffffff;
+  border: 1px solid #eaecf0;
+  border-radius: 8px;
+}
+
+.login-card h1 {
+  margin: 6px 0 8px;
+}
+
+.login-card p {
+  margin: 0;
+  color: #475467;
+}
+
+.login-card .error-text {
+  color: #b42318;
+}
+
+.login-card label {
+  display: grid;
+  gap: 6px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.login-card button[type="submit"] {
+  background: #ffcc22;
+  border-color: #ffcc22;
+  color: #090b12;
+}
+
+.login-switch {
+  font-size: 14px;
+}
+
+.login-switch a {
+  color: #101828;
+  font-weight: 700;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
 .sidebar {
   background: #090b12;
   color: #ffffff;
@@ -575,7 +646,8 @@ pre {
 }
 
 @media (max-width: 980px) {
-  .app-shell {
+  .app-shell,
+  .login-layout {
     grid-template-columns: 1fr;
   }
 

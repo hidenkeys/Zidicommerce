@@ -4,28 +4,50 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080
 
 type JsonBody = Record<string, unknown> | Array<unknown>;
 
+const TOKEN_KEY = "zidicommerce_token";
+const PUBLIC_PATHS = new Set(["/auth/login", "/auth/register"]);
+
+export const UNAUTHORIZED_EVENT = "zidicommerce:unauthorized";
+
 export function getStoredToken() {
-  return localStorage.getItem("zidicommerce_token") ?? "";
+  return localStorage.getItem(TOKEN_KEY) ?? "";
 }
 
 export function setStoredToken(token: string) {
-  localStorage.setItem("zidicommerce_token", token.trim());
+  localStorage.setItem(TOKEN_KEY, token.trim());
+}
+
+export function clearStoredToken() {
+  localStorage.removeItem(TOKEN_KEY);
 }
 
 async function request<T>(method: string, path: string, body?: JsonBody): Promise<ApiDataResponse<T>> {
   const token = getStoredToken();
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (token && !PUBLIC_PATHS.has(path)) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new Error("Network error. Could not reach the API.");
+  }
 
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     const message = payload?.error?.message ?? `Request failed with status ${response.status}`;
+    if (response.status === 401 && !PUBLIC_PATHS.has(path)) {
+      clearStoredToken();
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
     throw new Error(message);
   }
 
