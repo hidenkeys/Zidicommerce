@@ -10,6 +10,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/config"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/fieldservice"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
 	runtimeengine "github.com/hidenkeys/zidicommerce/apps/api/internal/runtime"
@@ -25,6 +26,7 @@ type Dependencies struct {
 	Commerce     *core.Handler
 	Bot          *bot.Handler
 	Runtime      *runtimeengine.Handler
+	Field        *fieldservice.Handler
 }
 
 func New(deps Dependencies) *fiber.App {
@@ -55,6 +57,9 @@ func New(deps Dependencies) *fiber.App {
 	deps.Commerce.Register(protected)
 	deps.Bot.Register(protected)
 	deps.Runtime.Register(protected)
+	if deps.Field != nil {
+		deps.Field.Register(protected)
+	}
 
 	return app
 }

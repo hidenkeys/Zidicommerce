@@ -28,6 +28,7 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Get("/organizations/current/members", h.listMembers)
 	router.Post("/organizations/current/invitations", h.inviteMember)
 	router.Get("/organizations/current/invitations", h.listInvitations)
+	router.Post("/organizations/current/invitations/:id/resend", h.resendInvitation)
 	router.Patch("/organizations/current/members/:id", h.updateMember)
 	router.Get("/organizations/current/members/:id/stores", h.listMemberStores)
 	router.Put("/organizations/current/members/:id/stores", h.assignMemberStores)
@@ -91,6 +92,7 @@ func (h *Handler) Register(router fiber.Router) {
 }
 
 func (h *Handler) RegisterPublic(router fiber.Router) {
+	router.Get("/invitations/:token", h.previewInvitation)
 	router.Post("/invitations/:token/accept", h.acceptInvitation)
 	router.Post("/payments/paystack/webhook", h.paystackWebhook)
 }
@@ -133,7 +135,45 @@ func (h *Handler) inviteMember(c *fiber.Ctx) error {
 		return err
 	}
 	invitation, _, err := h.service.InviteMember(c.UserContext(), mustUser(c), input)
-	return respond(c, invitation, err)
+	if err != nil {
+		if apiErr, ok := err.(httperror.APIError); ok && apiErr.Code == "EMAIL_DELIVERY_FAILED" {
+			return c.Status(apiErr.StatusCode).JSON(fiber.Map{
+				"data": invitation,
+				"error": fiber.Map{
+					"code":    apiErr.Code,
+					"message": apiErr.Message,
+				},
+			})
+		}
+		return err
+	}
+	return respond(c, invitation, nil)
+}
+
+func (h *Handler) resendInvitation(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	invitation, err := h.service.ResendInvitation(c.UserContext(), mustUser(c), id)
+	if err != nil {
+		if apiErr, ok := err.(httperror.APIError); ok && apiErr.Code == "EMAIL_DELIVERY_FAILED" {
+			return c.Status(apiErr.StatusCode).JSON(fiber.Map{
+				"data": invitation,
+				"error": fiber.Map{
+					"code":    apiErr.Code,
+					"message": apiErr.Message,
+				},
+			})
+		}
+		return err
+	}
+	return respond(c, invitation, nil)
+}
+
+func (h *Handler) previewInvitation(c *fiber.Ctx) error {
+	data, err := h.service.PreviewInvitation(c.UserContext(), c.Params("token"))
+	return respond(c, data, err)
 }
 
 func (h *Handler) listInvitations(c *fiber.Ctx) error {

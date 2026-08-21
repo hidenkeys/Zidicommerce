@@ -14,8 +14,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/email"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/jobs"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -529,6 +532,208 @@ func TestInviteMemberRejectsPlatformAdminRole(t *testing.T) {
 	if _, _, err := fx.service.InviteMember(context.Background(), fx.actor, InviteInput{Email: "bad@example.com", Role: authz.PlatformAdmin.String()}); err == nil {
 		t.Fatal("expected platform admin invitation to be rejected")
 	}
+}
+
+type capturingMailer struct {
+	messages []email.Message
+	err      error
+}
+
+func (m *capturingMailer) Send(message email.Message) error {
+	m.messages = append(m.messages, message)
+	return m.err
+}
+
+func TestInviteMemberSendsProfessionalEmail(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	mailer := &capturingMailer{}
+	fx.service.ConfigureNotifications(mailer, "https://admin.zidicommerce.example", nil)
+	_ = fx.db.Create(&organization.User{ID: fx.actor.ID, Email: "owner@example.com", FirstName: "Ada", LastName: "Merchant", PasswordHash: "x", Role: authz.MerchantAdmin, Status: "active"}).Error
+
+	invitation, token, err := fx.service.InviteMember(context.Background(), fx.actor, InviteInput{
+		Email:     "staff@example.com",
+		FirstName: "Store",
+		LastName:  "Staff",
+		Role:      authz.StoreStaff.String(),
+		StoreIDs:  []uuid.UUID{fx.store.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invitation.EmailStatus != "sent" || token == "" {
+		t.Fatalf("expected sent invitation, got %+v token=%q", invitation, token)
+	}
+	if len(mailer.messages) != 1 {
+		t.Fatalf("expected one email, got %d", len(mailer.messages))
+	}
+	message := mailer.messages[0]
+	if !strings.Contains(message.Subject, "Test Merchant") {
+		t.Fatalf("subject missing business name: %q", message.Subject)
+	}
+	if !strings.Contains(message.HTML, "Accept invitation") || !strings.Contains(message.HTML, "https://admin.zidicommerce.example/invitations/accept?token="+token) {
+		t.Fatal("invitation email missing accept URL")
+	}
+	if strings.Contains(message.HTML, invitation.TokenHash) || strings.Contains(message.Text, invitation.ID.String()) {
+		t.Fatal("invitation email leaked internal identifiers")
+	}
+}
+
+func TestDuplicateInvitationReusesPendingAndResends(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	mailer := &capturingMailer{}
+	fx.service.ConfigureNotifications(mailer, "https://admin.example.com", nil)
+	first, firstToken, err := fx.service.InviteMember(context.Background(), fx.actor, InviteInput{Email: "repeat@example.com", Role: authz.Viewer.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, secondToken, err := fx.service.InviteMember(context.Background(), fx.actor, InviteInput{Email: "repeat@example.com", Role: authz.StoreStaff.String(), StoreIDs: []uuid.UUID{fx.store.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID {
+		t.Fatal("expected pending invitation to be reused")
+	}
+	if firstToken == secondToken {
+		t.Fatal("expected resend to rotate the invitation token")
+	}
+	if second.Role != authz.StoreStaff {
+		t.Fatalf("expected role update, got %s", second.Role)
+	}
+	var count int64
+	if err := fx.db.Model(&organization.OrganizationInvitation{}).Where("organization_id = ? AND email = ?", fx.actor.OrganizationID, "repeat@example.com").Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one invitation row, got %d", count)
+	}
+	if len(mailer.messages) != 2 {
+		t.Fatalf("expected two emails, got %d", len(mailer.messages))
+	}
+}
+
+func TestInvitationEmailFailureKeepsInvitation(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	mailer := &capturingMailer{err: httperror.Unavailable("smtp authentication failed")}
+	fx.service.ConfigureNotifications(mailer, "https://admin.example.com", nil)
+	invitation, _, err := fx.service.InviteMember(context.Background(), fx.actor, InviteInput{Email: "fail@example.com", Role: authz.Viewer.String()})
+	if err == nil {
+		t.Fatal("expected email failure to be returned")
+	}
+	if !strings.Contains(err.Error(), "Invitation could not be sent") {
+		t.Fatalf("expected human-readable email error, got %v", err)
+	}
+	var stored organization.OrganizationInvitation
+	if err := fx.db.Where("id = ?", invitation.ID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "pending" || stored.EmailStatus != "failed" {
+		t.Fatalf("expected pending invitation with failed email, got %+v", stored)
+	}
+}
+
+func TestExistingUserInvitationRequiresMatchingPassword(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	hash, err := bcrypt.GenerateFromPassword([]byte("existing-pass"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := organization.User{ID: uuid.New(), Email: "existing@example.com", PasswordHash: string(hash), FirstName: "Existing", Role: authz.Viewer, Status: "active"}
+	if err := fx.db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, token, err := fx.service.InviteMember(context.Background(), fx.actor, InviteInput{Email: "existing@example.com", Role: authz.StoreStaff.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.AcceptInvitation(context.Background(), AcceptInvitationInput{Token: token, Password: "wrong-password"}); err == nil {
+		t.Fatal("expected wrong password to be rejected")
+	}
+	accepted, err := fx.service.AcceptInvitation(context.Background(), AcceptInvitationInput{Token: token, Password: "existing-pass"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted.UserID != user.ID || accepted.Role != authz.StoreStaff.String() {
+		t.Fatalf("unexpected acceptance %+v", accepted)
+	}
+}
+
+func TestInviteMemberRejectsExistingActiveMember(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	user := organization.User{ID: uuid.New(), Email: "member@example.com", PasswordHash: "x", Role: authz.StoreStaff, Status: "active"}
+	if err := fx.db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Create(&organization.OrganizationMembership{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, UserID: user.ID, Role: authz.StoreStaff, Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fx.service.InviteMember(context.Background(), fx.actor, InviteInput{Email: "member@example.com", Role: authz.Viewer.String()}); err == nil {
+		t.Fatal("expected existing member invitation to be rejected")
+	}
+}
+
+func TestPreviewInvitationDoesNotExposeTokenHash(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	invitation, token, err := fx.service.InviteMember(context.Background(), fx.actor, InviteInput{Email: "preview@example.com", Role: authz.Viewer.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := fx.service.PreviewInvitation(context.Background(), token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(preview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), invitation.TokenHash) || strings.Contains(string(encoded), invitation.ID.String()) {
+		t.Fatalf("preview leaked internal identifiers: %s", encoded)
+	}
+	if preview.BusinessName != "Test Merchant" || preview.Email != "preview@example.com" {
+		t.Fatalf("unexpected preview %+v", preview)
+	}
+}
+
+func TestResendInvitationRotatesTokenAndRejectsAccepted(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	mailer := &capturingMailer{}
+	fx.service.ConfigureNotifications(mailer, "https://admin.example.com", nil)
+	invitation, oldToken, err := fx.service.InviteMember(context.Background(), fx.actor, InviteInput{Email: "resend@example.com", Role: authz.Viewer.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resent, err := fx.service.ResendInvitation(context.Background(), fx.actor, invitation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resent.TokenHash == invitation.TokenHash {
+		t.Fatal("expected resend to rotate token hash")
+	}
+	if _, err := fx.service.PreviewInvitation(context.Background(), oldToken); err == nil {
+		t.Fatal("old invitation token should no longer preview")
+	}
+	if _, err := fx.service.AcceptInvitation(context.Background(), AcceptInvitationInput{Token: oldToken, Password: "password123"}); err == nil {
+		t.Fatal("old invitation token should no longer accept")
+	}
+	newToken := tokenFromAcceptURL(mailer.messages[len(mailer.messages)-1].Text)
+	if _, err := fx.service.AcceptInvitation(context.Background(), AcceptInvitationInput{Token: newToken, Password: "password123"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.ResendInvitation(context.Background(), fx.actor, invitation.ID); err == nil {
+		t.Fatal("accepted invitations cannot be resent")
+	}
+}
+
+func tokenFromAcceptURL(body string) string {
+	const marker = "token="
+	idx := strings.LastIndex(body, marker)
+	if idx < 0 {
+		return ""
+	}
+	token := strings.TrimSpace(body[idx+len(marker):])
+	if cut := strings.IndexAny(token, " \n\r"); cut >= 0 {
+		token = token[:cut]
+	}
+	return token
 }
 
 func TestStoreStaffSeesAssignedStoreOnly(t *testing.T) {

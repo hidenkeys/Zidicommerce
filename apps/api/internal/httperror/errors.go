@@ -32,6 +32,14 @@ func NotFound(message string) APIError {
 	return New(fiber.StatusNotFound, "RESOURCE_NOT_FOUND", message)
 }
 
+func Conflict(message string) APIError {
+	return New(fiber.StatusConflict, "CONFLICT", message)
+}
+
+func Unavailable(message string) APIError {
+	return New(fiber.StatusServiceUnavailable, "EMAIL_DELIVERY_FAILED", message)
+}
+
 func Internal(message string) APIError {
 	return New(fiber.StatusInternalServerError, "INTERNAL_ERROR", message)
 }

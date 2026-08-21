@@ -21,7 +21,7 @@ JWT_SECRET=replace-with-a-long-random-secret
 EMAIL_MODE=log
 ```
 
-Invitation email uses `EMAIL_MODE=log` locally by default. For SMTP-backed invitations set `EMAIL_MODE=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM`, and `APP_BASE_URL`.
+Invitation email uses `EMAIL_MODE=log` locally by default. For SMTP-backed invitations set `EMAIL_MODE=smtp`, `SMTP_HOST=smtp.zoho.com`, `SMTP_PORT=587`, `SMTP_TLS=starttls`, `SMTP_USER` (full Zoho address), `SMTP_PASSWORD` (Zoho app password if 2FA is on), `EMAIL_FROM`, `EMAIL_FROM_NAME`, and `APP_BASE_URL` (the Admin URL, never localhost in production). Production must use `EMAIL_MODE=smtp`; it will not silently fall back to log-only delivery.
 
 ## Database Setup
 

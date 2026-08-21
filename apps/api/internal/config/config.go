@@ -21,6 +21,15 @@ type Config struct {
 	JWT           JWTConfig
 	Payment       PaymentConfig
 	Email         EmailConfig
+	FieldService  FieldServiceConfig
+}
+
+// FieldServiceConfig controls the optional field-service pilot tenant. Seeding
+// is opt-in and never runs unless SeedDemo is explicitly enabled.
+type FieldServiceConfig struct {
+	SeedDemo          bool
+	DemoPassword      string
+	ProviderPortalURL string
 }
 
 type DatabaseConfig struct {
@@ -53,6 +62,8 @@ type EmailConfig struct {
 	SMTPUser   string
 	SMTPPass   string
 	From       string
+	FromName   string
+	TLSMode    string
 	AppBaseURL string
 }
 
@@ -83,13 +94,20 @@ func Load() (Config, error) {
 			PaystackSecret:      os.Getenv("PAYSTACK_SECRET_KEY"),
 			SecretEncryptionKey: os.Getenv("PAYMENT_SECRET_ENCRYPTION_KEY"),
 		},
+		FieldService: FieldServiceConfig{
+			SeedDemo:          strings.EqualFold(strings.TrimSpace(os.Getenv("FIELD_SERVICE_DEMO_SEED")), "true"),
+			DemoPassword:      strings.TrimSpace(os.Getenv("FIELD_SERVICE_DEMO_PASSWORD")),
+			ProviderPortalURL: strings.TrimRight(strings.TrimSpace(os.Getenv("FIELD_SERVICE_PORTAL_URL")), "/"),
+		},
 		Email: EmailConfig{
 			Mode:       getenv("EMAIL_MODE", "log"),
 			SMTPHost:   os.Getenv("SMTP_HOST"),
 			SMTPPort:   getenv("SMTP_PORT", "587"),
-			SMTPUser:   os.Getenv("SMTP_USER"),
+			SMTPUser:   firstEnv("SMTP_USER", "SMTP_USERNAME"),
 			SMTPPass:   os.Getenv("SMTP_PASSWORD"),
-			From:       getenv("EMAIL_FROM", "noreply@zidicommerce.local"),
+			From:       getenv("EMAIL_FROM", getenv("SMTP_FROM_EMAIL", "noreply@zidicommerce.local")),
+			FromName:   getenv("EMAIL_FROM_NAME", getenv("SMTP_FROM_NAME", "ZidiCommerce")),
+			TLSMode:    getenv("SMTP_TLS", "starttls"),
 			AppBaseURL: getenv("APP_BASE_URL", "http://localhost:3000"),
 		},
 	}
@@ -106,8 +124,28 @@ func Load() (Config, error) {
 	if cfg.ServerPort == "" {
 		return Config{}, errors.New("SERVER_PORT is required")
 	}
+	if err := cfg.Email.validate(cfg.AppEnv); err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
+}
+
+func (c EmailConfig) validate(appEnv string) error {
+	mode := strings.ToLower(strings.TrimSpace(c.Mode))
+	if strings.EqualFold(appEnv, "production") && mode != "smtp" {
+		return errors.New("EMAIL_MODE must be smtp in production")
+	}
+	if mode != "smtp" {
+		return nil
+	}
+	if strings.TrimSpace(c.SMTPHost) == "" || strings.TrimSpace(c.SMTPUser) == "" || strings.TrimSpace(c.SMTPPass) == "" || strings.TrimSpace(c.From) == "" {
+		return errors.New("SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and EMAIL_FROM are required when EMAIL_MODE=smtp")
+	}
+	if strings.Contains(strings.ToLower(c.AppBaseURL), "localhost") && strings.EqualFold(appEnv, "production") {
+		return errors.New("APP_BASE_URL must be the production admin URL")
+	}
+	return nil
 }
 
 func (c DatabaseConfig) DSN() string {
@@ -151,4 +189,13 @@ func getenv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func firstEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }

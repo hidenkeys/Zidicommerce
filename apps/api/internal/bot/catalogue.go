@@ -46,6 +46,11 @@ func SystemModules() []ModuleSpec {
 		{Key: "FAQ", Name: "FAQ", Category: "Support", Description: "Answer configured frequently asked questions."},
 		{Key: "HUMAN_HANDOFF", Name: "Human Handoff", Category: "Support", Description: "Route the customer to a staff/support handoff path."},
 		{Key: "CONTACT_SUPPORT", Name: "Contact Support", Category: "Support", Description: "Share support contact options or collect callback details."},
+		{Key: "SERVICE_BOOKING", Name: "Service booking", Category: "Field service", Description: "Configurable home-service request, booking fee, matching, and human handoff.", Parameters: []ParameterSpec{
+			{Name: "entry_step", Type: "string", Description: "First step when the module starts.", Default: "start"},
+			{Name: "menu_intent", Type: "string", Description: "Main menu intent key.", Default: "book_service"},
+			{Name: "menu_label", Type: "string", Description: "Customer-facing menu label.", Default: "Book a service"},
+		}},
 	}
 }
 
@@ -86,6 +91,13 @@ func SystemActions() []ActionSpec {
 		{Key: "notify_customer", Name: "Notify Customer", Category: "Notifications", Inputs: []string{"customer_id", "order_id", "message"}, Outputs: []string{"notification_id", "notification_status"}},
 		{Key: "notify_store", Name: "Notify Store", Category: "Notifications", Inputs: []string{"order_id", "message"}, Outputs: []string{"notification_id", "notification_status"}},
 		{Key: "handoff_to_agent", Name: "Handoff To Agent", Category: "Support", Inputs: []string{"customer_id", "reason"}, Outputs: []string{"handoff"}},
+		{Key: "get_service_welcome", Name: "Get Service Welcome", Category: "Field service", Outputs: []string{"welcome_message", "company_name", "message"}},
+		{Key: "list_service_pools", Name: "List Service Pools", Category: "Field service", Outputs: []string{"service_options", "count", "message"}},
+		{Key: "select_service_pool", Name: "Select Service Pool", Category: "Field service", Inputs: []string{"service_options", "selection"}, Outputs: []string{"pool_id", "service_name", "message"}},
+		{Key: "create_service_request", Name: "Create Service Request", Category: "Field service", Inputs: []string{"pool_id", "customer_name", "address", "description"}, Outputs: []string{"request_id", "request_code", "message"}},
+		{Key: "initialize_booking_fee", Name: "Initialize Booking Fee", Category: "Field service", Inputs: []string{"request_id"}, Outputs: []string{"payment_url", "payment_reference", "message"}},
+		{Key: "check_booking_payment", Name: "Check Booking Payment", Category: "Field service", Inputs: []string{"payment_reference"}, Outputs: []string{"payment_status", "message"}},
+		{Key: "submit_service_rating", Name: "Submit Service Rating", Category: "Field service", Inputs: []string{"score", "feedback"}, Outputs: []string{"ok", "message"}},
 	}
 }
 

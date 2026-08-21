@@ -5,7 +5,9 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080
 type JsonBody = Record<string, unknown> | Array<unknown>;
 
 const TOKEN_KEY = "zidicommerce_token";
-const PUBLIC_PATHS = new Set(["/auth/login", "/auth/register"]);
+function isPublicPath(path: string) {
+  return path === "/auth/login" || path === "/auth/register" || path.startsWith("/invitations/");
+}
 
 export const UNAUTHORIZED_EVENT = "zidicommerce:unauthorized";
 
@@ -26,7 +28,7 @@ async function request<T>(method: string, path: string, body?: JsonBody): Promis
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  if (token && !PUBLIC_PATHS.has(path)) {
+  if (token && !isPublicPath(path)) {
     headers.Authorization = `Bearer ${token}`;
   }
 
@@ -44,7 +46,7 @@ async function request<T>(method: string, path: string, body?: JsonBody): Promis
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     const message = payload?.error?.message ?? `Request failed with status ${response.status}`;
-    if (response.status === 401 && !PUBLIC_PATHS.has(path)) {
+    if (response.status === 401 && !isPublicPath(path)) {
       clearStoredToken();
       window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
     }

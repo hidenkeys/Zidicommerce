@@ -184,6 +184,16 @@ func (s *Service) HandlePaystackWebhook(ctx context.Context, body []byte, signat
 		result.Status = paymentWebhookProcessed
 		return nil
 	})
+	if err == nil && result.Status == paymentWebhookProcessed && result.OrderID != nil {
+		orgID := uuid.Nil
+		if result.PaymentID != nil {
+			var payment Payment
+			if s.db.WithContext(ctx).Select("organization_id, order_id").Where("id = ?", *result.PaymentID).First(&payment).Error == nil {
+				orgID = payment.OrganizationID
+				s.fireAfterPaymentPaid(ctx, orgID, payment.OrderID)
+			}
+		}
+	}
 	return result, err
 }
 

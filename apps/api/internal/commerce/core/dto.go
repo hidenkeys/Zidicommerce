@@ -244,8 +244,9 @@ func (i *OrderInput) normalize() {
 }
 
 type OrderItemInput struct {
-	VariantID uuid.UUID `json:"variant_id"`
-	Quantity  int       `json:"quantity"`
+	VariantID      uuid.UUID `json:"variant_id"`
+	Quantity       int       `json:"quantity"`
+	UnitPriceMinor *int64    `json:"unit_price_minor,omitempty"`
 }
 
 type OrderFilter struct {

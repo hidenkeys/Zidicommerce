@@ -18,6 +18,7 @@ import { PaymentsPage } from "./pages/Payments";
 import { SetupPage } from "./pages/Setup";
 import { StoresPage } from "./pages/Stores";
 import { TeamPage } from "./pages/Team";
+import { InviteAcceptPage } from "./pages/InviteAccept";
 import { WhatsAppPage } from "./pages/WhatsApp";
 
 type Row = Record<string, unknown>;
@@ -2409,6 +2410,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<LoginPage mode="register" />} />
+      <Route path="/invitations/accept" element={<InviteAcceptPage />} />
       <Route element={<RequireAuth />}>
         <Route element={<Shell />}>
           <Route index element={<OverviewPage />} />

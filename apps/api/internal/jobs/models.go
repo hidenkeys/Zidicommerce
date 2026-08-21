@@ -11,6 +11,7 @@ const (
 	JobTypeNotificationDelivery = "notification.deliver"
 	JobTypePaymentReconcile     = "payment.reconcile"
 	JobTypeMerchantImport       = "merchant.import"
+	JobTypeServiceDispatchTimeout = "fieldservice.dispatch.timeout"
 
 	StatusQueued            = "queued"
 	StatusProcessing        = "processing"

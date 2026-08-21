@@ -29,13 +29,14 @@ import (
 const defaultSessionTTL = 24 * time.Hour
 
 type Service struct {
-	db       *gorm.DB
-	commerce *core.Service
-	jobs     *jobs.Service
-	actions  *ActionRegistry
-	senders  map[string]ChannelSender
-	log      *slog.Logger
-	now      func() time.Time
+	db             *gorm.DB
+	commerce       *core.Service
+	jobs           *jobs.Service
+	actions        *ActionRegistry
+	senders        map[string]ChannelSender
+	log            *slog.Logger
+	handoffInbound HandoffInboundHandler
+	now            func() time.Time
 }
 
 func NewService(db *gorm.DB, commerce *core.Service, logger *slog.Logger) *Service {
@@ -154,6 +155,11 @@ func (s *Service) StartTestSession(ctx context.Context, actor auth.CurrentUser, 
 		return ConversationSession{}, err
 	}
 	start := InboundMessage{ChannelID: &channel.ID, TrustedOrganizationID: &actor.OrganizationID, SimulatorBotID: &input.BotID, ExternalMessageID: "start-" + uuid.NewString(), ExternalConversationID: defaultString(input.ExternalConversationID, "test-"+uuid.NewString()), Sender: defaultString(input.Sender, "simulator"), Text: "start", Timestamp: s.now(), SimulatorStart: true}
+	customer, err := s.resolveCustomer(ctx, channel, start)
+	if err != nil {
+		return ConversationSession{}, err
+	}
+	start.CustomerID = &customer.ID
 	session, _, err := s.loadOrCreateSession(ctx, channel, start)
 	return session, err
 }
@@ -166,12 +172,12 @@ func (s *Service) ProcessTestMessage(ctx context.Context, actor auth.CurrentUser
 	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, input.SessionID).First(&session).Error; err != nil {
 		return RuntimeResult{}, mapNotFoundCode(err, ErrSessionNotFound, "Runtime session not found")
 	}
-	inbound := InboundMessage{ChannelID: &session.ChannelID, TrustedOrganizationID: &actor.OrganizationID, ExternalMessageID: defaultString(input.ExternalMessageID, uuid.NewString()), ExternalConversationID: session.ExternalConversationID, Sender: "simulator", Text: input.Text, Location: input.Location, Metadata: input.Metadata, Timestamp: s.now()}
+	inbound := InboundMessage{ChannelID: &session.ChannelID, TrustedOrganizationID: &actor.OrganizationID, ExternalMessageID: defaultString(input.ExternalMessageID, uuid.NewString()), ExternalConversationID: session.ExternalConversationID, Sender: defaultString(session.ExternalConversationID, "simulator"), Text: input.Text, Location: input.Location, Metadata: input.Metadata, Timestamp: s.now()}
 	return s.ProcessMessage(ctx, inbound)
 }
 
 func (s *Service) ListConversations(ctx context.Context, actor auth.CurrentUser) ([]ConversationSummary, error) {
-	if !actor.Role.CanViewCommerce() {
+	if !actor.Role.CanViewCommerce() && actor.Role != authz.ServiceProvider {
 		return nil, httperror.Forbidden("You cannot view runtime conversations")
 	}
 	var sessions []ConversationSession
@@ -217,7 +223,7 @@ func (s *Service) ListConversations(ctx context.Context, actor auth.CurrentUser)
 }
 
 func (s *Service) GetConversation(ctx context.Context, actor auth.CurrentUser, sessionID uuid.UUID) (ConversationSession, error) {
-	if !actor.Role.CanViewCommerce() {
+	if !actor.Role.CanViewCommerce() && actor.Role != authz.ServiceProvider {
 		return ConversationSession{}, httperror.Forbidden("You cannot view runtime conversations")
 	}
 	var session ConversationSession
@@ -235,7 +241,7 @@ func (s *Service) ListConversationMessages(ctx context.Context, actor auth.Curre
 }
 
 func (s *Service) ReplyToConversation(ctx context.Context, actor auth.CurrentUser, sessionID uuid.UUID, input ConversationReplyInput) (ConversationMessage, error) {
-	if !actor.Role.CanOperateStore() && actor.Role != authz.SupportAgent {
+	if !actor.Role.CanOperateStore() && actor.Role != authz.SupportAgent && actor.Role != authz.ServiceProvider {
 		return ConversationMessage{}, httperror.Forbidden("You cannot reply to conversations")
 	}
 	text := strings.TrimSpace(input.Text)
@@ -493,11 +499,13 @@ func (s *Service) loadOrCreateSession(ctx context.Context, channel core.Channel,
 			session.Status = SessionExpired
 		}
 		shouldReset := input.SimulatorStart || isHardResetText(input.Text)
-		if !shouldReset && (session.Status == SessionActive || session.Status == SessionHandoff) {
-			snapshot, err := s.loadSnapshot(ctx, channel.OrganizationID, session.BotID, session.BotVersionID)
-			return session, snapshot, err
-		}
 		if !shouldReset {
+			if session.CustomerID == nil && input.CustomerID != nil {
+				if err := s.db.WithContext(ctx).Model(&ConversationSession{}).Where("id = ?", session.ID).Update("customer_id", input.CustomerID).Error; err != nil {
+					return session, bot.VersionConfiguration{}, err
+				}
+				session.CustomerID = input.CustomerID
+			}
 			snapshot, err := s.loadSnapshot(ctx, channel.OrganizationID, session.BotID, session.BotVersionID)
 			return session, snapshot, err
 		}
@@ -610,6 +618,19 @@ func (s *Service) execute(ctx context.Context, snapshot bot.VersionConfiguration
 			variables = map[string]any{}
 			runtimeContext.Variables = variables
 		} else {
+			if s.handoffInbound != nil {
+				handled, reply, err := s.handoffInbound(ctx, session.OrganizationID, session.ID, input.Text)
+				if err != nil {
+					return result, err
+				}
+				if handled {
+					messages := []OutboundMessage{}
+					if strings.TrimSpace(reply) != "" {
+						messages = append(messages, OutboundMessage{Type: MessageText, Text: reply})
+					}
+					return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Handoff: true, Messages: messages}, nil
+				}
+			}
 			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Handoff: true, Messages: []OutboundMessage{{Type: MessageText, Text: "A team member is handling this conversation. Type 'menu' if you want to start a new request."}}}, nil
 		}
 	}

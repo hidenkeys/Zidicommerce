@@ -103,12 +103,16 @@ Operator training (what every Admin module does, and how to run a merchant):
 ```text
 apps/
   api/      ZidiCommerce API
-  admin/    ZidiCommerce Admin shell
+  admin/    Commerce merchant admin
+  field/    Field-service owner + provider portals
 packages/
   shared/   Shared TypeScript types and constants
 migrations/ SQL migrations run by the API
 configs/    Safe example configuration
 docs/       Architecture and development documentation
+merchant-config/
+  bingchun/ Commerce pilot tenant data
+  lagoshome/ Field-service demo tenant notes
 ```
 
 ## Quick Start
@@ -123,10 +127,18 @@ go run ./cmd/api
 In another terminal:
 
 ```bash
-cd apps/admin
 npm install
-npm run dev
+npm run dev:admin
 ```
+
+Field-service (handyman) demo tenant:
+
+```bash
+cd apps/api && go run ./cmd/seed-fieldservice
+npm run dev:field
+```
+
+See `docs/field-service.md`.
 
 The API health endpoint is available at:
 

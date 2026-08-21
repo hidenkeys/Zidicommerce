@@ -130,6 +130,10 @@ func (s *Service) InviteMember(ctx context.Context, actor auth.CurrentUser, inpu
 		}
 	}
 
+	if err := s.ensureInviteeNotMember(ctx, actor.OrganizationID, input.Email); err != nil {
+		return organization.OrganizationInvitation{}, "", err
+	}
+
 	token, hash, err := secureInvitationToken()
 	if err != nil {
 		return organization.OrganizationInvitation{}, "", err
@@ -138,39 +142,139 @@ func (s *Service) InviteMember(ctx context.Context, actor auth.CurrentUser, inpu
 	if err != nil {
 		return organization.OrganizationInvitation{}, "", err
 	}
-	invitation := organization.OrganizationInvitation{
-		ID:              uuid.New(),
-		OrganizationID:  actor.OrganizationID,
-		Email:           input.Email,
-		FirstName:       input.FirstName,
-		LastName:        input.LastName,
-		Role:            role,
-		StoreIDs:        string(storeIDs),
-		Status:          "pending",
-		TokenHash:       hash,
-		InvitedByUserID: actor.ID,
-		ExpiresAt:       s.now().Add(7 * 24 * time.Hour),
-	}
+
+	var invitation organization.OrganizationInvitation
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		existing, findErr := findPendingInvitation(tx, actor.OrganizationID, input.Email)
+		if findErr != nil && findErr != gorm.ErrRecordNotFound {
+			return findErr
+		}
+		now := s.now()
+		if findErr == nil {
+			invitation = existing
+			invitation.FirstName = input.FirstName
+			invitation.LastName = input.LastName
+			invitation.Role = role
+			invitation.StoreIDs = string(storeIDs)
+			invitation.TokenHash = hash
+			invitation.InvitedByUserID = actor.ID
+			invitation.ExpiresAt = now.Add(7 * 24 * time.Hour)
+			invitation.EmailStatus = "pending"
+			invitation.EmailError = ""
+			invitation.UpdatedAt = now
+			if err := tx.Save(&invitation).Error; err != nil {
+				return err
+			}
+			return s.auditTx(tx, &actor.OrganizationID, &actor.ID, "invitation", &invitation.ID, "member_invite_resent", fmt.Sprintf(`{"email":%q,"role":%q}`, invitation.Email, invitation.Role))
+		}
+		invitation = organization.OrganizationInvitation{
+			ID:              uuid.New(),
+			OrganizationID:  actor.OrganizationID,
+			Email:           input.Email,
+			FirstName:       input.FirstName,
+			LastName:        input.LastName,
+			Role:            role,
+			StoreIDs:        string(storeIDs),
+			Status:          "pending",
+			TokenHash:       hash,
+			InvitedByUserID: actor.ID,
+			ExpiresAt:       now.Add(7 * 24 * time.Hour),
+			EmailStatus:     "pending",
+		}
 		if err := tx.Create(&invitation).Error; err != nil {
 			return err
 		}
-		if err := s.auditTx(tx, &actor.OrganizationID, &actor.ID, "invitation", &invitation.ID, "member_invited", fmt.Sprintf(`{"email":%q,"role":%q}`, invitation.Email, invitation.Role)); err != nil {
-			return err
-		}
-		return nil
+		return s.auditTx(tx, &actor.OrganizationID, &actor.ID, "invitation", &invitation.ID, "member_invited", fmt.Sprintf(`{"email":%q,"role":%q}`, invitation.Email, invitation.Role))
 	})
 	if err != nil {
 		return organization.OrganizationInvitation{}, "", err
 	}
-	if s.mailer != nil {
-		_ = s.mailer.Send(email.Message{
-			To:      invitation.Email,
-			Subject: "You have been invited to ZidiCommerce",
-			Text:    invitationEmailText(s.appBaseURL, token),
-		})
+	if err := s.sendInvitationEmail(ctx, invitation, token); err != nil {
+		_ = s.db.WithContext(ctx).Where("id = ?", invitation.ID).First(&invitation)
+		return invitation, "", err
 	}
+	_ = s.db.WithContext(ctx).Where("id = ?", invitation.ID).First(&invitation)
 	return invitation, token, nil
+}
+
+func (s *Service) ResendInvitation(ctx context.Context, actor auth.CurrentUser, invitationID uuid.UUID) (organization.OrganizationInvitation, error) {
+	if !actor.Role.CanManageOrganization() {
+		return organization.OrganizationInvitation{}, httperror.Forbidden("You cannot invite team members")
+	}
+	var invitation organization.OrganizationInvitation
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, invitationID).First(&invitation).Error; err != nil {
+		return organization.OrganizationInvitation{}, mapNotFound(err, "Invitation not found")
+	}
+	if invitation.Status == "accepted" {
+		return organization.OrganizationInvitation{}, httperror.BadRequest("This invitation has already been accepted")
+	}
+	if invitation.Status != "pending" {
+		return organization.OrganizationInvitation{}, httperror.BadRequest("This invitation can no longer be sent")
+	}
+	if err := s.ensureInviteeNotMember(ctx, actor.OrganizationID, invitation.Email); err != nil {
+		return organization.OrganizationInvitation{}, err
+	}
+	token, hash, err := secureInvitationToken()
+	if err != nil {
+		return organization.OrganizationInvitation{}, err
+	}
+	now := s.now()
+	invitation.TokenHash = hash
+	invitation.ExpiresAt = now.Add(7 * 24 * time.Hour)
+	invitation.EmailStatus = "pending"
+	invitation.EmailError = ""
+	invitation.InvitedByUserID = actor.ID
+	invitation.UpdatedAt = now
+	if err := s.db.WithContext(ctx).Save(&invitation).Error; err != nil {
+		return organization.OrganizationInvitation{}, err
+	}
+	_ = s.auditTx(s.db.WithContext(ctx), &actor.OrganizationID, &actor.ID, "invitation", &invitation.ID, "member_invite_resent", fmt.Sprintf(`{"email":%q}`, invitation.Email))
+	if err := s.sendInvitationEmail(ctx, invitation, token); err != nil {
+		_ = s.db.WithContext(ctx).Where("id = ?", invitation.ID).First(&invitation)
+		return invitation, err
+	}
+	_ = s.db.WithContext(ctx).Where("id = ?", invitation.ID).First(&invitation)
+	return invitation, nil
+}
+
+type InvitationPreview struct {
+	Email        string `json:"email"`
+	BusinessName string `json:"business_name"`
+	Role         string `json:"role"`
+	RoleLabel    string `json:"role_label"`
+	ExpiresAt    string `json:"expires_at"`
+	Expired      bool   `json:"expired"`
+	Accepted     bool   `json:"accepted"`
+	FirstName    string `json:"first_name"`
+	ExistingUser bool   `json:"existing_user"`
+}
+
+func (s *Service) PreviewInvitation(ctx context.Context, token string) (InvitationPreview, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return InvitationPreview{}, httperror.BadRequest("Invitation token is required")
+	}
+	var invitation organization.OrganizationInvitation
+	if err := s.db.WithContext(ctx).Where("token_hash = ?", hashInvitationToken(token)).First(&invitation).Error; err != nil {
+		return InvitationPreview{}, mapNotFound(err, "Invitation not found")
+	}
+	org, err := s.orgName(ctx, invitation.OrganizationID)
+	if err != nil {
+		org = "ZidiCommerce"
+	}
+	var existing int64
+	_ = s.db.WithContext(ctx).Model(&organization.User{}).Where("lower(email) = ?", strings.ToLower(invitation.Email)).Count(&existing).Error
+	return InvitationPreview{
+		Email:        invitation.Email,
+		BusinessName: org,
+		Role:         invitation.Role.String(),
+		RoleLabel:    invitationRoleLabel(invitation.Role.String()),
+		ExpiresAt:    invitation.ExpiresAt.UTC().Format(time.RFC3339),
+		Expired:      !invitation.ExpiresAt.After(s.now()) || invitation.Status != "pending",
+		Accepted:     invitation.Status == "accepted",
+		FirstName:    invitation.FirstName,
+		ExistingUser: existing > 0,
+	}, nil
 }
 
 func (s *Service) ListInvitations(ctx context.Context, actor auth.CurrentUser) ([]organization.OrganizationInvitation, error) {
@@ -219,6 +323,8 @@ func (s *Service) AcceptInvitation(ctx context.Context, input AcceptInvitationIn
 			}
 		} else if err != nil {
 			return err
+		} else if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
+			return httperror.BadRequest("This email already has an account. Use that account password to accept the invitation.")
 		}
 		membership := organization.OrganizationMembership{
 			ID:             uuid.New(),
@@ -395,6 +501,12 @@ func (s *Service) replaceMemberStoresTx(tx *gorm.DB, actor auth.CurrentUser, use
 }
 
 func (s *Service) auditTx(tx *gorm.DB, organizationID, actorID *uuid.UUID, targetType string, targetID *uuid.UUID, action string, metadata string) error {
+	// System-initiated work (the bot runtime, background jobs, seeders) has no
+	// user behind it. Writing the zero UUID would violate the actor foreign key,
+	// so those entries are recorded with no actor instead.
+	if actorID != nil && *actorID == uuid.Nil {
+		actorID = nil
+	}
 	log := organization.AuditLog{ID: uuid.New(), OrganizationID: organizationID, ActorUserID: actorID, TargetType: targetType, TargetID: targetID, Action: action, Metadata: jsonObject(metadata)}
 	return tx.Create(&log).Error
 }
@@ -413,11 +525,139 @@ func hashInvitationToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func invitationEmailText(appBaseURL string, token string) string {
-	if appBaseURL == "" {
-		appBaseURL = "http://localhost:3000"
+func invitationRoleLabel(role string) string {
+	switch authz.Role(role) {
+	case authz.MerchantAdmin:
+		return "Merchant Admin"
+	case authz.StoreManager:
+		return "Store Manager"
+	case authz.StoreStaff:
+		return "Store Staff"
+	case authz.SupportAgent:
+		return "Support Agent"
+	case authz.Viewer:
+		return "Viewer"
+	default:
+		return role
 	}
-	return fmt.Sprintf("You have been invited to ZidiCommerce.\n\nAccept your invitation here:\n%s/invitations/accept?token=%s\n\nThis invitation expires in 7 days.", appBaseURL, token)
+}
+
+func (s *Service) sendInvitationEmail(ctx context.Context, invitation organization.OrganizationInvitation, token string) error {
+	if s.mailer == nil {
+		return nil
+	}
+	orgName, _ := s.orgName(ctx, invitation.OrganizationID)
+	inviterName := "A teammate"
+	var inviter organization.User
+	if err := s.db.WithContext(ctx).Where("id = ?", invitation.InvitedByUserID).First(&inviter).Error; err == nil {
+		name := strings.TrimSpace(strings.TrimSpace(inviter.FirstName + " " + inviter.LastName))
+		if name != "" {
+			inviterName = name
+		} else if inviter.Email != "" {
+			inviterName = inviter.Email
+		}
+	}
+	storeNames := s.invitationStoreNames(ctx, invitation)
+	message := email.BuildInvitation(email.InvitationContent{
+		BusinessName:   orgName,
+		InviterName:    inviterName,
+		RoleLabel:      invitationRoleLabel(invitation.Role.String()),
+		StoreNames:     storeNames,
+		AcceptURL:      email.InvitationURL(s.appBaseURL, token),
+		ExpiresAt:      invitation.ExpiresAt,
+		RecipientEmail: invitation.Email,
+	})
+	if err := s.mailer.Send(message); err != nil {
+		human := email.SanitizeSMTPError(err)
+		now := s.now()
+		_ = s.db.WithContext(ctx).Model(&invitation).Updates(map[string]any{
+			"email_status": "failed",
+			"email_error":  human,
+			"updated_at":   now,
+		}).Error
+		if s.log != nil {
+			s.log.Error("email delivery failed", "provider", "smtp", "recipient_domain", recipientDomain(invitation.Email), "error", human)
+		}
+		invitation.EmailStatus = "failed"
+		invitation.EmailError = human
+		return httperror.Unavailable("Invitation could not be sent. " + human)
+	}
+	now := s.now()
+	_ = s.db.WithContext(ctx).Model(&invitation).Updates(map[string]any{
+		"email_status":  "sent",
+		"email_error":   "",
+		"email_sent_at": now,
+		"updated_at":    now,
+	}).Error
+	invitation.EmailStatus = "sent"
+	invitation.EmailSentAt = &now
+	if s.log != nil {
+		s.log.Info("email delivery succeeded", "provider", "smtp", "recipient_domain", recipientDomain(invitation.Email))
+	}
+	return nil
+}
+
+func (s *Service) orgName(ctx context.Context, organizationID uuid.UUID) (string, error) {
+	var org organization.Organization
+	if err := s.db.WithContext(ctx).Select("name").Where("id = ?", organizationID).First(&org).Error; err != nil {
+		return "", err
+	}
+	return org.Name, nil
+}
+
+func (s *Service) invitationStoreNames(ctx context.Context, invitation organization.OrganizationInvitation) []string {
+	if strings.TrimSpace(invitation.StoreIDs) == "" || invitation.StoreIDs == "[]" {
+		return nil
+	}
+	var storeIDs []uuid.UUID
+	if err := json.Unmarshal([]byte(invitation.StoreIDs), &storeIDs); err != nil || len(storeIDs) == 0 {
+		return nil
+	}
+	var stores []Store
+	if err := s.db.WithContext(ctx).Select("name").Where("organization_id = ? AND id IN ?", invitation.OrganizationID, storeIDs).Find(&stores).Error; err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(stores))
+	for _, store := range stores {
+		if strings.TrimSpace(store.Name) != "" {
+			names = append(names, store.Name)
+		}
+	}
+	return names
+}
+
+func (s *Service) ensureInviteeNotMember(ctx context.Context, organizationID uuid.UUID, emailAddress string) error {
+	var user organization.User
+	err := s.db.WithContext(ctx).Where("lower(email) = ?", strings.ToLower(emailAddress)).First(&user).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var membership organization.OrganizationMembership
+	err = s.db.WithContext(ctx).Where("organization_id = ? AND user_id = ? AND status = ?", organizationID, user.ID, "active").First(&membership).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return httperror.Conflict("This person already has access to the workspace")
+}
+
+func findPendingInvitation(tx *gorm.DB, organizationID uuid.UUID, emailAddress string) (organization.OrganizationInvitation, error) {
+	var invitation organization.OrganizationInvitation
+	err := tx.Where("organization_id = ? AND lower(email) = ? AND status = ?", organizationID, strings.ToLower(emailAddress), "pending").First(&invitation).Error
+	return invitation, err
+}
+
+func recipientDomain(address string) string {
+	at := strings.LastIndex(address, "@")
+	if at < 0 || at == len(address)-1 {
+		return "unknown"
+	}
+	return strings.ToLower(address[at+1:])
 }
 
 func canViewTeam(role authz.Role) bool {

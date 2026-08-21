@@ -78,6 +78,9 @@ type OrganizationInvitation struct {
 	AcceptedByUserID *uuid.UUID `gorm:"type:uuid" json:"accepted_by_user_id,omitempty"`
 	ExpiresAt        time.Time  `json:"expires_at"`
 	AcceptedAt       *time.Time `json:"accepted_at,omitempty"`
+	EmailStatus      string     `json:"email_status"`
+	EmailError       string     `json:"email_error,omitempty"`
+	EmailSentAt      *time.Time `json:"email_sent_at,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
 }

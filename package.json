@@ -3,14 +3,17 @@
   "private": true,
   "version": "0.1.0",
   "description": "ZidiCommerce monorepo",
-  "scripts": {
-    "dev:admin": "npm --workspace apps/admin run dev",
-    "build:admin": "npm --workspace apps/admin run build",
-    "test:api": "cd apps/api && go test ./..."
-  },
   "workspaces": [
     "apps/admin",
+    "apps/field",
     "packages/shared"
-  ]
+  ],
+  "scripts": {
+    "dev:admin": "npm --workspace apps/admin run dev",
+    "dev:field": "npm --workspace apps/field run dev",
+    "build:admin": "npm --workspace apps/admin run build",
+    "build:field": "npm --workspace apps/field run build",
+    "test:api": "cd apps/api && go test ./..."
+  }
 }
 

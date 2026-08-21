@@ -3,12 +3,13 @@ package authz
 type Role string
 
 const (
-	PlatformAdmin Role = "platform_admin"
-	MerchantAdmin Role = "merchant_admin"
-	StoreManager  Role = "store_manager"
-	StoreStaff    Role = "store_staff"
-	SupportAgent  Role = "support_agent"
-	Viewer        Role = "viewer"
+	PlatformAdmin   Role = "platform_admin"
+	MerchantAdmin   Role = "merchant_admin"
+	StoreManager    Role = "store_manager"
+	StoreStaff      Role = "store_staff"
+	SupportAgent    Role = "support_agent"
+	Viewer          Role = "viewer"
+	ServiceProvider Role = "service_provider"
 )
 
 func (r Role) String() string {
@@ -34,9 +35,13 @@ func (r Role) CanViewCommerce() bool {
 
 func IsValid(role string) bool {
 	switch Role(role) {
-	case PlatformAdmin, MerchantAdmin, StoreManager, StoreStaff, SupportAgent, Viewer:
+	case PlatformAdmin, MerchantAdmin, StoreManager, StoreStaff, SupportAgent, Viewer, ServiceProvider:
 		return true
 	default:
 		return false
 	}
+}
+
+func (r Role) IsServiceProvider() bool {
+	return r == ServiceProvider
 }

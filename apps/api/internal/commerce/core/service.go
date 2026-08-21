@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"time"
@@ -56,17 +57,22 @@ type Service struct {
 	paystackSecret          string
 	mailer                  email.Sender
 	appBaseURL              string
+	log                     *slog.Logger
 	jobs                    *jobs.Service
+	afterPaymentPaid        AfterPaymentPaid
 	now                     func() time.Time
 }
+
+type AfterPaymentPaid func(ctx context.Context, organizationID, orderID uuid.UUID, metadata string) error
 
 func NewService(db *gorm.DB, provider PaymentProvider) *Service {
 	return &Service{db: db, paymentProvider: provider, paystackProviderFactory: func(secret string) PaymentProvider { return NewPaystackProvider(secret) }, now: func() time.Time { return time.Now().UTC() }}
 }
 
-func (s *Service) ConfigureNotifications(mailer email.Sender, appBaseURL string) {
+func (s *Service) ConfigureNotifications(mailer email.Sender, appBaseURL string, logger *slog.Logger) {
 	s.mailer = mailer
 	s.appBaseURL = strings.TrimRight(appBaseURL, "/")
+	s.log = logger
 }
 
 func (s *Service) ConfigurePaymentWebhooks(paystackSecret string) {
@@ -79,6 +85,23 @@ func (s *Service) ConfigurePaymentSecretStore(store PaymentProviderSecretStore) 
 
 func (s *Service) ConfigureJobs(jobService *jobs.Service) {
 	s.jobs = jobService
+}
+
+func (s *Service) ConfigureAfterPaymentPaid(handler AfterPaymentPaid) {
+	s.afterPaymentPaid = handler
+}
+
+func (s *Service) fireAfterPaymentPaid(ctx context.Context, organizationID, orderID uuid.UUID) {
+	if s.afterPaymentPaid == nil || orderID == uuid.Nil {
+		return
+	}
+	var order Order
+	if err := s.db.WithContext(ctx).Select("id, metadata").Where("organization_id = ? AND id = ?", organizationID, orderID).First(&order).Error; err != nil {
+		return
+	}
+	if err := s.afterPaymentPaid(ctx, organizationID, orderID, order.Metadata); err != nil && s.log != nil {
+		s.log.Error("after payment paid hook failed", "error", err)
+	}
 }
 
 func (s *Service) CreateOrganization(ctx context.Context, actor auth.CurrentUser, input OrganizationInput) (organization.Organization, error) {
@@ -896,7 +919,11 @@ func (s *Service) CreateOrder(ctx context.Context, actor auth.CurrentUser, input
 			if err := tx.Where("organization_id = ? AND store_id = ? AND variant_id = ?", actor.OrganizationID, input.StoreID, item.VariantID).First(&inv).Error; err != nil {
 				return err
 			}
-			lineTotal, err := multiplyPrice(variant.PriceMinor, item.Quantity)
+			price := variant.PriceMinor
+			if item.UnitPriceMinor != nil && *item.UnitPriceMinor >= 0 {
+				price = *item.UnitPriceMinor
+			}
+			lineTotal, err := multiplyPrice(price, item.Quantity)
 			if err != nil {
 				return err
 			}
@@ -904,7 +931,7 @@ func (s *Service) CreateOrder(ctx context.Context, actor auth.CurrentUser, input
 			if order.SubtotalMinor < 0 || order.SubtotalMinor > math.MaxInt64-order.DeliveryFeeMinor {
 				return httperror.BadRequest("Order total overflow")
 			}
-			orderItem := OrderItem{ID: uuid.New(), OrganizationID: actor.OrganizationID, OrderID: order.ID, VariantID: variant.ID, ProductName: variant.Product.Name, VariantName: variant.Name, Quantity: item.Quantity, UnitPriceMinor: variant.PriceMinor, TotalMinor: lineTotal}
+			orderItem := OrderItem{ID: uuid.New(), OrganizationID: actor.OrganizationID, OrderID: order.ID, VariantID: variant.ID, ProductName: variant.Product.Name, VariantName: variant.Name, Quantity: item.Quantity, UnitPriceMinor: price, TotalMinor: lineTotal}
 			if err := tx.Create(&orderItem).Error; err != nil {
 				return err
 			}
@@ -1119,6 +1146,9 @@ func (s *Service) VerifyPayment(ctx context.Context, actor auth.CurrentUser, inp
 		}
 		return tx.Where("organization_id = ? AND id = ?", actor.OrganizationID, payment.ID).First(&payment).Error
 	})
+	if err == nil {
+		s.fireAfterPaymentPaid(ctx, actor.OrganizationID, payment.OrderID)
+	}
 	return payment, err
 }
 

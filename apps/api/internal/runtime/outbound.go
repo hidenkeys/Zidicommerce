@@ -42,7 +42,12 @@ func (s *Service) DispatchOutbound(ctx context.Context, channel core.Channel, in
 	deliveries := make([]ChannelOutboundMessage, 0, len(result.Messages))
 	for index, message := range result.Messages {
 		payload := s.channelPayload(channel, input.Sender, message)
-		sessionID := result.ConversationID
+		// Notifications sent outside a conversation carry no session.
+		var sessionRef *uuid.UUID
+		if result.ConversationID != uuid.Nil {
+			sessionID := result.ConversationID
+			sessionRef = &sessionID
+		}
 		idempotencyKey := outboundIdempotencyKey(input, result, index)
 		if existing, ok, err := s.findOutboundByIdempotency(ctx, channel, idempotencyKey); err != nil || ok {
 			if err != nil {
@@ -55,7 +60,7 @@ func (s *Service) DispatchOutbound(ctx context.Context, channel core.Channel, in
 			ID:                     uuid.New(),
 			OrganizationID:         channel.OrganizationID,
 			ChannelID:              channel.ID,
-			SessionID:              &sessionID,
+			SessionID:              sessionRef,
 			ExternalConversationID: input.ExternalConversationID,
 			Recipient:              input.Sender,
 			Provider:               channel.Provider,
