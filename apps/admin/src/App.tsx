@@ -795,16 +795,25 @@ function MerchantImportScreen() {
 
 function SupportHandoffsScreen() {
   const [rows, setRows] = useState<Row[]>([]);
+  const [tickets, setTickets] = useState<Row[]>([]);
   const [status, setStatus] = useState("open");
   const [resolveID, setResolveID] = useState("");
+  const [claimID, setClaimID] = useState("");
+  const [claimNote, setClaimNote] = useState("");
+  const [noteID, setNoteID] = useState("");
+  const [note, setNote] = useState("");
   const [resolutionNote, setResolutionNote] = useState("");
   const [message, setMessage] = useState("");
 
   async function load(nextStatus = status) {
     try {
       const query = nextStatus ? `?status=${encodeURIComponent(nextStatus)}` : "";
-      const response = await apiGet<Row[]>(`/runtime/support-handoffs${query}`);
-      setRows(response.data);
+      const [handoffResponse, ticketResponse] = await Promise.all([
+        apiGet<Row[]>(`/runtime/support-handoffs${query}`),
+        apiGet<Row[]>(`/runtime/support-tickets${query}`),
+      ]);
+      setRows(handoffResponse.data);
+      setTickets(ticketResponse.data);
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Request failed");
@@ -823,11 +832,27 @@ function SupportHandoffsScreen() {
     await load();
   }
 
+  async function claim(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<Row>(`/runtime/support-handoffs/${claimID}/claim`, { note: claimNote });
+    setClaimID("");
+    setClaimNote("");
+    await load();
+  }
+
+  async function addNote(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<Row>(`/runtime/support-handoffs/${noteID}/notes`, { note, internal: true });
+    setNoteID("");
+    setNote("");
+    await load();
+  }
+
   return (
     <section className="content">
       <div className="section-heading">
         <h2>Support Handoffs</h2>
-        <p>Review conversations paused for human support and resolve them once handled.</p>
+        <p>Review conversations paused for human support, claim ownership, add internal notes, and resolve once handled.</p>
       </div>
       <div className="split">
         <form className="resource-form" onSubmit={(event) => { event.preventDefault(); void load(); }}>
@@ -836,9 +861,24 @@ function SupportHandoffsScreen() {
             <option value="open">open</option>
             <option value="assigned">assigned</option>
             <option value="resolved">resolved</option>
+            <option value="cancelled">cancelled</option>
             <option value="">all</option>
           </select>
           <button type="submit">Refresh</button>
+        </form>
+        <form className="resource-form" onSubmit={claim}>
+          <strong>Claim handoff</strong>
+          <input placeholder="Handoff ID" value={claimID} onChange={(event) => setClaimID(event.target.value)} />
+          <input placeholder="Internal note" value={claimNote} onChange={(event) => setClaimNote(event.target.value)} />
+          <button type="submit">Claim</button>
+        </form>
+      </div>
+      <div className="split">
+        <form className="resource-form" onSubmit={addNote}>
+          <strong>Add note</strong>
+          <input placeholder="Handoff ID" value={noteID} onChange={(event) => setNoteID(event.target.value)} />
+          <input placeholder="Internal note" value={note} onChange={(event) => setNote(event.target.value)} />
+          <button type="submit">Add note</button>
         </form>
         <form className="resource-form" onSubmit={resolve}>
           <strong>Resolve handoff</strong>
@@ -847,7 +887,88 @@ function SupportHandoffsScreen() {
           <button type="submit">Resolve</button>
         </form>
       </div>
+      <ResourceTable rows={rows} title="Handoffs" message={message} />
+      <ResourceTable rows={tickets} title="Support tickets" />
+    </section>
+  );
+}
+
+function ConversationsScreen() {
+  const [rows, setRows] = useState<Row[]>([]);
+  const [message, setMessage] = useState("");
+
+  async function load() {
+    try {
+      const response = await apiGet<Row[]>("/runtime/conversations");
+      setRows(response.data);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Request failed");
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  return (
+    <section className="content">
+      <div className="section-heading">
+        <h2>Conversations</h2>
+        <p>Monitor customer sessions, current bot state, latest message, and active handoff status.</p>
+        <button type="button" onClick={load}>Refresh</button>
+      </div>
       <ResourceTable rows={rows} message={message} />
+    </section>
+  );
+}
+
+function ReadinessScreen() {
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
+  const [message, setMessage] = useState("");
+
+  async function load() {
+    try {
+      const response = await apiGet<SetupStatus>("/bot-setup/status");
+      setSetupStatus(response.data);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Request failed");
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  return (
+    <section className="content">
+      <div className="section-heading">
+        <h2>Production Readiness</h2>
+        <p>Check whether the merchant has the operational configuration required to go live.</p>
+        <button type="button" onClick={load}>Refresh</button>
+      </div>
+      {message ? <p className="error-text">{message}</p> : null}
+      <div className="grid">
+        <article className={setupStatus?.ready ? "summary-card success" : "summary-card warning"}>
+          <span>Status</span>
+          <p>{setupStatus?.ready ? "READY" : "NOT READY"}</p>
+        </article>
+        <article className="summary-card">
+          <span>Checks</span>
+          <p>{setupStatus ? `${setupStatus.complete_count} of ${setupStatus.total_count}` : "Loading"}</p>
+        </article>
+      </div>
+      <div className="table-wrap checklist-panel">
+        <div className="checklist">
+          {(setupStatus?.items ?? []).map((item) => (
+            <button key={item.key} className={item.complete ? "step complete" : "step"} type="button" title={item.description}>
+              <span>{item.complete ? "✓" : "○"}</span>
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
     </section>
   );
 }
@@ -1786,7 +1907,9 @@ export default function App() {
         <Route path="configuration/channels" element={<BasicResourceScreen resource="channels" />} />
         <Route path="automation/bots" element={<BotBuilderScreen />} />
         <Route path="automation/versions" element={<BotBuilderScreen />} />
+        <Route path="automation/conversations" element={<ConversationsScreen />} />
         <Route path="automation/support-handoffs" element={<SupportHandoffsScreen />} />
+        <Route path="settings/readiness" element={<ReadinessScreen />} />
         <Route path="settings/import" element={<MerchantImportScreen />} />
         <Route path="settings" element={<BusinessScreen />} />
         <Route path="*" element={<Placeholder title="Planned module" />} />

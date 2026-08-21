@@ -1,0 +1,80 @@
+{
+  "stores": [
+    {
+      "external_key": "bingchun-lagos-test-store",
+      "name": "Lagos Test Store",
+      "code": "BCNG-LAGOS-TEST",
+      "status": "active",
+      "address": "Replace with approved Bing Chun store address",
+      "city": "Lagos",
+      "country": "NG",
+      "hours": [
+        { "day_of_week": 1, "opens_at": "09:00", "closes_at": "21:00", "is_closed": false },
+        { "day_of_week": 2, "opens_at": "09:00", "closes_at": "21:00", "is_closed": false },
+        { "day_of_week": 3, "opens_at": "09:00", "closes_at": "21:00", "is_closed": false },
+        { "day_of_week": 4, "opens_at": "09:00", "closes_at": "21:00", "is_closed": false },
+        { "day_of_week": 5, "opens_at": "09:00", "closes_at": "21:00", "is_closed": false },
+        { "day_of_week": 6, "opens_at": "09:00", "closes_at": "21:00", "is_closed": false },
+        { "day_of_week": 0, "opens_at": "12:00", "closes_at": "20:00", "is_closed": false }
+      ],
+      "fulfilment_modes": [
+        { "mode": "pickup", "enabled": true },
+        { "mode": "customer_rider", "enabled": true },
+        { "mode": "merchant_rider", "enabled": true, "delivery_fee_minor": 0 }
+      ]
+    }
+  ],
+  "categories": [
+    { "external_key": "bingchun-fruit-tea", "name": "Fruit tea", "slug": "fruit-tea", "sort_order": 10, "status": "active" },
+    { "external_key": "bingchun-milk-tea", "name": "Milk tea", "slug": "milk-tea", "sort_order": 20, "status": "active" },
+    { "external_key": "bingchun-sundaes", "name": "Sundaes", "slug": "sundaes", "sort_order": 30, "status": "active" },
+    { "external_key": "bingchun-smoothies", "name": "Smoothies", "slug": "smoothies", "sort_order": 40, "status": "active" },
+    { "external_key": "bingchun-milkshakes", "name": "Milkshakes", "slug": "milkshakes", "sort_order": 50, "status": "active" },
+    { "external_key": "bingchun-toppings", "name": "Toppings", "slug": "toppings", "sort_order": 60, "status": "active" }
+  ],
+  "products": [
+    {
+      "external_key": "bingchun-milk-tea-placeholder",
+      "category_external_key": "bingchun-milk-tea",
+      "name": "Milk Tea",
+      "slug": "milk-tea",
+      "description": "Replace with approved Bing Chun product description.",
+      "status": "active",
+      "variants": [
+        {
+          "external_key": "bingchun-milk-tea-regular",
+          "sku": "BCNG-MT-REG",
+          "name": "Regular",
+          "price_minor": 0,
+          "currency": "NGN",
+          "status": "active"
+        }
+      ],
+      "images": [
+        {
+          "url": "https://example.com/replace-with-approved-image.png",
+          "alt_text": "Milk Tea"
+        }
+      ]
+    }
+  ],
+  "inventory": [
+    {
+      "store_external_key": "bingchun-lagos-test-store",
+      "variant_external_key": "bingchun-milk-tea-regular",
+      "on_hand": 0,
+      "reorder_threshold": 0
+    }
+  ],
+  "channels": [
+    {
+      "provider": "whatsapp",
+      "display_name": "Bing Chun WhatsApp",
+      "phone_number_id": "REPLACE_WITH_META_PHONE_NUMBER_ID",
+      "display_number": "+234REPLACE",
+      "status": "draft",
+      "config": "{\"verify_token\":\"REPLACE_WITH_VERIFY_TOKEN\",\"bot_id\":\"REPLACE_WITH_PUBLISHED_BOT_ID\"}",
+      "secret_config": "{}"
+    }
+  ]
+}

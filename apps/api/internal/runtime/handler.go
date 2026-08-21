@@ -24,7 +24,11 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Get("/runtime/conversations/:id", h.getConversation)
 	router.Get("/runtime/conversations/:id/messages", h.listConversationMessages)
 	router.Get("/runtime/support-handoffs", h.listSupportHandoffs)
+	router.Get("/runtime/support-tickets", h.listSupportTickets)
+	router.Post("/runtime/support-handoffs/:id/claim", h.claimSupportHandoff)
 	router.Post("/runtime/support-handoffs/:id/resolve", h.resolveSupportHandoff)
+	router.Get("/runtime/support-handoffs/:id/notes", h.listSupportHandoffNotes)
+	router.Post("/runtime/support-handoffs/:id/notes", h.addSupportHandoffNote)
 }
 
 func (h *Handler) RegisterPublic(router fiber.Router) {
@@ -78,6 +82,26 @@ func (h *Handler) listSupportHandoffs(c *fiber.Ctx) error {
 	return respond(c, data, err)
 }
 
+func (h *Handler) listSupportTickets(c *fiber.Ctx) error {
+	data, err := h.service.ListSupportTickets(c.UserContext(), currentUser(c), c.Query("status"))
+	return respond(c, data, err)
+}
+
+func (h *Handler) claimSupportHandoff(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input SupportHandoffClaimInput
+	if len(c.BodyRaw()) > 0 {
+		if err := bind(c, &input); err != nil {
+			return err
+		}
+	}
+	data, err := h.service.ClaimSupportHandoff(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
 func (h *Handler) resolveSupportHandoff(c *fiber.Ctx) error {
 	id, err := paramID(c, "id")
 	if err != nil {
@@ -90,6 +114,28 @@ func (h *Handler) resolveSupportHandoff(c *fiber.Ctx) error {
 		}
 	}
 	data, err := h.service.ResolveSupportHandoff(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) listSupportHandoffNotes(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.ListSupportHandoffNotes(c.UserContext(), currentUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) addSupportHandoffNote(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input SupportHandoffNoteInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.AddSupportHandoffNote(c.UserContext(), currentUser(c), id, input)
 	return respond(c, data, err)
 }
 

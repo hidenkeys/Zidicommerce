@@ -1,12 +1,23 @@
 # Merchant Deployment Runtime
 
-Phase 6 makes ZidiCommerce ready for a first real merchant without adding merchant-specific code. Bing Chun, or any later merchant, should be represented as organization-scoped configuration data.
+Phase 9 makes ZidiCommerce ready for a production merchant pilot without adding merchant-specific runtime code. Bing Chun, or any later merchant, is represented as organization-scoped configuration data.
 
 ## Onboard A Merchant
 
 1. Create or select the merchant organization in Admin.
 2. Add stores, hours, fulfilment modes, catalogue, variants, product images, inventory, channels, payments, and bot versions from the admin screens.
 3. For bulk setup, use `POST /v1/merchant-imports/configuration` with an authenticated merchant admin token.
+
+The import is validation-first and repeatable. It upserts using stable tenant-scoped natural keys:
+
+- store `code`
+- category `slug`
+- product `slug`
+- variant `sku`
+- inventory `store + variant`
+- channel `provider + phone_number_id` when available, otherwise `provider + display_name`
+
+Running the same import twice updates the existing tenant records instead of duplicating them.
 
 Minimal import shape:
 
@@ -75,6 +86,8 @@ Minimal import shape:
 
 Do not put real secrets in sample files or source control. Channel secrets are accepted by the API but are not returned in API responses.
 
+For Bing Chun, keep the real catalogue and pricing in import/configuration data such as `merchant-config/bingchun/*.json`. Do not add Bing Chun conditionals to backend/runtime code.
+
 ## WhatsApp
 
 Meta webhook URL:
@@ -126,6 +139,20 @@ The runtime exposes commerce actions through the existing commerce service, not 
 
 Prices and inventory are authoritative in the commerce service.
 
+## Complaints And Handoff
+
+The generic complaint action creates an organization-scoped `support_tickets` row and triggers a support handoff. The runtime also stores `support_handoffs` for conversations that require human intervention.
+
+Admin users can:
+
+- view active conversations from `Automation > Conversations`
+- view support tickets from `Automation > Support Handoffs`
+- claim a handoff
+- add internal notes
+- resolve the handoff and optionally resume the bot
+
+Support records are scoped by organization and linked to customer/session/order when available.
+
 ## Paystack
 
 Paystack webhook URL:
@@ -148,6 +175,23 @@ POST /v1/orders/{order_id}/transition
 
 with statuses such as `processing`, `ready`, `out_for_delivery`, `completed`, or `cancelled`.
 
+## Production Readiness
+
+Admin `System > Readiness` calls `GET /v1/bot-setup/status` and reports:
+
+- database query readiness
+- active stores
+- catalogue and variants
+- available inventory
+- active WhatsApp channel with provider identifiers
+- active payment configuration
+- published bot
+- FAQ coverage
+- outbound worker backlog
+- support backlog
+
+The screen returns `READY` only when all checklist items pass. It does not print or expose provider secrets.
+
 ## Local Verification
 
 Run:
@@ -155,8 +199,10 @@ Run:
 ```sh
 cd apps/api
 go test ./...
+go test -race ./...
 cd ../..
 npm run build --workspace apps/admin
+git diff --check
 ```
 
 Start local API and admin:

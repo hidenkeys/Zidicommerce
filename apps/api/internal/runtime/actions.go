@@ -666,9 +666,40 @@ func (a commerceActions) matchFAQ(ctx context.Context, runtimeContext RuntimeCon
 	return map[string]any{"matched": true, "faq_id": best.ID.String(), "answer": best.Answer, "message": best.Answer}, nil
 }
 
-func (a commerceActions) createComplaint(_ context.Context, runtimeContext RuntimeContext, inputs map[string]any) (map[string]any, error) {
+func (a commerceActions) createComplaint(ctx context.Context, runtimeContext RuntimeContext, inputs map[string]any) (map[string]any, error) {
+	customerID, err := requireSessionCustomer(runtimeContext)
+	if err != nil {
+		return nil, err
+	}
 	message := defaultString(stringValue(inputs["message"]), "Customer complaint")
-	return map[string]any{"complaint_id": formatRuntimeReference("cmp", runtimeContext.Session.ID), "status": "open", "handoff": true, "reason": message, "message": "Your complaint has been recorded. A team member will follow up."}, nil
+	var orderID *uuid.UUID
+	if raw := strings.TrimSpace(stringValue(inputs["order_id"])); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			return nil, runtimeError(ErrInvalidInput, "Order number is not valid.")
+		}
+		if _, err := a.getOrder(ctx, runtimeContext, map[string]any{"order_id": parsed.String()}); err != nil {
+			return nil, err
+		}
+		orderID = &parsed
+	}
+	ticket := SupportTicket{
+		ID:             uuid.New(),
+		OrganizationID: runtimeContext.Session.OrganizationID,
+		SessionID:      runtimeContext.Session.ID,
+		CustomerID:     &customerID,
+		OrderID:        orderID,
+		TicketType:     "complaint",
+		Status:         "open",
+		Subject:        defaultString(stringValue(inputs["subject"]), "Customer complaint"),
+		Description:    message,
+		MediaURL:       strings.TrimSpace(stringValue(inputs["media_url"])),
+		Metadata:       jsonMap(map[string]any{"channel_id": runtimeContext.Session.ChannelID.String(), "bot_id": runtimeContext.Session.BotID.String(), "bot_version_id": runtimeContext.Session.BotVersionID.String()}),
+	}
+	if err := a.db.WithContext(ctx).Create(&ticket).Error; err != nil {
+		return nil, runtimeErrorf(ErrActionFailed, "I could not record your complaint.", "create support ticket failed: %v", err)
+	}
+	return map[string]any{"complaint_id": ticket.ID.String(), "support_ticket_id": ticket.ID.String(), "status": ticket.Status, "handoff": true, "reason": message, "message": "Your complaint has been recorded. A team member will follow up."}, nil
 }
 
 func (a commerceActions) notifyCustomer(ctx context.Context, runtimeContext RuntimeContext, inputs map[string]any) (map[string]any, error) {

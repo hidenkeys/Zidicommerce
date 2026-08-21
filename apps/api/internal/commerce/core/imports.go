@@ -106,8 +106,8 @@ func (s *Service) ImportMerchantConfiguration(ctx context.Context, actor auth.Cu
 	result.JobID = job.ID
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, input := range input.Stores {
-			store := Store{ID: uuid.New(), OrganizationID: actor.OrganizationID, Name: strings.TrimSpace(input.Name), Code: strings.ToUpper(strings.TrimSpace(input.Code)), Status: defaultString(strings.ToLower(strings.TrimSpace(input.Status)), StatusActive), Address: strings.TrimSpace(input.Address), City: strings.TrimSpace(input.City), Country: strings.TrimSpace(input.Country), Latitude: input.Latitude, Longitude: input.Longitude, Metadata: jsonObject(input.Metadata)}
-			if err := tx.Create(&store).Error; err != nil {
+			store, err := s.upsertImportedStore(tx, actor.OrganizationID, input)
+			if err != nil {
 				return err
 			}
 			result.Stores[input.ExternalKey] = store.ID
@@ -116,29 +116,28 @@ func (s *Service) ImportMerchantConfiguration(ctx context.Context, actor auth.Cu
 			}
 		}
 		for _, input := range input.Categories {
-			category := Category{ID: uuid.New(), OrganizationID: actor.OrganizationID, Name: strings.TrimSpace(input.Name), Slug: strings.ToLower(strings.TrimSpace(input.Slug)), SortOrder: input.SortOrder, Status: defaultString(strings.ToLower(strings.TrimSpace(input.Status)), StatusActive)}
-			if err := tx.Create(&category).Error; err != nil {
+			category, err := s.upsertImportedCategory(tx, actor.OrganizationID, input)
+			if err != nil {
 				return err
 			}
 			result.Categories[input.ExternalKey] = category.ID
 		}
 		for _, input := range input.Products {
 			categoryID := result.Categories[input.CategoryExternalKey]
-			product := Product{ID: uuid.New(), OrganizationID: actor.OrganizationID, CategoryID: &categoryID, Name: strings.TrimSpace(input.Name), Slug: strings.ToLower(strings.TrimSpace(input.Slug)), Description: strings.TrimSpace(input.Description), Status: defaultString(strings.ToLower(strings.TrimSpace(input.Status)), StatusActive), Metadata: jsonObject(input.Metadata)}
-			if err := tx.Create(&product).Error; err != nil {
+			product, err := s.upsertImportedProduct(tx, actor.OrganizationID, categoryID, input)
+			if err != nil {
 				return err
 			}
 			result.Products[input.ExternalKey] = product.ID
 			for _, variantInput := range input.Variants {
-				variant := Variant{ID: uuid.New(), OrganizationID: actor.OrganizationID, ProductID: product.ID, SKU: strings.ToUpper(strings.TrimSpace(variantInput.SKU)), Name: strings.TrimSpace(variantInput.Name), PriceMinor: variantInput.PriceMinor, Currency: defaultString(strings.ToUpper(strings.TrimSpace(variantInput.Currency)), "NGN"), Status: defaultString(strings.ToLower(strings.TrimSpace(variantInput.Status)), StatusActive), Metadata: jsonObject(variantInput.Metadata)}
-				if err := tx.Create(&variant).Error; err != nil {
+				variant, err := s.upsertImportedVariant(tx, actor.OrganizationID, product.ID, variantInput)
+				if err != nil {
 					return err
 				}
 				result.Variants[variantInput.ExternalKey] = variant.ID
 			}
-			for _, imageInput := range input.Images {
-				image := ProductImage{ID: uuid.New(), OrganizationID: actor.OrganizationID, ProductID: product.ID, URL: strings.TrimSpace(imageInput.URL), AltText: strings.TrimSpace(imageInput.AltText), SortOrder: imageInput.SortOrder}
-				if err := tx.Create(&image).Error; err != nil {
+			if len(input.Images) > 0 {
+				if err := s.replaceImportedProductImages(tx, actor.OrganizationID, product.ID, input.Images); err != nil {
 					return err
 				}
 			}
@@ -146,14 +145,13 @@ func (s *Service) ImportMerchantConfiguration(ctx context.Context, actor auth.Cu
 		for _, input := range input.Inventory {
 			storeID := result.Stores[input.StoreExternalKey]
 			variantID := result.Variants[input.VariantExternalKey]
-			level := InventoryLevel{ID: uuid.New(), OrganizationID: actor.OrganizationID, StoreID: storeID, VariantID: variantID, OnHand: input.OnHand, ReorderThreshold: input.ReorderThreshold}
-			if err := tx.Create(&level).Error; err != nil {
+			if _, err := s.upsertImportedInventory(tx, actor.OrganizationID, storeID, variantID, input); err != nil {
 				return err
 			}
 		}
 		for _, input := range input.Channels {
-			channel := Channel{ID: uuid.New(), OrganizationID: actor.OrganizationID, Provider: strings.ToLower(strings.TrimSpace(input.Provider)), DisplayName: strings.TrimSpace(input.DisplayName), PhoneNumberID: strings.TrimSpace(input.PhoneNumberID), DisplayNumber: strings.TrimSpace(input.DisplayNumber), Status: defaultString(strings.ToLower(strings.TrimSpace(input.Status)), "draft"), Config: jsonObject(input.Config), SecretConfig: jsonObject(input.SecretConfig)}
-			if err := tx.Create(&channel).Error; err != nil {
+			channel, err := s.upsertImportedChannel(tx, actor.OrganizationID, input)
+			if err != nil {
 				return err
 			}
 			result.Channels = append(result.Channels, channel.ID)
@@ -164,6 +162,145 @@ func (s *Service) ImportMerchantConfiguration(ctx context.Context, actor auth.Cu
 		_ = s.db.WithContext(ctx).Model(&job).Updates(map[string]any{"status": "failed", "errors": jsonValue([]string{err.Error()})}).Error
 	}
 	return result, err
+}
+
+func (s *Service) upsertImportedStore(tx *gorm.DB, organizationID uuid.UUID, input StoreImportInput) (Store, error) {
+	code := strings.ToUpper(strings.TrimSpace(input.Code))
+	store := Store{}
+	err := tx.Where("organization_id = ? AND code = ?", organizationID, code).First(&store).Error
+	if err == nil {
+		updates := map[string]any{"name": strings.TrimSpace(input.Name), "status": defaultString(strings.ToLower(strings.TrimSpace(input.Status)), StatusActive), "address": strings.TrimSpace(input.Address), "city": strings.TrimSpace(input.City), "country": strings.TrimSpace(input.Country), "latitude": input.Latitude, "longitude": input.Longitude, "metadata": jsonObject(input.Metadata)}
+		if err := tx.Model(&store).Updates(updates).Error; err != nil {
+			return Store{}, err
+		}
+		return store, tx.Where("organization_id = ? AND code = ?", organizationID, code).First(&store).Error
+	}
+	if err != gorm.ErrRecordNotFound {
+		return Store{}, err
+	}
+	store = Store{ID: uuid.New(), OrganizationID: organizationID, Name: strings.TrimSpace(input.Name), Code: code, Status: defaultString(strings.ToLower(strings.TrimSpace(input.Status)), StatusActive), Address: strings.TrimSpace(input.Address), City: strings.TrimSpace(input.City), Country: strings.TrimSpace(input.Country), Latitude: input.Latitude, Longitude: input.Longitude, Metadata: jsonObject(input.Metadata)}
+	return store, tx.Create(&store).Error
+}
+
+func (s *Service) upsertImportedCategory(tx *gorm.DB, organizationID uuid.UUID, input CategoryImportInput) (Category, error) {
+	slug := strings.ToLower(strings.TrimSpace(input.Slug))
+	category := Category{}
+	err := tx.Where("organization_id = ? AND slug = ?", organizationID, slug).First(&category).Error
+	if err == nil {
+		updates := map[string]any{"name": strings.TrimSpace(input.Name), "sort_order": input.SortOrder, "status": defaultString(strings.ToLower(strings.TrimSpace(input.Status)), StatusActive)}
+		if err := tx.Model(&category).Updates(updates).Error; err != nil {
+			return Category{}, err
+		}
+		return category, tx.Where("organization_id = ? AND slug = ?", organizationID, slug).First(&category).Error
+	}
+	if err != gorm.ErrRecordNotFound {
+		return Category{}, err
+	}
+	category = Category{ID: uuid.New(), OrganizationID: organizationID, Name: strings.TrimSpace(input.Name), Slug: slug, SortOrder: input.SortOrder, Status: defaultString(strings.ToLower(strings.TrimSpace(input.Status)), StatusActive)}
+	return category, tx.Create(&category).Error
+}
+
+func (s *Service) upsertImportedProduct(tx *gorm.DB, organizationID, categoryID uuid.UUID, input ProductImportInput) (Product, error) {
+	slug := strings.ToLower(strings.TrimSpace(input.Slug))
+	product := Product{}
+	err := tx.Where("organization_id = ? AND slug = ?", organizationID, slug).First(&product).Error
+	if err == nil {
+		updates := map[string]any{"category_id": categoryID, "name": strings.TrimSpace(input.Name), "description": strings.TrimSpace(input.Description), "status": defaultString(strings.ToLower(strings.TrimSpace(input.Status)), StatusActive), "metadata": jsonObject(input.Metadata)}
+		if err := tx.Model(&product).Updates(updates).Error; err != nil {
+			return Product{}, err
+		}
+		return product, tx.Where("organization_id = ? AND slug = ?", organizationID, slug).First(&product).Error
+	}
+	if err != gorm.ErrRecordNotFound {
+		return Product{}, err
+	}
+	product = Product{ID: uuid.New(), OrganizationID: organizationID, CategoryID: &categoryID, Name: strings.TrimSpace(input.Name), Slug: slug, Description: strings.TrimSpace(input.Description), Status: defaultString(strings.ToLower(strings.TrimSpace(input.Status)), StatusActive), Metadata: jsonObject(input.Metadata)}
+	return product, tx.Create(&product).Error
+}
+
+func (s *Service) upsertImportedVariant(tx *gorm.DB, organizationID, productID uuid.UUID, input VariantImportInput) (Variant, error) {
+	sku := strings.ToUpper(strings.TrimSpace(input.SKU))
+	variant := Variant{}
+	err := tx.Where("organization_id = ? AND sku = ?", organizationID, sku).First(&variant).Error
+	if err == nil {
+		updates := map[string]any{"product_id": productID, "name": strings.TrimSpace(input.Name), "price_minor": input.PriceMinor, "currency": defaultString(strings.ToUpper(strings.TrimSpace(input.Currency)), "NGN"), "status": defaultString(strings.ToLower(strings.TrimSpace(input.Status)), StatusActive), "metadata": jsonObject(input.Metadata)}
+		if err := tx.Model(&variant).Updates(updates).Error; err != nil {
+			return Variant{}, err
+		}
+		return variant, tx.Where("organization_id = ? AND sku = ?", organizationID, sku).First(&variant).Error
+	}
+	if err != gorm.ErrRecordNotFound {
+		return Variant{}, err
+	}
+	variant = Variant{ID: uuid.New(), OrganizationID: organizationID, ProductID: productID, SKU: sku, Name: strings.TrimSpace(input.Name), PriceMinor: input.PriceMinor, Currency: defaultString(strings.ToUpper(strings.TrimSpace(input.Currency)), "NGN"), Status: defaultString(strings.ToLower(strings.TrimSpace(input.Status)), StatusActive), Metadata: jsonObject(input.Metadata)}
+	return variant, tx.Create(&variant).Error
+}
+
+func (s *Service) replaceImportedProductImages(tx *gorm.DB, organizationID, productID uuid.UUID, images []ProductImageInput) error {
+	if err := tx.Where("organization_id = ? AND product_id = ?", organizationID, productID).Delete(&ProductImage{}).Error; err != nil {
+		return err
+	}
+	for _, imageInput := range images {
+		image := ProductImage{ID: uuid.New(), OrganizationID: organizationID, ProductID: productID, URL: strings.TrimSpace(imageInput.URL), AltText: strings.TrimSpace(imageInput.AltText), SortOrder: imageInput.SortOrder}
+		if err := tx.Create(&image).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) upsertImportedInventory(tx *gorm.DB, organizationID, storeID, variantID uuid.UUID, input InventoryImportInput) (InventoryLevel, error) {
+	level := InventoryLevel{}
+	err := tx.Where("organization_id = ? AND store_id = ? AND variant_id = ?", organizationID, storeID, variantID).First(&level).Error
+	if err == nil {
+		updates := map[string]any{"on_hand": input.OnHand, "reorder_threshold": input.ReorderThreshold}
+		if err := tx.Model(&level).Updates(updates).Error; err != nil {
+			return InventoryLevel{}, err
+		}
+		return level, tx.Where("organization_id = ? AND store_id = ? AND variant_id = ?", organizationID, storeID, variantID).First(&level).Error
+	}
+	if err != gorm.ErrRecordNotFound {
+		return InventoryLevel{}, err
+	}
+	level = InventoryLevel{ID: uuid.New(), OrganizationID: organizationID, StoreID: storeID, VariantID: variantID, OnHand: input.OnHand, ReorderThreshold: input.ReorderThreshold}
+	return level, tx.Create(&level).Error
+}
+
+func (s *Service) upsertImportedChannel(tx *gorm.DB, organizationID uuid.UUID, input ChannelImportInput) (Channel, error) {
+	provider := strings.ToLower(strings.TrimSpace(input.Provider))
+	phoneNumberID := strings.TrimSpace(input.PhoneNumberID)
+	displayName := strings.TrimSpace(input.DisplayName)
+	channel := Channel{}
+	query := tx.Where("organization_id = ? AND provider = ?", organizationID, provider)
+	if phoneNumberID != "" {
+		query = query.Where("phone_number_id = ?", phoneNumberID)
+	} else {
+		query = query.Where("display_name = ?", displayName)
+	}
+	err := query.First(&channel).Error
+	if err == nil {
+		updates := map[string]any{"display_name": displayName, "phone_number_id": phoneNumberID, "display_number": strings.TrimSpace(input.DisplayNumber), "status": defaultString(strings.ToLower(strings.TrimSpace(input.Status)), "draft"), "config": jsonObject(input.Config)}
+		if strings.TrimSpace(input.SecretConfig) != "" {
+			updates["secret_config"] = jsonObject(input.SecretConfig)
+		}
+		if err := tx.Model(&channel).Updates(updates).Error; err != nil {
+			return Channel{}, err
+		}
+		return channel, tx.Where("organization_id = ? AND id = ?", organizationID, channel.ID).First(&channel).Error
+	}
+	if err != gorm.ErrRecordNotFound {
+		return Channel{}, err
+	}
+	if phoneNumberID != "" {
+		var existing Channel
+		if err := tx.Where("provider = ? AND phone_number_id = ? AND organization_id <> ?", provider, phoneNumberID, organizationID).First(&existing).Error; err == nil {
+			return Channel{}, httperror.BadRequest("Channel phone_number_id is already connected to another organization")
+		} else if err != gorm.ErrRecordNotFound {
+			return Channel{}, err
+		}
+	}
+	channel = Channel{ID: uuid.New(), OrganizationID: organizationID, Provider: provider, DisplayName: displayName, PhoneNumberID: phoneNumberID, DisplayNumber: strings.TrimSpace(input.DisplayNumber), Status: defaultString(strings.ToLower(strings.TrimSpace(input.Status)), "draft"), Config: jsonObject(input.Config), SecretConfig: jsonObject(input.SecretConfig)}
+	return channel, tx.Create(&channel).Error
 }
 
 func (s *Service) ListMerchantImportJobs(ctx context.Context, actor auth.CurrentUser) ([]MerchantImportJob, error) {

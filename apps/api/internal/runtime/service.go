@@ -150,13 +150,50 @@ func (s *Service) ProcessTestMessage(ctx context.Context, actor auth.CurrentUser
 	return s.ProcessMessage(ctx, inbound)
 }
 
-func (s *Service) ListConversations(ctx context.Context, actor auth.CurrentUser) ([]ConversationSession, error) {
+func (s *Service) ListConversations(ctx context.Context, actor auth.CurrentUser) ([]ConversationSummary, error) {
 	if !actor.Role.CanViewCommerce() {
 		return nil, httperror.Forbidden("You cannot view runtime conversations")
 	}
 	var sessions []ConversationSession
-	err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("updated_at DESC").Limit(100).Find(&sessions).Error
-	return sessions, err
+	if err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("updated_at DESC").Limit(100).Find(&sessions).Error; err != nil {
+		return nil, err
+	}
+	summaries := make([]ConversationSummary, 0, len(sessions))
+	for _, session := range sessions {
+		summary := ConversationSummary{
+			ID:                     session.ID,
+			OrganizationID:         session.OrganizationID,
+			BotID:                  session.BotID,
+			BotVersionID:           session.BotVersionID,
+			ChannelID:              session.ChannelID,
+			CustomerID:             session.CustomerID,
+			ExternalConversationID: session.ExternalConversationID,
+			CurrentStepKey:         session.CurrentStepKey,
+			ExpectedInput:          session.ExpectedInput,
+			Status:                 session.Status,
+			CurrentModule:          currentModuleName(session),
+			UpdatedAt:              session.UpdatedAt,
+			CreatedAt:              session.CreatedAt,
+		}
+		if session.CustomerID != nil {
+			var customer core.Customer
+			if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, *session.CustomerID).First(&customer).Error; err == nil {
+				summary.CustomerName = customer.Name
+				summary.CustomerPhone = customer.Phone
+			}
+		}
+		var last ConversationMessage
+		if err := s.db.WithContext(ctx).Where("organization_id = ? AND session_id = ?", actor.OrganizationID, session.ID).Order("created_at DESC").First(&last).Error; err == nil {
+			summary.LastMessage = last.Body
+			summary.LastMessageDirection = last.Direction
+		}
+		var handoff SupportHandoff
+		if err := s.db.WithContext(ctx).Where("organization_id = ? AND session_id = ? AND status IN ?", actor.OrganizationID, session.ID, []string{"open", "assigned"}).Order("created_at DESC").First(&handoff).Error; err == nil {
+			summary.HandoffStatus = handoff.Status
+		}
+		summaries = append(summaries, summary)
+	}
+	return summaries, nil
 }
 
 func (s *Service) GetConversation(ctx context.Context, actor auth.CurrentUser, sessionID uuid.UUID) (ConversationSession, error) {
@@ -187,6 +224,75 @@ func (s *Service) ListSupportHandoffs(ctx context.Context, actor auth.CurrentUse
 	}
 	var handoffs []SupportHandoff
 	return handoffs, query.Find(&handoffs).Error
+}
+
+func (s *Service) ListSupportTickets(ctx context.Context, actor auth.CurrentUser, status string) ([]SupportTicket, error) {
+	if !actor.Role.CanViewCommerce() && actor.Role != authz.SupportAgent {
+		return nil, httperror.Forbidden("You cannot view support tickets")
+	}
+	query := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("created_at DESC").Limit(100)
+	if strings.TrimSpace(status) != "" {
+		query = query.Where("status = ?", strings.TrimSpace(status))
+	}
+	var tickets []SupportTicket
+	return tickets, query.Find(&tickets).Error
+}
+
+func (s *Service) ClaimSupportHandoff(ctx context.Context, actor auth.CurrentUser, handoffID uuid.UUID, input SupportHandoffClaimInput) (SupportHandoff, error) {
+	if !actor.Role.CanOperateStore() && actor.Role != authz.SupportAgent {
+		return SupportHandoff{}, httperror.Forbidden("You cannot claim support handoffs")
+	}
+	var handoff SupportHandoff
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error; err != nil {
+			return mapNotFoundCode(err, ErrSessionNotFound, "Support handoff not found")
+		}
+		if handoff.Status == "resolved" {
+			return httperror.BadRequest("Resolved handoffs cannot be claimed")
+		}
+		now := s.now()
+		updates := map[string]any{"status": "assigned", "assigned_user_id": actor.ID, "updated_at": now}
+		if err := tx.Model(&handoff).Updates(updates).Error; err != nil {
+			return err
+		}
+		if strings.TrimSpace(input.Note) != "" {
+			note := SupportHandoffNote{ID: uuid.New(), OrganizationID: actor.OrganizationID, HandoffID: handoffID, ActorUserID: actor.ID, Note: strings.TrimSpace(input.Note), Internal: true}
+			if err := tx.Create(&note).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error
+	})
+	return handoff, err
+}
+
+func (s *Service) AddSupportHandoffNote(ctx context.Context, actor auth.CurrentUser, handoffID uuid.UUID, input SupportHandoffNoteInput) (SupportHandoffNote, error) {
+	if !actor.Role.CanViewCommerce() && actor.Role != authz.SupportAgent {
+		return SupportHandoffNote{}, httperror.Forbidden("You cannot add support notes")
+	}
+	noteText := strings.TrimSpace(input.Note)
+	if noteText == "" {
+		return SupportHandoffNote{}, httperror.BadRequest("Note is required")
+	}
+	var handoff SupportHandoff
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error; err != nil {
+		return SupportHandoffNote{}, mapNotFoundCode(err, ErrSessionNotFound, "Support handoff not found")
+	}
+	note := SupportHandoffNote{ID: uuid.New(), OrganizationID: actor.OrganizationID, HandoffID: handoffID, ActorUserID: actor.ID, Note: noteText, Internal: input.Internal}
+	return note, s.db.WithContext(ctx).Create(&note).Error
+}
+
+func (s *Service) ListSupportHandoffNotes(ctx context.Context, actor auth.CurrentUser, handoffID uuid.UUID) ([]SupportHandoffNote, error) {
+	if !actor.Role.CanViewCommerce() && actor.Role != authz.SupportAgent {
+		return nil, httperror.Forbidden("You cannot view support notes")
+	}
+	var handoff SupportHandoff
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error; err != nil {
+		return nil, mapNotFoundCode(err, ErrSessionNotFound, "Support handoff not found")
+	}
+	var notes []SupportHandoffNote
+	err := s.db.WithContext(ctx).Where("organization_id = ? AND handoff_id = ?", actor.OrganizationID, handoffID).Order("created_at ASC").Find(&notes).Error
+	return notes, err
 }
 
 func (s *Service) ResolveSupportHandoff(ctx context.Context, actor auth.CurrentUser, handoffID uuid.UUID, input SupportHandoffResolveInput) (SupportHandoff, error) {
@@ -409,6 +515,15 @@ func uuidFromAny(value any) *uuid.UUID {
 		return nil
 	}
 	return &parsed
+}
+
+func currentModuleName(session ConversationSession) string {
+	system := parseJSONMap(session.SystemContext)
+	stack := moduleStack(system)
+	if len(stack) == 0 {
+		return ""
+	}
+	return stack[len(stack)-1].ModuleKey
 }
 
 func (s *Service) execute(ctx context.Context, snapshot bot.VersionConfiguration, session *ConversationSession, input InboundMessage) (RuntimeResult, error) {

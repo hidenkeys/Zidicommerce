@@ -62,7 +62,7 @@ Phase 5 adds the deterministic Bot Runtime:
 - idempotent inbound message processing
 - runtime events and structured logging
 
-Phase 6 adds the first real merchant deployment layer:
+Phase 6-8 add the first real merchant deployment and self-service bot layer:
 
 - WhatsApp Cloud API outbound adapter
 - persisted outbound delivery records
@@ -73,6 +73,20 @@ Phase 6 adds the first real merchant deployment layer:
 - notification audit records
 - generic merchant JSON import tooling
 - admin access to merchant import and bot version views
+- self-service Bot Builder modules for order, track order, FAQ, complaints, and handoff
+- merchant payment configuration with secure secret storage and environment fallback
+- immutable published runtime snapshots
+- customer/order/payment isolation checks
+
+Phase 9 prepares the production merchant pilot path:
+
+- repeatable/idempotent merchant configuration import
+- Bing Chun pilot represented as tenant data, not runtime code
+- production readiness checklist in Admin
+- conversation visibility for active customer sessions
+- persisted complaint tickets
+- claimable support handoffs with internal notes
+- exact pilot E2E test for store, catalogue, inventory, payment, tracking, and customer isolation
 
 It intentionally does not include LLM orchestration or business-specific bot logic.
 

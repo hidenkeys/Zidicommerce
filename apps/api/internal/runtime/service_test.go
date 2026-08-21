@@ -88,6 +88,8 @@ func newRuntimeFixtureWithPaymentProvider(t *testing.T, config bot.VersionConfig
 		&RuntimeEvent{},
 		&ChannelOutboundMessage{},
 		&SupportHandoff{},
+		&SupportTicket{},
+		&SupportHandoffNote{},
 		&jobs.Job{},
 	); err != nil {
 		t.Fatal(err)
@@ -402,6 +404,102 @@ func TestRuntimeExecutesGeneratedSelfServiceOrderAndTrackingFlow(t *testing.T) {
 	otherTrack = sendOther("ss-track-other-menu", "track_order")
 	if strings.Contains(joinMessageTexts(otherTrack.Messages), orders[0].OrderNumber) {
 		t.Fatalf("expected other customer not to see first customer's order, got %+v", otherTrack.Messages)
+	}
+}
+
+func TestRuntimePhase9BingChunPilotOrderPaymentAndTrackingFlow(t *testing.T) {
+	config := bot.VersionConfiguration{Version: bot.BotVersion{StartStepKey: "start"}, Steps: []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepEnd, Title: "Done", Message: "Done."}}}
+	fx := newRuntimeFixture(t, config)
+	botService := bot.NewService(fx.db)
+	createdBot, err := botService.CreateSelfServiceBot(context.Background(), fx.actor, bot.SelfServiceBotInput{Name: "Bing Chun Nigeria"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions, err := botService.ListVersions(context.Background(), fx.actor, createdBot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := botService.PublishVersion(context.Background(), fx.actor, versions[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Model(&core.Channel{}).Where("id = ?", fx.channel.ID).Update("config", `{"bot_id":"`+createdBot.ID.String()+`"}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	store, err := fx.commerce.CreateStore(context.Background(), fx.actor, core.StoreInput{Name: "Lagos Test Store", Code: "LTS", Status: core.StatusActive, Address: "Lagos", FulfilmentModes: []core.StoreFulfilmentModeInput{{Mode: core.FulfilmentPickup, Enabled: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	category, err := fx.commerce.CreateCategory(context.Background(), fx.actor, core.CategoryInput{Name: "Drinks", Slug: "drinks", Status: core.StatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fruitTea, err := fx.commerce.CreateProduct(context.Background(), fx.actor, core.ProductInput{CategoryID: &category.ID, Name: "Fruit Tea", Slug: "fruit-tea", Status: core.StatusActive, Variants: []core.VariantInput{{SKU: "BCNG-FRUIT-001", Name: "Regular", PriceMinor: 180000, Currency: "NGN", Status: core.StatusActive}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	milkTea, err := fx.commerce.CreateProduct(context.Background(), fx.actor, core.ProductInput{CategoryID: &category.ID, Name: "Milk Tea", Slug: "milk-tea", Status: core.StatusActive, Variants: []core.VariantInput{{SKU: "BCNG-MILK-001", Name: "Regular", PriceMinor: 150000, Currency: "NGN", Status: core.StatusActive}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.commerce.UpsertInventory(context.Background(), fx.actor, core.InventoryCreateInput{StoreID: store.ID, VariantID: milkTea.Variants[0].ID, OnHand: 10, ReorderThreshold: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.commerce.UpsertInventory(context.Background(), fx.actor, core.InventoryCreateInput{StoreID: store.ID, VariantID: fruitTea.Variants[0].ID, OnHand: 5, ReorderThreshold: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	send := func(id string, text string) RuntimeResult {
+		t.Helper()
+		result, err := fx.service.ProcessMessage(context.Background(), InboundMessage{ChannelID: &fx.channel.ID, ExternalMessageID: id, ExternalConversationID: "2348000000000", Sender: "2348000000000", Text: text})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	send("bc-1", "start")
+	for index, text := range []string{"order", "1", "1", "1", "2", "add_more", "1", "2", "1", "review", "1", "pilot@example.com"} {
+		send("bc-order-"+strconv.Itoa(index), text)
+	}
+	var customer core.Customer
+	if err := fx.db.Where("organization_id = ? AND phone = ?", fx.actor.OrganizationID, "2348000000000").First(&customer).Error; err != nil {
+		t.Fatal(err)
+	}
+	var orders []core.Order
+	if err := fx.db.Where("organization_id = ? AND customer_id = ?", fx.actor.OrganizationID, customer.ID).Find(&orders).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(orders) != 1 || orders[0].TotalMinor != 480000 || orders[0].Status != core.OrderAwaitingPayment {
+		t.Fatalf("expected one NGN 4800 awaiting-payment order, got %+v", orders)
+	}
+	paid := send("bc-paid", "paid")
+	if !strings.Contains(joinMessageTexts(paid.Messages), "Payment confirmed") {
+		t.Fatalf("expected payment confirmation, got %+v", paid.Messages)
+	}
+	var milkInventory core.InventoryLevel
+	if err := fx.db.Where("organization_id = ? AND store_id = ? AND variant_id = ?", fx.actor.OrganizationID, store.ID, milkTea.Variants[0].ID).First(&milkInventory).Error; err != nil {
+		t.Fatal(err)
+	}
+	if milkInventory.OnHand != 8 {
+		t.Fatalf("expected milk tea inventory 8, got %d", milkInventory.OnHand)
+	}
+	var fruitInventory core.InventoryLevel
+	if err := fx.db.Where("organization_id = ? AND store_id = ? AND variant_id = ?", fx.actor.OrganizationID, store.ID, fruitTea.Variants[0].ID).First(&fruitInventory).Error; err != nil {
+		t.Fatal(err)
+	}
+	if fruitInventory.OnHand != 4 {
+		t.Fatalf("expected fruit tea inventory 4, got %d", fruitInventory.OnHand)
+	}
+	send("bc-track-start", "start")
+	track := send("bc-track-menu", "Track order")
+	if !strings.Contains(joinMessageTexts(track.Messages), orders[0].OrderNumber) {
+		t.Fatalf("expected customer to track own order, got %+v", track.Messages)
+	}
+	other, err := fx.service.ProcessMessage(context.Background(), InboundMessage{ChannelID: &fx.channel.ID, ExternalMessageID: "bc-other", ExternalConversationID: "2348000000001", Sender: "2348000000001", Text: "Track order"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(joinMessageTexts(other.Messages), orders[0].OrderNumber) {
+		t.Fatalf("expected second customer isolation, got %+v", other.Messages)
 	}
 }
 
@@ -840,6 +938,64 @@ func TestRuntimeHandoffPausesAutomation(t *testing.T) {
 	}
 	if resolved.Status != "resolved" || resolved.ResolvedAt == nil {
 		t.Fatalf("expected resolved handoff, got %+v", resolved)
+	}
+}
+
+func TestRuntimeComplaintCreatesSupportTicketAndHandoff(t *testing.T) {
+	questionID := uuid.New()
+	actionID := uuid.New()
+	config := bot.VersionConfiguration{
+		Version:   bot.BotVersion{StartStepKey: "ask_complaint"},
+		Questions: []bot.Question{{ID: questionID, QuestionKey: "complaint_text", Text: "Tell us what happened.", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "complaint_text"}},
+		Actions:   []bot.Action{{ID: actionID, ActionKey: "create_complaint", ActionType: "create_complaint", Name: "Create complaint", InputMappings: `{"message":"variables.complaint_text"}`, OutputMappings: `{"support_ticket_id":"variables.support_ticket_id"}`}},
+		Steps: []bot.Step{
+			{ID: uuid.New(), StepKey: "ask_complaint", Type: bot.StepQuestion, Title: "Complaint", QuestionID: &questionID, NextStepKey: "create_complaint"},
+			{ID: uuid.New(), StepKey: "create_complaint", Type: bot.StepAction, Title: "Create complaint", ActionID: &actionID, NextStepKey: "done"},
+			{ID: uuid.New(), StepKey: "done", Type: bot.StepEnd, Title: "Done", Message: "Complaint {{variables.support_ticket_id}} recorded."},
+		},
+	}
+	fx := newRuntimeFixture(t, config)
+	if _, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, "cmp-1", "conv-complaint", "start")); err != nil {
+		t.Fatal(err)
+	}
+	result, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, "cmp-2", "conv-complaint", "The drink spilled"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Handoff || result.SessionStatus != SessionHandoff {
+		t.Fatalf("expected complaint to trigger handoff, got %+v", result)
+	}
+	var ticket SupportTicket
+	if err := fx.db.Where("organization_id = ? AND session_id = ?", fx.actor.OrganizationID, result.ConversationID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ticket.CustomerID == nil || ticket.TicketType != "complaint" || !strings.Contains(ticket.Description, "spilled") {
+		t.Fatalf("expected persisted complaint ticket, got %+v", ticket)
+	}
+	var handoff SupportHandoff
+	if err := fx.db.Where("organization_id = ? AND session_id = ?", fx.actor.OrganizationID, result.ConversationID).First(&handoff).Error; err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := fx.service.ClaimSupportHandoff(context.Background(), fx.actor, handoff.ID, SupportHandoffClaimInput{Note: "Taking this"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.Status != "assigned" || claimed.AssignedUserID == nil || *claimed.AssignedUserID != fx.actor.ID {
+		t.Fatalf("expected claimed handoff, got %+v", claimed)
+	}
+	note, err := fx.service.AddSupportHandoffNote(context.Background(), fx.actor, handoff.ID, SupportHandoffNoteInput{Note: "Customer needs replacement", Internal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if note.ID == uuid.Nil || !note.Internal {
+		t.Fatalf("expected internal note, got %+v", note)
+	}
+	notes, err := fx.service.ListSupportHandoffNotes(context.Background(), fx.actor, handoff.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notes) != 2 {
+		t.Fatalf("expected claim note and manual note, got %+v", notes)
 	}
 }
 

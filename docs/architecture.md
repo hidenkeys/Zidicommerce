@@ -275,3 +275,5 @@ Not reused:
 - legacy campaign/reward handlers
 - in-memory WhatsApp bot sessions
 - payment/email utilities from the monolith
+
+Phase 9 keeps the same architecture for the Bing Chun pilot: merchant setup is imported and managed as tenant data, while the generic runtime continues to execute published bot snapshots and commerce services. Support tickets, support handoff notes, and readiness checks are operational additions, not a merchant-specific fork.

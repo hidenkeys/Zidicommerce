@@ -83,6 +83,36 @@ type SupportHandoffResolveInput struct {
 	ResumeBot      bool   `json:"resume_bot"`
 }
 
+type SupportHandoffClaimInput struct {
+	Note string `json:"note"`
+}
+
+type SupportHandoffNoteInput struct {
+	Note     string `json:"note"`
+	Internal bool   `json:"internal"`
+}
+
+type ConversationSummary struct {
+	ID                     uuid.UUID  `json:"id"`
+	OrganizationID         uuid.UUID  `json:"organization_id"`
+	BotID                  uuid.UUID  `json:"bot_id"`
+	BotVersionID           uuid.UUID  `json:"bot_version_id"`
+	ChannelID              uuid.UUID  `json:"channel_id"`
+	CustomerID             *uuid.UUID `json:"customer_id,omitempty"`
+	CustomerName           string     `json:"customer_name"`
+	CustomerPhone          string     `json:"customer_phone"`
+	ExternalConversationID string     `json:"external_conversation_id"`
+	CurrentStepKey         string     `json:"current_step_key"`
+	ExpectedInput          string     `json:"expected_input"`
+	Status                 string     `json:"status"`
+	CurrentModule          string     `json:"current_module"`
+	LastMessage            string     `json:"last_message"`
+	LastMessageDirection   string     `json:"last_message_direction"`
+	HandoffStatus          string     `json:"handoff_status"`
+	UpdatedAt              time.Time  `json:"updated_at"`
+	CreatedAt              time.Time  `json:"created_at"`
+}
+
 type WhatsAppWebhookPayload struct {
 	Object string `json:"object"`
 	Entry  []struct {

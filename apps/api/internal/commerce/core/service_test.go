@@ -740,7 +740,7 @@ func TestReconcilePaymentPreservesDiscrepancyWhenLocalPaidProviderFailed(t *test
 
 func TestMerchantImportCreatesConfigurationTransactionally(t *testing.T) {
 	fx := newCommerceFixture(t, 5)
-	result, err := fx.service.ImportMerchantConfiguration(context.Background(), fx.actor, MerchantImportInput{
+	input := MerchantImportInput{
 		Stores:     []StoreImportInput{{ExternalKey: "store-1", Name: "Import Store", Code: "IMP", FulfilmentModes: []StoreFulfilmentModeInput{{Mode: FulfilmentPickup, Enabled: true}}}},
 		Categories: []CategoryImportInput{{ExternalKey: "cat-1", Name: "Drinks", Slug: "drinks"}},
 		Products: []ProductImportInput{{
@@ -753,7 +753,8 @@ func TestMerchantImportCreatesConfigurationTransactionally(t *testing.T) {
 		}},
 		Inventory: []InventoryImportInput{{StoreExternalKey: "store-1", VariantExternalKey: "variant-1", OnHand: 12, ReorderThreshold: 3}},
 		Channels:  []ChannelImportInput{{Provider: "whatsapp", DisplayName: "WhatsApp", PhoneNumberID: "phone-import", Status: StatusActive, Config: `{}`}},
-	})
+	}
+	result, err := fx.service.ImportMerchantConfiguration(context.Background(), fx.actor, input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -766,6 +767,33 @@ func TestMerchantImportCreatesConfigurationTransactionally(t *testing.T) {
 	}
 	if jobs != 1 {
 		t.Fatalf("expected completed import job, got %d", jobs)
+	}
+	second, err := fx.service.ImportMerchantConfiguration(context.Background(), fx.actor, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Stores["store-1"] != result.Stores["store-1"] || second.Variants["variant-1"] != result.Variants["variant-1"] || second.Channels[0] != result.Channels[0] {
+		t.Fatalf("expected repeat import to reuse records, first=%+v second=%+v", result, second)
+	}
+	counts := map[string]struct {
+		model any
+		want  int64
+	}{
+		"stores":     {&Store{}, 2},
+		"categories": {&Category{}, 1},
+		"products":   {&Product{}, 2},
+		"variants":   {&Variant{}, 2},
+		"inventory":  {&InventoryLevel{}, 2},
+		"channels":   {&Channel{}, 1},
+	}
+	for label, check := range counts {
+		var got int64
+		if err := fx.db.Model(check.model).Where("organization_id = ?", fx.actor.OrganizationID).Count(&got).Error; err != nil {
+			t.Fatal(err)
+		}
+		if got != check.want {
+			t.Fatalf("expected %s count %d after repeat import, got %d", label, check.want, got)
+		}
 	}
 }
 

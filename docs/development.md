@@ -241,7 +241,5 @@ Do not add these before a later AI/channel integration phase:
 
 - Bing Chun-specific logic
 - LLM orchestration
-- outbound WhatsApp Cloud API sending
 - advanced analytics
-- full support agent console
 - business-specific delivery/rider workflows

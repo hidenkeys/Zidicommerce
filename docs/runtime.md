@@ -249,8 +249,8 @@ Metrics are represented as event data and processing duration metadata for now. 
 ## Limitations
 
 - No LLM or AI intent detection yet.
-- No live outbound WhatsApp API sender yet; the adapter translates payloads, but sending is intentionally left for a later integration pass.
-- No full support agent console.
+- WhatsApp outbound sending is asynchronous through persisted outbound records and the background worker.
+- Support operations are intentionally compact: conversation list, support tickets, claim, internal notes, and resolve.
 - No Redis snapshot cache. Published snapshots are loaded from DB behind a clean service boundary.
-- Module execution supports entry-step routing, not a full nested call stack yet.
+- Module execution supports entry-step routing with a bounded nested call stack.
 - Payment initialization is supported, but payment success still requires trusted provider verification.

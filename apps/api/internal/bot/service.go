@@ -964,13 +964,17 @@ func (s *Service) GetSetupStatus(ctx context.Context, actor auth.CurrentUser) (B
 	}
 	orgID := actor.OrganizationID
 	items := []ChecklistItem{
+		{Key: "database", Label: "Database", Complete: true, Description: "The API can query the tenant database."},
 		{Key: "stores", Label: "Stores", Complete: count(&core.Store{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0, Description: "At least one active store is available."},
 		{Key: "catalogue", Label: "Catalogue", Complete: count(&core.Product{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0 && count(&core.Variant{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0, Description: "Products and sellable variants exist."},
 		{Key: "inventory", Label: "Inventory", Complete: count(&core.InventoryLevel{}, "organization_id = ? AND on_hand > reserved", orgID) > 0, Description: "At least one item has available stock."},
-		{Key: "whatsapp", Label: "WhatsApp", Complete: count(&core.Channel{}, "organization_id = ? AND provider = ? AND status = ?", orgID, "whatsapp", core.StatusActive) > 0, Description: "An active WhatsApp channel is connected."},
+		{Key: "whatsapp", Label: "WhatsApp", Complete: count(&core.Channel{}, "organization_id = ? AND provider = ? AND status = ? AND phone_number_id <> ''", orgID, "whatsapp", core.StatusActive) > 0, Description: "An active WhatsApp channel with provider identifiers is connected."},
 		{Key: "payments", Label: "Payments", Complete: count(&core.PaymentConfiguration{}, "organization_id = ? AND provider = ? AND enabled = ? AND status = ?", orgID, "paystack", true, core.StatusActive) > 0, Description: "A Paystack configuration is enabled."},
 		{Key: "bot", Label: "Bot", Complete: count(&Bot{}, "organization_id = ? AND published_version_id IS NOT NULL AND status = ?", orgID, BotStatusActive) > 0, Description: "A customer bot has a published version."},
 		{Key: "faqs", Label: "FAQs", Complete: count(&FAQ{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0, Description: "At least one FAQ answer is configured."},
+		{Key: "worker", Label: "Worker", Complete: count(&core.CommerceNotification{}, "organization_id = ? AND status IN ?", orgID, []string{"queued", "retry_pending", "failed"}) == 0, Description: "No stuck commerce notifications are waiting for the outbound worker."},
+		{Key: "outbound", Label: "Outbound", Complete: count(&runtimeOutboundModel{}, "organization_id = ? AND status IN ?", orgID, []string{"queued", "retry_pending", "failed"}) == 0, Description: "No stuck channel outbound messages are waiting for retry."},
+		{Key: "support", Label: "Support", Complete: count(&runtimeSupportHandoffModel{}, "organization_id = ? AND status IN ?", orgID, []string{"open", "assigned"}) == 0, Description: "No unresolved human handoffs are currently pending."},
 	}
 	done := 0
 	for _, item := range items {
@@ -980,6 +984,14 @@ func (s *Service) GetSetupStatus(ctx context.Context, actor auth.CurrentUser) (B
 	}
 	return BotSetupStatus{OrganizationID: orgID, Items: items, CompleteCount: done, TotalCount: len(items), Ready: done == len(items)}, nil
 }
+
+type runtimeOutboundModel struct{}
+
+func (runtimeOutboundModel) TableName() string { return "channel_outbound_messages" }
+
+type runtimeSupportHandoffModel struct{}
+
+func (runtimeSupportHandoffModel) TableName() string { return "support_handoffs" }
 
 func (s *Service) ensureEditable(ctx context.Context, actor auth.CurrentUser, versionID uuid.UUID) error {
 	if !canManageBots(actor.Role) {

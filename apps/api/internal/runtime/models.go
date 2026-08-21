@@ -159,3 +159,35 @@ type SupportHandoff struct {
 }
 
 func (SupportHandoff) TableName() string { return "support_handoffs" }
+
+type SupportTicket struct {
+	ID             uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID uuid.UUID  `gorm:"type:uuid;index" json:"organization_id"`
+	SessionID      uuid.UUID  `gorm:"type:uuid;index" json:"session_id"`
+	CustomerID     *uuid.UUID `gorm:"type:uuid;index" json:"customer_id,omitempty"`
+	OrderID        *uuid.UUID `gorm:"type:uuid;index" json:"order_id,omitempty"`
+	AssignedUserID *uuid.UUID `gorm:"type:uuid" json:"assigned_user_id,omitempty"`
+	TicketType     string     `json:"ticket_type"`
+	Status         string     `json:"status"`
+	Subject        string     `json:"subject"`
+	Description    string     `json:"description"`
+	MediaURL       string     `json:"media_url"`
+	Metadata       string     `json:"metadata"`
+	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+func (SupportTicket) TableName() string { return "support_tickets" }
+
+type SupportHandoffNote struct {
+	ID             uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID uuid.UUID `gorm:"type:uuid;index" json:"organization_id"`
+	HandoffID      uuid.UUID `gorm:"type:uuid;index" json:"handoff_id"`
+	ActorUserID    uuid.UUID `gorm:"type:uuid;index" json:"actor_user_id"`
+	Note           string    `json:"note"`
+	Internal       bool      `json:"internal"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+func (SupportHandoffNote) TableName() string { return "support_handoff_notes" }
