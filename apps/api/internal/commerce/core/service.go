@@ -443,6 +443,44 @@ func (s *Service) CreateVariant(ctx context.Context, actor auth.CurrentUser, pro
 	return variant, s.db.WithContext(ctx).Create(&variant).Error
 }
 
+func (s *Service) UpdateVariant(ctx context.Context, actor auth.CurrentUser, variantID uuid.UUID, input VariantUpdateInput) (Variant, error) {
+	if !actor.Role.CanManageOrganization() {
+		return Variant{}, httperror.Forbidden("You cannot manage catalogue")
+	}
+	var variant Variant
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, variantID).First(&variant).Error; err != nil {
+		return Variant{}, mapNotFound(err, "Variant not found")
+	}
+	updates := map[string]any{"updated_at": s.now()}
+	if input.Name != nil {
+		name := strings.TrimSpace(*input.Name)
+		if name == "" {
+			return Variant{}, httperror.BadRequest("Variant name is required")
+		}
+		updates["name"] = name
+	}
+	if input.PriceMinor != nil {
+		if *input.PriceMinor < 0 {
+			return Variant{}, httperror.BadRequest("Variant price cannot be negative")
+		}
+		updates["price_minor"] = *input.PriceMinor
+	}
+	if input.Status != nil {
+		status := strings.ToLower(strings.TrimSpace(*input.Status))
+		if status != StatusActive && status != StatusInactive {
+			return Variant{}, httperror.BadRequest("Variant status is not valid")
+		}
+		updates["status"] = status
+	}
+	if err := s.db.WithContext(ctx).Model(&variant).Updates(updates).Error; err != nil {
+		return Variant{}, err
+	}
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, variantID).First(&variant).Error; err != nil {
+		return Variant{}, err
+	}
+	return variant, nil
+}
+
 func (s *Service) CreateProductImage(ctx context.Context, actor auth.CurrentUser, productID uuid.UUID, input ProductImageInput) (ProductImage, error) {
 	if !actor.Role.CanManageOrganization() {
 		return ProductImage{}, httperror.Forbidden("You cannot manage catalogue")

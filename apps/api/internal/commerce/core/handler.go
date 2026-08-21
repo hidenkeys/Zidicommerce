@@ -48,6 +48,7 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Patch("/catalogue/products/:id", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.updateProduct)
 	router.Post("/catalogue/products/:id/variants", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.createVariant)
 	router.Post("/catalogue/products/:id/images", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.createImage)
+	router.Patch("/catalogue/variants/:id", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.updateVariant)
 
 	router.Get("/inventory", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin, authz.StoreManager, authz.StoreStaff, authz.Viewer), h.listInventory)
 	router.Post("/inventory", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin, authz.StoreManager), h.upsertInventory)
@@ -342,6 +343,19 @@ func (h *Handler) createVariant(c *fiber.Ctx) error {
 		return err
 	}
 	data, err := h.service.CreateVariant(c.UserContext(), mustUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) updateVariant(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input VariantUpdateInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.UpdateVariant(c.UserContext(), mustUser(c), id, input)
 	return respond(c, data, err)
 }
 

@@ -4,6 +4,21 @@ import { apiGet, apiPatch, apiPost, apiPut, setStoredToken } from "./api/client"
 import { RequireAuth } from "./auth";
 import { LoginPage } from "./components/LoginPage";
 import { Shell } from "./components/Shell";
+import { AssistantPage } from "./pages/Assistant";
+import { BusinessPage } from "./pages/Business";
+import { CataloguePage } from "./pages/Catalogue";
+import { ConversationsPage } from "./pages/Conversations";
+import { CustomersPage } from "./pages/Customers";
+import { InventoryPage } from "./pages/Inventory";
+import { KnowledgePage } from "./pages/Knowledge";
+import { OrdersPage } from "./pages/Orders";
+import { OrganizationsPage } from "./pages/Organizations";
+import { OverviewPage } from "./pages/Overview";
+import { PaymentsPage } from "./pages/Payments";
+import { SetupPage } from "./pages/Setup";
+import { StoresPage } from "./pages/Stores";
+import { TeamPage } from "./pages/Team";
+import { WhatsAppPage } from "./pages/WhatsApp";
 
 type Row = Record<string, unknown>;
 type ApiUser = { id: string; organization_id: string; email?: string; role: string };
@@ -2396,45 +2411,58 @@ export default function App() {
       <Route path="/register" element={<LoginPage mode="register" />} />
       <Route element={<RequireAuth />}>
         <Route element={<Shell />}>
-          <Route index element={<Dashboard />} />
-          <Route path="sell/orders" element={<OrdersScreen />} />
-          <Route path="sell/catalogue" element={<CatalogueScreen />} />
-          <Route path="sell/inventory" element={<InventoryScreen />} />
-          <Route path="sell/customers" element={<BasicResourceScreen resource="customers" />} />
-          <Route path="automation/bot" element={<BotBuilderScreen variant="simple" />} />
-          <Route path="automation/conversations" element={<ConversationsScreen />} />
-          <Route path="automation/knowledge" element={<KnowledgeScreen />} />
-          <Route path="business/stores" element={<BasicResourceScreen resource="stores" />} />
-          <Route path="business/team" element={<TeamScreen />} />
-          <Route path="business/payments" element={<PaymentsSettingsScreen />} />
-          <Route path="business/delivery" element={<FulfilmentScreen />} />
-          <Route path="settings/business" element={<BusinessScreen />} />
-          <Route path="settings/whatsapp" element={<WhatsAppScreen />} />
-          <Route path="settings/integrations" element={<PaymentsSettingsScreen />} />
+          <Route index element={<OverviewPage />} />
+          <Route path="setup" element={<SetupPage />} />
+          <Route path="orders" element={<OrdersPage />} />
+          <Route path="catalogue" element={<CataloguePage />} />
+          <Route path="inventory" element={<InventoryPage />} />
+          <Route path="customers" element={<CustomersPage />} />
+          <Route path="stores" element={<StoresPage />} />
+          <Route path="assistant" element={<AssistantPage />} />
+          <Route path="conversations" element={<ConversationsPage />} />
+          <Route path="knowledge" element={<KnowledgePage />} />
+          <Route path="team" element={<TeamPage />} />
+          <Route path="settings/business" element={<BusinessPage />} />
+          <Route path="settings/payments" element={<PaymentsPage />} />
+          <Route path="settings/whatsapp" element={<WhatsAppPage />} />
           <Route path="advanced/bot-builder" element={<BotBuilderScreen variant="builder" />} />
-          <Route path="advanced/readiness" element={<ReadinessScreen />} />
+          <Route path="advanced/payments" element={<PaymentsScreen />} />
+          <Route path="advanced/delivery" element={<FulfilmentScreen />} />
           <Route path="advanced/import" element={<MerchantImportScreen />} />
           <Route path="advanced/audit-logs" element={<AuditLogScreen />} />
-          <Route path="advanced/access" element={<StoreAccessScreen />} />
-          <Route path="platform/organizations" element={<BasicResourceScreen resource="organizations" />} />
-          <Route path="commerce/stores" element={<BasicResourceScreen resource="stores" />} />
-          <Route path="commerce/catalogue" element={<CatalogueScreen />} />
-          <Route path="commerce/inventory" element={<InventoryScreen />} />
-          <Route path="commerce/orders" element={<OrdersScreen />} />
-          <Route path="commerce/customers" element={<BasicResourceScreen resource="customers" />} />
-          <Route path="organization/business" element={<BusinessScreen />} />
-          <Route path="organization/team" element={<TeamScreen />} />
-          <Route path="organization/access" element={<StoreAccessScreen />} />
+          <Route path="platform/organizations" element={<OrganizationsPage />} />
+          <Route path="sell/orders" element={<OrdersPage />} />
+          <Route path="sell/catalogue" element={<CataloguePage />} />
+          <Route path="sell/inventory" element={<InventoryPage />} />
+          <Route path="sell/customers" element={<CustomersPage />} />
+          <Route path="automation/bot" element={<AssistantPage />} />
+          <Route path="automation/conversations" element={<ConversationsPage />} />
+          <Route path="automation/knowledge" element={<KnowledgePage />} />
+          <Route path="business/stores" element={<StoresPage />} />
+          <Route path="business/team" element={<TeamPage />} />
+          <Route path="business/payments" element={<PaymentsPage />} />
+          <Route path="business/delivery" element={<FulfilmentScreen />} />
+          <Route path="settings/integrations" element={<PaymentsPage />} />
+          <Route path="advanced/readiness" element={<SetupPage />} />
+          <Route path="advanced/access" element={<TeamPage />} />
+          <Route path="commerce/stores" element={<StoresPage />} />
+          <Route path="commerce/catalogue" element={<CataloguePage />} />
+          <Route path="commerce/inventory" element={<InventoryPage />} />
+          <Route path="commerce/orders" element={<OrdersPage />} />
+          <Route path="commerce/customers" element={<CustomersPage />} />
+          <Route path="organization/business" element={<BusinessPage />} />
+          <Route path="organization/team" element={<TeamPage />} />
+          <Route path="organization/access" element={<TeamPage />} />
           <Route path="organization/audit-logs" element={<AuditLogScreen />} />
           <Route path="configuration/payments" element={<PaymentsScreen />} />
           <Route path="configuration/fulfilment" element={<FulfilmentScreen />} />
-          <Route path="configuration/channels" element={<WhatsAppScreen />} />
-          <Route path="automation/bots" element={<BotBuilderScreen variant="simple" />} />
+          <Route path="configuration/channels" element={<WhatsAppPage />} />
+          <Route path="automation/bots" element={<AssistantPage />} />
           <Route path="automation/versions" element={<BotBuilderScreen variant="builder" />} />
-          <Route path="automation/support-handoffs" element={<SupportHandoffsScreen />} />
-          <Route path="settings/readiness" element={<ReadinessScreen />} />
+          <Route path="automation/support-handoffs" element={<ConversationsPage />} />
+          <Route path="settings/readiness" element={<SetupPage />} />
           <Route path="settings/import" element={<MerchantImportScreen />} />
-          <Route path="settings" element={<BusinessScreen />} />
+          <Route path="settings" element={<BusinessPage />} />
           <Route path="*" element={<Placeholder title="This page is not available yet" />} />
         </Route>
       </Route>

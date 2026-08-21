@@ -24,10 +24,10 @@ export function AuthLayout({ children }: { children: ReactNode }) {
           <div className="brand-mark">ZC</div>
           <div>
             <strong>ZidiCommerce</strong>
-            <span>Merchant operations</span>
+            <span>Sign in to run your store</span>
           </div>
         </div>
-        <p className="login-sidebar-copy">Sign in to manage your organization, catalogue, orders, and bots.</p>
+        <p className="login-sidebar-copy">Orders, catalogue, WhatsApp, and your assistant — in one place.</p>
       </aside>
       <main className="login-panel">{children}</main>
     </div>

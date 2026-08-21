@@ -993,6 +993,21 @@ func TestPaymentConfigurationStoresMerchantSecretEncryptedAndUsesIt(t *testing.T
 	}
 }
 
+func TestUpdateVariantPrice(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	price := int64(500000)
+	updated, err := fx.service.UpdateVariant(context.Background(), fx.actor, fx.variant.ID, VariantUpdateInput{PriceMinor: &price})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.PriceMinor != 500000 {
+		t.Fatalf("expected updated price 500000, got %d", updated.PriceMinor)
+	}
+	if updated.Name != fx.variant.Name {
+		t.Fatalf("expected variant name to stay %q, got %q", fx.variant.Name, updated.Name)
+	}
+}
+
 type namedPaymentProvider struct {
 	name        string
 	paid        bool

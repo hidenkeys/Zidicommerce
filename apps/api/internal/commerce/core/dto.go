@@ -141,6 +141,12 @@ type VariantInput struct {
 	Metadata   string `json:"metadata"`
 }
 
+type VariantUpdateInput struct {
+	Name       *string `json:"name"`
+	PriceMinor *int64  `json:"price_minor"`
+	Status     *string `json:"status"`
+}
+
 func (i *VariantInput) normalize() {
 	i.SKU = strings.ToUpper(strings.TrimSpace(i.SKU))
 	i.Name = strings.TrimSpace(i.Name)

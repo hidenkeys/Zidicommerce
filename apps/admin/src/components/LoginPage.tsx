@@ -44,7 +44,7 @@ export function LoginPage({ mode = "login" }: { mode?: "login" | "register" }) {
       try {
         await apiGet<AuthUser>("/auth/me");
         if (!cancelled) {
-          setRedirectTo(mode === "register" ? "/organization/business" : nextPath);
+          setRedirectTo(mode === "register" ? "/setup" : nextPath);
         }
       } catch {
         if (!cancelled) setCheckingSession(false);
@@ -85,7 +85,7 @@ export function LoginPage({ mode = "login" }: { mode?: "login" | "register" }) {
           })
         : await apiPost<LoginResponse>("/auth/login", { email, password });
       setStoredToken(response.data.access_token);
-      navigate(mode === "register" ? "/organization/business" : nextPath, { replace: true });
+      navigate(mode === "register" ? "/setup" : nextPath, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
     } finally {
