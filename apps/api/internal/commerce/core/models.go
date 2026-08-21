@@ -247,17 +247,17 @@ type OrderItem struct {
 func (OrderItem) TableName() string { return "order_items" }
 
 type OrderEvent struct {
-	ID             uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
-	OrganizationID uuid.UUID `gorm:"type:uuid;index" json:"organization_id"`
-	OrderID        uuid.UUID `gorm:"type:uuid;index" json:"order_id"`
-	FromStatus     string    `json:"from_status"`
-	ToStatus       string    `json:"to_status"`
-	EventType      string    `json:"event_type"`
-	ActorUserID    uuid.UUID `gorm:"type:uuid" json:"actor_user_id"`
-	Reason         string    `json:"reason"`
-	IdempotencyKey string    `json:"idempotency_key"`
-	Metadata       string    `json:"metadata"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID             uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID uuid.UUID  `gorm:"type:uuid;index" json:"organization_id"`
+	OrderID        uuid.UUID  `gorm:"type:uuid;index" json:"order_id"`
+	FromStatus     string     `json:"from_status"`
+	ToStatus       string     `json:"to_status"`
+	EventType      string     `json:"event_type"`
+	ActorUserID    *uuid.UUID `gorm:"type:uuid" json:"actor_user_id,omitempty"`
+	Reason         string     `json:"reason"`
+	IdempotencyKey string     `json:"idempotency_key"`
+	Metadata       string     `json:"metadata"`
+	CreatedAt      time.Time  `json:"created_at"`
 }
 
 func (OrderEvent) TableName() string { return "order_events" }

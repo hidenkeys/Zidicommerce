@@ -1534,7 +1534,11 @@ func (s *Service) recordOrderEventTx(tx *gorm.DB, actor auth.CurrentUser, orderI
 	if idempotencyKey == "" {
 		idempotencyKey = fmt.Sprintf("%s:%s:%d", eventType, to, time.Now().UnixNano())
 	}
-	event := OrderEvent{ID: uuid.New(), OrganizationID: actor.OrganizationID, OrderID: orderID, FromStatus: from, ToStatus: to, EventType: eventType, ActorUserID: actor.ID, IdempotencyKey: idempotencyKey, Reason: reason, Metadata: "{}"}
+	var actorUserID *uuid.UUID
+	if actor.ID != uuid.Nil {
+		actorUserID = &actor.ID
+	}
+	event := OrderEvent{ID: uuid.New(), OrganizationID: actor.OrganizationID, OrderID: orderID, FromStatus: from, ToStatus: to, EventType: eventType, ActorUserID: actorUserID, IdempotencyKey: idempotencyKey, Reason: reason, Metadata: "{}"}
 	return tx.Create(&event).Error
 }
 

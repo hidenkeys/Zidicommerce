@@ -471,6 +471,13 @@ func TestRuntimePhase9BingChunPilotOrderPaymentAndTrackingFlow(t *testing.T) {
 	if len(orders) != 1 || orders[0].TotalMinor != 480000 || orders[0].Status != core.OrderAwaitingPayment {
 		t.Fatalf("expected one NGN 4800 awaiting-payment order, got %+v", orders)
 	}
+	var createdEvent core.OrderEvent
+	if err := fx.db.Where("organization_id = ? AND order_id = ? AND event_type = ?", fx.actor.OrganizationID, orders[0].ID, "order_created").First(&createdEvent).Error; err != nil {
+		t.Fatal(err)
+	}
+	if createdEvent.ActorUserID != nil {
+		t.Fatalf("expected bot-created order event to have no user actor, got %s", createdEvent.ActorUserID.String())
+	}
 	paid := send("bc-paid", "paid")
 	if !strings.Contains(joinMessageTexts(paid.Messages), "Payment confirmed") {
 		t.Fatalf("expected payment confirmation, got %+v", paid.Messages)
