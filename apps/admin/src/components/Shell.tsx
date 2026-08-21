@@ -9,43 +9,51 @@ type NavGroup = {
 
 const groups: NavGroup[] = [
   {
-    label: "Overview",
-    items: [["Dashboard", "/"]],
+    label: "Home",
+    items: [["Overview", "/"]],
   },
   {
-    label: "Commerce",
+    label: "Sell",
     items: [
-      ["Stores", "/commerce/stores"],
-      ["Catalogue", "/commerce/catalogue"],
-      ["Inventory", "/commerce/inventory"],
-      ["Orders", "/commerce/orders"],
-      ["Customers", "/commerce/customers"],
-    ],
-  },
-  {
-    label: "Organization",
-    items: [
-      ["Business", "/organization/business"],
-      ["Team", "/organization/team"],
-      ["Stores & Access", "/organization/access"],
-      ["Audit logs", "/organization/audit-logs"],
-    ],
-  },
-  {
-    label: "Configuration",
-    items: [
-      ["Payments", "/configuration/payments"],
-      ["Fulfilment", "/configuration/fulfilment"],
-      ["Channels", "/configuration/channels"],
+      ["Orders", "/sell/orders"],
+      ["Catalogue", "/sell/catalogue"],
+      ["Inventory", "/sell/inventory"],
+      ["Customers", "/sell/customers"],
     ],
   },
   {
     label: "Automation",
     items: [
-      ["Bots", "/automation/bots"],
-      ["Bot Versions", "/automation/versions"],
+      ["My Bot", "/automation/bot"],
       ["Conversations", "/automation/conversations"],
-      ["Support Handoffs", "/automation/support-handoffs"],
+      ["Knowledge", "/automation/knowledge"],
+    ],
+  },
+  {
+    label: "Business",
+    items: [
+      ["Stores", "/business/stores"],
+      ["Team", "/business/team"],
+      ["Payments", "/business/payments"],
+      ["Delivery", "/business/delivery"],
+    ],
+  },
+  {
+    label: "Settings",
+    items: [
+      ["Business", "/settings/business"],
+      ["WhatsApp", "/settings/whatsapp"],
+      ["Integrations", "/settings/integrations"],
+    ],
+  },
+  {
+    label: "Advanced",
+    items: [
+      ["Bot Builder", "/advanced/bot-builder"],
+      ["Readiness", "/advanced/readiness"],
+      ["Import", "/advanced/import"],
+      ["Audit logs", "/advanced/audit-logs"],
+      ["Access", "/advanced/access"],
     ],
   },
   {
@@ -53,15 +61,24 @@ const groups: NavGroup[] = [
     items: [["Organizations", "/platform/organizations"]],
     roles: ["platform_admin"],
   },
-  {
-    label: "System",
-    items: [
-      ["Readiness", "/settings/readiness"],
-      ["Merchant Import", "/settings/import"],
-      ["Settings", "/settings"],
-    ],
-  },
 ];
+
+function roleLabel(role: string) {
+  switch (role) {
+    case "merchant_admin":
+      return "Owner";
+    case "store_manager":
+      return "Manager";
+    case "store_staff":
+      return "Staff";
+    case "support_agent":
+      return "Support";
+    case "platform_admin":
+      return "Platform";
+    default:
+      return role;
+  }
+}
 
 export function Shell() {
   const { user, logout } = useAuth();
@@ -74,7 +91,7 @@ export function Shell() {
           <div className="brand-mark">ZC</div>
           <div>
             <strong>ZidiCommerce</strong>
-            <span>Merchant operations</span>
+            <span>Your business, in one place</span>
           </div>
         </div>
 
@@ -95,12 +112,14 @@ export function Shell() {
       <main className="main-panel">
         <header className="topbar">
           <div>
-            <span className="eyebrow">Phase 9 Merchant Pilot</span>
-            <h1>ZidiCommerce Admin</h1>
+            <span className="eyebrow">Merchant workspace</span>
+            <h1>ZidiCommerce</h1>
           </div>
           <div className="topbar-actions">
-            <span className="muted">{user.role}</span>
-            <button type="button" onClick={logout}>Log out</button>
+            <span className="muted">{roleLabel(user.role)}</span>
+            <button type="button" onClick={logout}>
+              Log out
+            </button>
           </div>
         </header>
         <Outlet />

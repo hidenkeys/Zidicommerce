@@ -645,6 +645,138 @@ pre {
   color: #344054;
 }
 
+.overview-grid .summary-card strong {
+  display: block;
+  font-size: 28px;
+  margin-top: 10px;
+}
+
+.attention-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.status-pill {
+  display: inline-flex;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #ecfdf3;
+  color: #067647;
+  font-weight: 700;
+}
+
+.badge {
+  display: inline-flex;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #f2f4f7;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.badge.status-paid,
+.badge.status-completed {
+  background: #ecfdf3;
+  color: #067647;
+}
+
+.badge.status-awaiting_payment,
+.badge.status-processing {
+  background: #fff7e6;
+  color: #b54708;
+}
+
+.selected-row {
+  background: #fffbeb;
+}
+
+.order-layout {
+  align-items: start;
+}
+
+.item-list,
+.menu-preview {
+  display: grid;
+  gap: 8px;
+  padding-left: 18px;
+}
+
+.timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+  color: #667085;
+  font-size: 12px;
+}
+
+.primary-action {
+  background: #ffcc22;
+  border-color: #ffcc22;
+}
+
+.catalogue-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.product-card {
+  background: #ffffff;
+  border: 1px solid #eaecf0;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.product-image {
+  height: 120px;
+  border-radius: 8px;
+  background: #f2f4f7;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  margin-bottom: 12px;
+  color: #98a2b3;
+}
+
+.product-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.conversation-thread .thread {
+  display: grid;
+  gap: 10px;
+  max-height: 420px;
+  overflow: auto;
+  margin: 16px 0;
+}
+
+.bubble {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f2f4f7;
+}
+
+.bubble.customer {
+  background: #fff7e6;
+}
+
+.bubble span {
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+
+.bubble p {
+  margin: 0;
+}
+
 @media (max-width: 980px) {
   .app-shell,
   .login-layout {

@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Route, Routes } from "react-router-dom";
-import { API_BASE_URL, apiGet, apiPatch, apiPost, apiPut, setStoredToken } from "./api/client";
+import { apiGet, apiPatch, apiPost, apiPut, setStoredToken } from "./api/client";
 import { RequireAuth } from "./auth";
 import { LoginPage } from "./components/LoginPage";
 import { Shell } from "./components/Shell";
@@ -124,22 +124,108 @@ const endpoints: Record<string, Endpoint> = {
   },
 };
 
+const hiddenColumnNames = new Set([
+  "id",
+  "organization_id",
+  "bot_id",
+  "bot_version_id",
+  "channel_id",
+  "customer_id",
+  "store_id",
+  "variant_id",
+  "product_id",
+  "session_id",
+  "published_version_id",
+  "idempotency_key",
+  "metadata",
+  "secret_config",
+  "config",
+  "lock_version",
+  "expected_input",
+  "variables",
+  "system_context",
+  "external_conversation_id",
+  "current_step_key",
+]);
+
+function isUUID(value: unknown) {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function money(minor: unknown, currency = "NGN") {
+  const amount = Number(minor ?? 0) / 100;
+  try {
+    return new Intl.NumberFormat("en-NG", { style: "currency", currency, maximumFractionDigits: 0 }).format(amount);
+  } catch {
+    return `${currency} ${amount.toLocaleString()}`;
+  }
+}
+
+function humanStatus(value: unknown) {
+  const raw = String(value ?? "").replace(/_/g, " ");
+  if (!raw) return "—";
+  return raw.replace(/\b\w/g, (letter: string) => letter.toUpperCase());
+}
+
+function relativeTime(value: unknown) {
+  const date = new Date(String(value ?? ""));
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("en-NG", { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" });
+}
+
+function isToday(value: unknown) {
+  const date = new Date(String(value ?? ""));
+  if (Number.isNaN(date.getTime())) return false;
+  const now = new Date();
+  return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+}
+
+function nextOrderAction(status: string) {
+  switch (status) {
+    case "paid":
+      return { status: "processing", label: "Start preparing" };
+    case "processing":
+      return { status: "ready", label: "Mark ready" };
+    case "ready":
+      return { status: "out_for_delivery", label: "Hand to rider" };
+    case "out_for_delivery":
+      return { status: "completed", label: "Mark delivered" };
+    default:
+      return null;
+  }
+}
+
 function Dashboard() {
-  const [me, setMe] = useState<ApiUser | null>(null);
   const [org, setOrg] = useState<Organization | null>(null);
+  const [orders, setOrders] = useState<Row[]>([]);
+  const [conversations, setConversations] = useState<Row[]>([]);
+  const [inventory, setInventory] = useState<Row[]>([]);
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
+  const [channels, setChannels] = useState<Channel[]>([]);
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(true);
 
   async function load() {
     setMessage("");
     try {
-      const meResponse = await apiGet<ApiUser>("/auth/me");
-      setMe(meResponse.data);
-      if (meResponse.data.organization_id) {
-        const orgResponse = await apiGet<Organization>("/organizations/current");
-        setOrg(orgResponse.data);
-      }
+      const [orgResponse, orderResponse, conversationResponse, inventoryResponse, setupResponse, channelResponse] = await Promise.all([
+        apiGet<Organization>("/organizations/current"),
+        apiGet<Row[]>("/orders"),
+        apiGet<Row[]>("/runtime/conversations"),
+        apiGet<Row[]>("/inventory"),
+        apiGet<SetupStatus>("/bot-setup/status"),
+        apiGet<Channel[]>("/channels"),
+      ]);
+      setOrg(orgResponse.data);
+      setOrders(orderResponse.data);
+      setConversations(conversationResponse.data);
+      setInventory(inventoryResponse.data);
+      setSetupStatus(setupResponse.data);
+      setChannels(channelResponse.data);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Request failed");
+      setMessage(error instanceof Error ? error.message : "Could not load overview");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -147,41 +233,89 @@ function Dashboard() {
     void load();
   }, []);
 
-  const state = parseState(org?.onboarding_state);
-  const done = onboardingSteps.filter(([key]) => state[key]).length;
+  const todayOrders = orders.filter((order) => isToday(order.created_at));
+  const todayRevenue = todayOrders
+    .filter((order) => !["cancelled", "awaiting_payment"].includes(String(order.status)))
+    .reduce((sum, order) => sum + Number(order.total_minor ?? 0), 0);
+  const awaitingPrep = orders.filter((order) => ["paid", "processing"].includes(String(order.status))).length;
+  const awaitingFulfilment = orders.filter((order) => ["ready", "out_for_delivery"].includes(String(order.status))).length;
+  const activeCustomers = new Set(orders.map((order) => String(order.customer_id ?? order.customer))).size;
+  const openConversations = conversations.filter((conversation) => ["active", "handoff"].includes(String(conversation.status))).length;
+  const waitingConversations = conversations.filter((conversation) => conversation.handoff_status === "open" || conversation.handoff_status === "assigned" || conversation.status === "handoff").length;
+  const lowStock = inventory.filter((row) => Number(row.on_hand ?? 0) <= Number(row.reorder_threshold ?? 0)).length;
+  const whatsapp = channels.find((channel) => channel.provider === "whatsapp");
+  const currency = String(org?.currency ?? todayOrders[0]?.currency ?? "NGN");
+  const attention: string[] = [];
+  if (awaitingPrep > 0) attention.push(`${awaitingPrep} order${awaitingPrep === 1 ? "" : "s"} waiting to be prepared`);
+  if (whatsapp && whatsapp.status !== "active") attention.push("WhatsApp connection needs attention");
+  if (!whatsapp) attention.push("WhatsApp is not connected yet");
+  if (waitingConversations > 0) attention.push(`${waitingConversations} customer conversation${waitingConversations === 1 ? "" : "s"} waiting for a response`);
+  if (lowStock > 0) attention.push(`Inventory is low for ${lowStock} product${lowStock === 1 ? "" : "s"}`);
+  if (setupStatus && !setupStatus.ready) attention.push("A few setup checks still need to be completed");
 
   return (
     <section className="content">
       <div className="section-heading">
-        <h2>Overview</h2>
-        <p>Onboard a merchant, configure commerce operations, and keep organization access controlled from one admin surface.</p>
+        <h2>{org?.name ? `Good to see you, ${org.name}` : "Today at a glance"}</h2>
+        <p>How your business is doing right now.</p>
       </div>
       {message ? <p className="error-text">{message}</p> : null}
-      <div className="grid">
-        <article className="summary-card">
-          <span>API base</span>
-          <p>{API_BASE_URL}</p>
-        </article>
-        <article className="summary-card">
-          <span>Current role</span>
-          <p>{me?.role ?? "Unknown"}</p>
-        </article>
-        <article className="summary-card">
-          <span>Organization</span>
-          <p>{org?.name ?? "No organization loaded"}</p>
-        </article>
-        <article className="summary-card">
-          <span>Onboarding</span>
-          <p>{done} of {onboardingSteps.length} steps marked complete.</p>
-        </article>
+      {loading ? <div className="empty-state"><strong>Loading your day</strong><span>Fetching orders, conversations, and stock.</span></div> : null}
+      <div className="grid overview-grid">
+        <article className="summary-card"><span>Orders today</span><strong>{todayOrders.length}</strong></article>
+        <article className="summary-card"><span>Revenue today</span><strong>{money(todayRevenue, currency)}</strong></article>
+        <article className="summary-card"><span>Awaiting preparation</span><strong>{awaitingPrep}</strong></article>
+        <article className="summary-card"><span>Awaiting fulfilment</span><strong>{awaitingFulfilment}</strong></article>
+        <article className="summary-card"><span>Customers</span><strong>{activeCustomers}</strong></article>
+        <article className="summary-card"><span>Bot conversations</span><strong>{openConversations}</strong></article>
       </div>
-      <div className="table-wrap checklist">
-        {onboardingSteps.map(([key, label]) => (
-          <button key={key} className={state[key] ? "step complete" : "step"} type="button">
-            <span>{state[key] ? "✓" : "○"}</span>
-            {label}
-          </button>
-        ))}
+      <div className="split">
+        <div className="table-wrap">
+          <h3>Needs your attention</h3>
+          {attention.length === 0 ? <p className="muted">You are all caught up.</p> : (
+            <ul className="attention-list">
+              {attention.map((item) => <li key={item}>{item}</li>)}
+            </ul>
+          )}
+        </div>
+        <div className="table-wrap">
+          <h3>WhatsApp</h3>
+          <p className="status-pill">{whatsapp?.status === "active" ? "Connected" : "Not connected"}</p>
+          <p className="muted">{whatsapp?.display_number || "Connect a number in Settings → WhatsApp."}</p>
+        </div>
+      </div>
+      <div className="table-wrap">
+        <h3>Recent orders</h3>
+        {orders.length === 0 ? <p className="muted">No orders yet. They will appear here as customers order on WhatsApp.</p> : (
+          <table>
+            <thead>
+              <tr>
+                <th>Order</th>
+                <th>Customer</th>
+                <th>Items</th>
+                <th>Total</th>
+                <th>Status</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orders.slice(0, 8).map((order) => {
+                const customer = (order.customer ?? {}) as Row;
+                const items = Array.isArray(order.items) ? (order.items as Row[]) : [];
+                return (
+                  <tr key={String(order.id)}>
+                    <td>{String(order.order_number ?? "—")}</td>
+                    <td>{String(customer.name || customer.phone || "Customer")}</td>
+                    <td>{items.length ? items.map((item) => `${item.product_name} ×${item.quantity}`).join(", ") : "—"}</td>
+                    <td>{money(order.total_minor, String(order.currency ?? currency))}</td>
+                    <td><span className={`badge status-${String(order.status)}`}>{humanStatus(order.status)}</span></td>
+                    <td>{relativeTime(order.created_at)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
       </div>
     </section>
   );
@@ -240,7 +374,7 @@ function BusinessScreen() {
     <section className="content">
       <div className="section-heading">
         <h2>Business</h2>
-        <p>Create the organization for a new merchant, then update business identity, contact, currency and timezone.</p>
+        <p>Your public name, contact details, currency, and timezone.</p>
       </div>
       {message ? <p className="error-text">{message}</p> : null}
       <div className="split">
@@ -534,7 +668,7 @@ function CatalogueScreen() {
       name: product.name,
       slug: product.slug,
       status: "active",
-      variants: [{ sku: product.sku, name: product.variant, price_minor: Number(product.price_minor || 0), currency: "USD", status: "active" }],
+      variants: [{ sku: product.sku, name: product.variant, price_minor: Number(product.price_minor || 0), currency: "NGN", status: "active" }],
     });
     setProduct({ name: "", slug: "", sku: "", variant: "Regular", price_minor: "" });
     await load();
@@ -544,40 +678,63 @@ function CatalogueScreen() {
     <section className="content">
       <div className="section-heading">
         <h2>Catalogue</h2>
-        <p>Create categories, products, variants and authoritative database prices.</p>
+        <p>What customers can order. Keep names, prices, and availability easy to scan.</p>
       </div>
+      {message ? <p className="error-text">{message}</p> : null}
       <div className="split">
         <form className="resource-form" onSubmit={createCategory}>
-          <strong>Create category</strong>
+          <strong>New category</strong>
           <input placeholder="Name" value={category.name} onChange={(event) => setCategory({ ...category, name: event.target.value })} />
-          <input placeholder="Slug" value={category.slug} onChange={(event) => setCategory({ ...category, slug: event.target.value })} />
-          <button type="submit">Create category</button>
+          <input placeholder="Short code" value={category.slug} onChange={(event) => setCategory({ ...category, slug: event.target.value })} />
+          <button type="submit">Add category</button>
         </form>
         <form className="resource-form" onSubmit={createProduct}>
-          <strong>Create product</strong>
-          <input placeholder="Product name" value={product.name} onChange={(event) => setProduct({ ...product, name: event.target.value })} />
-          <input placeholder="Slug" value={product.slug} onChange={(event) => setProduct({ ...product, slug: event.target.value })} />
+          <strong>New product</strong>
+          <input placeholder="Name" value={product.name} onChange={(event) => setProduct({ ...product, name: event.target.value })} />
+          <input placeholder="Short code" value={product.slug} onChange={(event) => setProduct({ ...product, slug: event.target.value })} />
           <input placeholder="SKU" value={product.sku} onChange={(event) => setProduct({ ...product, sku: event.target.value })} />
           <input placeholder="Variant" value={product.variant} onChange={(event) => setProduct({ ...product, variant: event.target.value })} />
-          <input placeholder="Price minor" type="number" value={product.price_minor} onChange={(event) => setProduct({ ...product, price_minor: event.target.value })} />
-          <button type="submit">Create product</button>
+          <input placeholder="Price in kobo" value={product.price_minor} onChange={(event) => setProduct({ ...product, price_minor: event.target.value })} />
+          <button type="submit">Add product</button>
         </form>
       </div>
-      <ResourceTable rows={categories} title="Categories" message={message} />
-      <ResourceTable rows={products} title="Products" />
+      <div className="catalogue-grid">
+        {products.map((item) => {
+          const variants = Array.isArray(item.variants) ? (item.variants as Row[]) : [];
+          const price = variants[0]?.price_minor;
+          const categoryName = categories.find((entry) => entry.id === item.category_id)?.name;
+          return (
+            <article className="product-card" key={String(item.id)}>
+              <div className="product-image">{item.image_url ? <img src={String(item.image_url)} alt="" /> : <span>No photo</span>}</div>
+              <h3>{String(item.name)}</h3>
+              <p className="muted">{String(categoryName || "Uncategorised")}</p>
+              <p><strong>{price ? money(price, String(variants[0]?.currency ?? "NGN")) : "No price"}</strong></p>
+              <p className="muted">{humanStatus(item.status)} · {variants.length || 1} variant{variants.length === 1 ? "" : "s"}</p>
+            </article>
+          );
+        })}
+      </div>
     </section>
   );
 }
 
 function InventoryScreen() {
   const [rows, setRows] = useState<Row[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
+  const [products, setProducts] = useState<Row[]>([]);
   const [form, setForm] = useState({ store_id: "", variant_id: "", on_hand: "", reorder_threshold: "0" });
   const [message, setMessage] = useState("");
 
   async function load() {
     try {
-      const response = await apiGet<Row[]>("/inventory");
-      setRows(response.data);
+      const [inventoryResponse, storeResponse, productResponse] = await Promise.all([
+        apiGet<Row[]>("/inventory"),
+        apiGet<Store[]>("/stores"),
+        apiGet<Row[]>("/catalogue/products"),
+      ]);
+      setRows(inventoryResponse.data);
+      setStores(storeResponse.data);
+      setProducts(productResponse.data);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Request failed");
     }
@@ -602,14 +759,22 @@ function InventoryScreen() {
     <section className="content">
       <div className="section-heading">
         <h2>Inventory</h2>
-        <p>Set store-level stock. Order creation locks and decrements inventory server-side.</p>
+        <p>See what is in stock at each store and update quantities when you restock.</p>
       </div>
       <form className="resource-form" onSubmit={submit}>
-        <input placeholder="Store ID" value={form.store_id} onChange={(event) => setForm({ ...form, store_id: event.target.value })} />
-        <input placeholder="Variant ID" value={form.variant_id} onChange={(event) => setForm({ ...form, variant_id: event.target.value })} />
-        <input placeholder="On hand" type="number" value={form.on_hand} onChange={(event) => setForm({ ...form, on_hand: event.target.value })} />
-        <input placeholder="Reorder at" type="number" value={form.reorder_threshold} onChange={(event) => setForm({ ...form, reorder_threshold: event.target.value })} />
-        <button type="submit">Save inventory</button>
+        <select value={form.store_id} onChange={(event) => setForm({ ...form, store_id: event.target.value })}>
+          <option value="">Store</option>
+          {stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}
+        </select>
+        <select value={form.variant_id} onChange={(event) => setForm({ ...form, variant_id: event.target.value })}>
+          <option value="">Product</option>
+          {products.flatMap((product) => (Array.isArray(product.variants) ? product.variants as Row[] : []).map((variant) => (
+            <option key={String(variant.id)} value={String(variant.id)}>{String(product.name)} · {String(variant.name || "Regular")}</option>
+          )))}
+        </select>
+        <input placeholder="Quantity on hand" type="number" value={form.on_hand} onChange={(event) => setForm({ ...form, on_hand: event.target.value })} />
+        <input placeholder="Low-stock alert at" type="number" value={form.reorder_threshold} onChange={(event) => setForm({ ...form, reorder_threshold: event.target.value })} />
+        <button type="submit">Update stock</button>
       </form>
       <ResourceTable rows={rows} message={message} />
     </section>
@@ -618,15 +783,17 @@ function InventoryScreen() {
 
 function OrdersScreen() {
   const [rows, setRows] = useState<Row[]>([]);
-  const [transition, setTransition] = useState({ order_id: "", status: "processing" });
+  const [selectedID, setSelectedID] = useState("");
+  const [detail, setDetail] = useState<Row | null>(null);
   const [message, setMessage] = useState("");
 
   async function load() {
     try {
       const response = await apiGet<Row[]>("/orders");
       setRows(response.data);
+      setMessage("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Request failed");
+      setMessage(error instanceof Error ? error.message : "Could not load orders");
     }
   }
 
@@ -634,26 +801,90 @@ function OrdersScreen() {
     void load();
   }, []);
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    await apiPost<Row>(`/orders/${transition.order_id}/transition`, { status: transition.status, idempotency_key: `admin-${Date.now()}` });
-    await load();
+  async function openOrder(id: string) {
+    setSelectedID(id);
+    const response = await apiGet<Row>(`/orders/${id}`);
+    setDetail(response.data);
   }
+
+  async function transition(status: string) {
+    if (!selectedID) return;
+    await apiPost<Row>(`/orders/${selectedID}/transition`, { status, idempotency_key: `admin-${Date.now()}` });
+    await load();
+    await openOrder(selectedID);
+  }
+
+  const selected = detail ?? rows.find((row) => row.id === selectedID) ?? null;
+  const action = selected ? nextOrderAction(String(selected.status)) : null;
+  const customer = ((selected?.customer ?? {}) as Row);
+  const items = Array.isArray(selected?.items) ? (selected.items as Row[]) : [];
+  const store = ((selected?.store ?? {}) as Row);
 
   return (
     <section className="content">
       <div className="section-heading">
         <h2>Orders</h2>
-        <p>Review orders and perform controlled lifecycle transitions through backend APIs.</p>
+        <p>See what customers ordered and take the next step without leaving this page.</p>
       </div>
-      <form className="resource-form" onSubmit={submit}>
-        <input placeholder="Order ID" value={transition.order_id} onChange={(event) => setTransition({ ...transition, order_id: event.target.value })} />
-        <select value={transition.status} onChange={(event) => setTransition({ ...transition, status: event.target.value })}>
-          {["processing", "ready", "out_for_delivery", "completed", "cancelled"].map((status) => <option key={status} value={status}>{status}</option>)}
-        </select>
-        <button type="submit">Transition order</button>
-      </form>
-      <ResourceTable rows={rows} message={message} />
+      {message ? <p className="error-text">{message}</p> : null}
+      <div className="split order-layout">
+        <div className="table-wrap">
+          {rows.length === 0 ? <p className="muted">No orders yet.</p> : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Customer</th>
+                  <th>Total</th>
+                  <th>Status</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((order) => {
+                  const person = (order.customer ?? {}) as Row;
+                  return (
+                    <tr key={String(order.id)} className={selectedID === order.id ? "selected-row" : ""} onClick={() => void openOrder(String(order.id))}>
+                      <td>{String(order.order_number)}</td>
+                      <td>{String(person.name || person.phone || "Customer")}</td>
+                      <td>{money(order.total_minor, String(order.currency ?? "NGN"))}</td>
+                      <td><span className={`badge status-${String(order.status)}`}>{humanStatus(order.status)}</span></td>
+                      <td>{relativeTime(order.created_at)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div className="table-wrap order-detail">
+          {!selected ? <div className="empty-state"><strong>Select an order</strong><span>Choose a row to see items, payment, and the next action.</span></div> : (
+            <>
+              <div className="section-heading">
+                <h2>{String(selected.order_number)}</h2>
+                <p>{String(customer.name || "Customer")} · {String(customer.phone || "")}</p>
+              </div>
+              <p><span className={`badge status-${String(selected.status)}`}>{humanStatus(selected.status)}</span> · {humanStatus(selected.fulfilment_type)}</p>
+              <p className="muted">{String(store.name || "Store")} · {relativeTime(selected.created_at)}</p>
+              <ul className="item-list">
+                {items.map((item, index) => (
+                  <li key={String(item.id ?? index)}>{String(item.product_name)} {item.variant_name && item.variant_name !== "Regular" ? `· ${item.variant_name}` : ""} ×{Number(item.quantity)} — {money(item.total_minor, String(selected.currency ?? "NGN"))}</li>
+                ))}
+              </ul>
+              <p><strong>Total {money(selected.total_minor, String(selected.currency ?? "NGN"))}</strong></p>
+              <div className="timeline">
+                {["Order placed", "Payment received", "Preparing", "Ready", "Out for delivery", "Delivered"].map((label) => (
+                  <span key={label}>{label}</span>
+                ))}
+              </div>
+              <div className="row-actions">
+                {action ? <button type="button" className="primary-action" onClick={() => void transition(action.status)}>{action.label}</button> : null}
+                {selected.status !== "cancelled" && selected.status !== "completed" ? <button type="button" onClick={() => void transition("cancelled")}>Cancel order</button> : null}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </section>
   );
 }
@@ -897,15 +1128,24 @@ function SupportHandoffsScreen() {
 
 function ConversationsScreen() {
   const [rows, setRows] = useState<Row[]>([]);
+  const [selectedID, setSelectedID] = useState("");
+  const [messages, setMessages] = useState<Row[]>([]);
+  const [handoffs, setHandoffs] = useState<Row[]>([]);
+  const [reply, setReply] = useState("");
+  const [note, setNote] = useState("");
   const [message, setMessage] = useState("");
 
   async function load() {
     try {
-      const response = await apiGet<Row[]>("/runtime/conversations");
-      setRows(response.data);
+      const [conversationResponse, handoffResponse] = await Promise.all([
+        apiGet<Row[]>("/runtime/conversations"),
+        apiGet<Row[]>("/runtime/support-handoffs"),
+      ]);
+      setRows(conversationResponse.data);
+      setHandoffs(handoffResponse.data);
       setMessage("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Request failed");
+      setMessage(error instanceof Error ? error.message : "Could not load conversations");
     }
   }
 
@@ -913,14 +1153,123 @@ function ConversationsScreen() {
     void load();
   }, []);
 
+  async function openConversation(id: string) {
+    setSelectedID(id);
+    const response = await apiGet<Row[]>(`/runtime/conversations/${id}/messages`);
+    setMessages(response.data);
+  }
+
+  function inboxStatus(row: Row) {
+    if (row.status === "completed" || row.status === "cancelled") return "Resolved";
+    if (row.status === "handoff" || row.handoff_status === "open" || row.handoff_status === "assigned") return "Waiting";
+    return "Open";
+  }
+
+  function currentHandoff() {
+    return handoffs.find((handoff) => String(handoff.session_id) === selectedID);
+  }
+
+  async function sendReply(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<Row>(`/runtime/conversations/${selectedID}/reply`, { text: reply });
+    setReply("");
+    await openConversation(selectedID);
+    await load();
+  }
+
+  async function assignHandoff() {
+    const handoff = currentHandoff();
+    if (!handoff) return;
+    await apiPost<Row>(`/runtime/support-handoffs/${handoff.id}/claim`, { note });
+    setNote("");
+    await load();
+  }
+
+  async function addNote() {
+    const handoff = currentHandoff();
+    if (!handoff || !note.trim()) return;
+    await apiPost<Row>(`/runtime/support-handoffs/${handoff.id}/notes`, { note, internal: true });
+    setNote("");
+  }
+
+  async function resolveHandoff() {
+    const handoff = currentHandoff();
+    if (!handoff) return;
+    await apiPost<Row>(`/runtime/support-handoffs/${handoff.id}/resolve`, { resolution_note: note });
+    setNote("");
+    await load();
+  }
+
+  async function reopenHandoff() {
+    const handoff = currentHandoff();
+    if (!handoff) return;
+    await apiPost<Row>(`/runtime/support-handoffs/${handoff.id}/reopen`, {});
+    await load();
+  }
+
+  const selected = rows.find((row) => row.id === selectedID);
+
   return (
     <section className="content">
       <div className="section-heading">
         <h2>Conversations</h2>
-        <p>Monitor customer sessions, current bot state, latest message, and active handoff status.</p>
-        <button type="button" onClick={load}>Refresh</button>
+        <p>Your support inbox for customers who need a person.</p>
+        <button type="button" onClick={() => void load()}>Refresh</button>
       </div>
-      <ResourceTable rows={rows} message={message} />
+      {message ? <p className="error-text">{message}</p> : null}
+      <div className="split order-layout">
+        <div className="table-wrap">
+          {rows.length === 0 ? <p className="muted">No conversations yet.</p> : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Last message</th>
+                  <th>Status</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={String(row.id)} className={selectedID === row.id ? "selected-row" : ""} onClick={() => void openConversation(String(row.id))}>
+                    <td>{String(row.customer_name || row.customer_phone || "Customer")}</td>
+                    <td>{String(row.last_message || "—").slice(0, 80)}</td>
+                    <td><span className="badge">{inboxStatus(row)}</span></td>
+                    <td>{relativeTime(row.updated_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div className="table-wrap conversation-thread">
+          {!selected ? <div className="empty-state"><strong>Select a conversation</strong><span>Read the chat, reply, or pass it to a teammate.</span></div> : (
+            <>
+              <h3>{String(selected.customer_name || selected.customer_phone || "Customer")}</h3>
+              <p className="muted">{inboxStatus(selected)}{currentHandoff()?.assigned_user_id ? " · Assigned" : ""}</p>
+              <div className="thread">
+                {messages.map((item) => (
+                  <div key={String(item.id)} className={item.direction === "inbound" ? "bubble customer" : "bubble agent"}>
+                    <span>{item.direction === "inbound" ? "Customer" : "You"}</span>
+                    <p>{String(item.body)}</p>
+                  </div>
+                ))}
+              </div>
+              <form className="resource-form" onSubmit={sendReply}>
+                <textarea placeholder="Write a reply" value={reply} onChange={(event) => setReply(event.target.value)} />
+                <button type="submit">Reply</button>
+              </form>
+              <div className="row-actions">
+                <input placeholder="Internal note" value={note} onChange={(event) => setNote(event.target.value)} />
+                <button type="button" onClick={() => void assignHandoff()}>Assign to me</button>
+                <button type="button" onClick={() => void addNote()}>Save note</button>
+                <button type="button" onClick={() => void resolveHandoff()}>Resolve</button>
+                <button type="button" onClick={() => void reopenHandoff()}>Reopen</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </section>
   );
 }
@@ -1003,7 +1352,7 @@ function AuditLogScreen() {
   );
 }
 
-function BotBuilderScreen() {
+function BotBuilderScreen({ variant = "builder" }: { variant?: "simple" | "builder" }) {
   const [bots, setBots] = useState<Bot[]>([]);
   const [versions, setVersions] = useState<BotVersion[]>([]);
   const [config, setConfig] = useState<BotConfig | null>(null);
@@ -1365,15 +1714,18 @@ function BotBuilderScreen() {
   }
 
   const editable = config?.version.status !== "published" && config?.version.status !== "archived";
+  const selectedBot = bots.find((bot) => bot.id === selectedBotID);
   const customerMenu = config ? customerMenuModules(config.modules) : [];
   const selectedQuestionType = questionTypes.find((item) => item.key === questionForm.type);
-  const tabs = ["overview", "conversations", "modules", "knowledge", "variables", "integrations", "test", "publish", "advanced"];
+  const tabs = variant === "simple"
+    ? ["overview", "modules", "knowledge", "test", "publish"]
+    : ["overview", "conversations", "modules", "knowledge", "variables", "integrations", "test", "publish", "advanced"];
 
   return (
     <section className="content bot-builder">
       <div className="section-heading">
-        <h2>Bots</h2>
-        <p>Build customer conversations, connect commerce actions, test safely, and publish immutable bot versions.</p>
+        <h2>{variant === "simple" ? "My Bot" : "Bot Builder"}</h2>
+        <p>{variant === "simple" ? "Control what customers see on WhatsApp. You do not need to know how the bot is built." : "Advanced configuration for conversation steps, actions, and published snapshots."}</p>
       </div>
       {message ? <p className="error-text">{message}</p> : null}
       <div className="split">
@@ -1415,16 +1767,29 @@ function BotBuilderScreen() {
 
       {config ? (
         <>
+          {variant === "builder" ? (
           <div className="grid">
             <article className="summary-card"><span>Version</span><p>v{config.version.version_number} · {config.version.status}</p></article>
             <article className="summary-card"><span>Start step</span><p>{config.version.start_step_key}</p></article>
             <article className="summary-card"><span>Modules</span><p>{config.modules.length}</p></article>
             <article className="summary-card"><span>Steps</span><p>{config.steps.length}</p></article>
           </div>
+          ) : null}
           {!editable ? <p className="muted">This version is immutable. Create a new draft from it to make changes.</p> : null}
 
           {activeTab === "overview" ? (
             <div className="split">
+              <div className="table-wrap">
+                <span className="eyebrow">Status</span>
+                <h3>{whatsappConnected(channels) ? "Connected" : "Not connected"}</h3>
+                <p>{selectedBot?.name || "Customer assistant"}</p>
+                <p className="muted">{shareLink?.display_number || "Connect WhatsApp in Settings to go live."}</p>
+                <ol className="menu-preview">
+                  {customerMenu.map((module, index) => (
+                    <li key={module.id}>{index + 1}. {module.label}</li>
+                  ))}
+                </ol>
+              </div>
               <div className="table-wrap checklist-panel">
                 <h3>Launch checklist</h3>
                 <div className="checklist compact">
@@ -1744,7 +2109,7 @@ function BotBuilderScreen() {
 }
 
 function ResourceTable({ rows, loading, message, title }: { rows: Row[]; loading?: boolean; message?: string; title?: string }) {
-  const columns = useMemo(() => Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 8), [rows]);
+  const columns = useMemo(() => Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).filter((column) => !hiddenColumnNames.has(column) && !column.endsWith("_id")).slice(0, 8), [rows]);
   return (
     <div className="table-wrap">
       {title ? <h3>{title}</h3> : null}
@@ -1885,8 +2250,143 @@ function memberName(member: Member) {
 
 function formatCell(value: unknown) {
   if (value === null || value === undefined) return "";
-  if (typeof value === "object") return JSON.stringify(value).slice(0, 120);
+  if (isUUID(value)) return "";
+  if (typeof value === "object") return JSON.stringify(value).slice(0, 80);
   return String(value);
+}
+
+function whatsappConnected(channels: Channel[]) {
+  return channels.some((channel) => channel.provider === "whatsapp" && channel.status === "active");
+}
+
+function WhatsAppScreen() {
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
+  const [message, setMessage] = useState("");
+
+  async function load() {
+    try {
+      const [channelResponse, setupResponse] = await Promise.all([apiGet<Channel[]>("/channels"), apiGet<SetupStatus>("/bot-setup/status")]);
+      setChannels(channelResponse.data);
+      setSetupStatus(setupResponse.data);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not load WhatsApp status");
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const channel = channels.find((item) => item.provider === "whatsapp");
+  const whatsappReady = setupStatus?.items.find((item) => item.key === "whatsapp");
+
+  return (
+    <section className="content">
+      <div className="section-heading">
+        <h2>WhatsApp</h2>
+        <p>Your customer number and whether the bot is able to receive messages.</p>
+      </div>
+      {message ? <p className="error-text">{message}</p> : null}
+      <div className="grid">
+        <article className="summary-card"><span>Number</span><p>{channel?.display_number || "Not connected"}</p></article>
+        <article className="summary-card"><span>Connection</span><p>{channel?.status === "active" ? "Connected" : "Not connected"}</p></article>
+        <article className="summary-card"><span>Bot</span><p>{whatsappReady?.complete ? "Ready" : "Needs attention"}</p></article>
+      </div>
+      <p className="muted">Secrets stay hidden. If something looks wrong, check Advanced → Readiness.</p>
+    </section>
+  );
+}
+
+function KnowledgeScreen() {
+  const [faqs, setFaqs] = useState<BotFAQ[]>([]);
+  const [form, setForm] = useState({ question: "", answer: "", keywords: "" });
+  const [message, setMessage] = useState("");
+
+  async function load() {
+    try {
+      const response = await apiGet<BotFAQ[]>("/bot-faqs");
+      setFaqs(response.data);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not load answers");
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    await apiPost<BotFAQ>("/bot-faqs", form);
+    setForm({ question: "", answer: "", keywords: "" });
+    await load();
+  }
+
+  return (
+    <section className="content">
+      <div className="section-heading">
+        <h2>Knowledge</h2>
+        <p>Answers the bot can give when customers ask common questions.</p>
+      </div>
+      {message ? <p className="error-text">{message}</p> : null}
+      <form className="resource-form wide" onSubmit={submit}>
+        <input placeholder="Question" value={form.question} onChange={(event) => setForm({ ...form, question: event.target.value })} />
+        <input placeholder="Answer" value={form.answer} onChange={(event) => setForm({ ...form, answer: event.target.value })} />
+        <input placeholder="Keywords" value={form.keywords} onChange={(event) => setForm({ ...form, keywords: event.target.value })} />
+        <button type="submit">Add answer</button>
+      </form>
+      <div className="table-wrap">
+        {faqs.length === 0 ? <p className="muted">No answers yet.</p> : (
+          <table>
+            <thead><tr><th>Question</th><th>Answer</th></tr></thead>
+            <tbody>
+              {faqs.map((faq) => (
+                <tr key={faq.id}><td>{faq.question}</td><td>{faq.answer}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function PaymentsSettingsScreen() {
+  const [rows, setRows] = useState<PaymentConfiguration[]>([]);
+  const [message, setMessage] = useState("");
+
+  async function load() {
+    try {
+      const response = await apiGet<PaymentConfiguration[]>("/payment-configurations");
+      setRows(response.data);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not load payments");
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  return (
+    <section className="content">
+      <div className="section-heading">
+        <h2>Payments</h2>
+        <p>How customers pay. Secrets are never shown here.</p>
+      </div>
+      {message ? <p className="error-text">{message}</p> : null}
+      <div className="grid">
+        {rows.map((row) => (
+          <article className="summary-card" key={row.id}>
+            <span>{row.display_name || row.provider}</span>
+            <p>{row.enabled ? "Connected" : "Off"} · {humanStatus(row.status)}</p>
+            <p className="muted">{String(parseJSON(String(row.public_config ?? "{}"), { mode: "test" }).mode === "live" ? "Live mode" : "Test mode")}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 export default function App() {
@@ -1897,6 +2397,25 @@ export default function App() {
       <Route element={<RequireAuth />}>
         <Route element={<Shell />}>
           <Route index element={<Dashboard />} />
+          <Route path="sell/orders" element={<OrdersScreen />} />
+          <Route path="sell/catalogue" element={<CatalogueScreen />} />
+          <Route path="sell/inventory" element={<InventoryScreen />} />
+          <Route path="sell/customers" element={<BasicResourceScreen resource="customers" />} />
+          <Route path="automation/bot" element={<BotBuilderScreen variant="simple" />} />
+          <Route path="automation/conversations" element={<ConversationsScreen />} />
+          <Route path="automation/knowledge" element={<KnowledgeScreen />} />
+          <Route path="business/stores" element={<BasicResourceScreen resource="stores" />} />
+          <Route path="business/team" element={<TeamScreen />} />
+          <Route path="business/payments" element={<PaymentsSettingsScreen />} />
+          <Route path="business/delivery" element={<FulfilmentScreen />} />
+          <Route path="settings/business" element={<BusinessScreen />} />
+          <Route path="settings/whatsapp" element={<WhatsAppScreen />} />
+          <Route path="settings/integrations" element={<PaymentsSettingsScreen />} />
+          <Route path="advanced/bot-builder" element={<BotBuilderScreen variant="builder" />} />
+          <Route path="advanced/readiness" element={<ReadinessScreen />} />
+          <Route path="advanced/import" element={<MerchantImportScreen />} />
+          <Route path="advanced/audit-logs" element={<AuditLogScreen />} />
+          <Route path="advanced/access" element={<StoreAccessScreen />} />
           <Route path="platform/organizations" element={<BasicResourceScreen resource="organizations" />} />
           <Route path="commerce/stores" element={<BasicResourceScreen resource="stores" />} />
           <Route path="commerce/catalogue" element={<CatalogueScreen />} />
@@ -1909,15 +2428,14 @@ export default function App() {
           <Route path="organization/audit-logs" element={<AuditLogScreen />} />
           <Route path="configuration/payments" element={<PaymentsScreen />} />
           <Route path="configuration/fulfilment" element={<FulfilmentScreen />} />
-          <Route path="configuration/channels" element={<BasicResourceScreen resource="channels" />} />
-          <Route path="automation/bots" element={<BotBuilderScreen />} />
-          <Route path="automation/versions" element={<BotBuilderScreen />} />
-          <Route path="automation/conversations" element={<ConversationsScreen />} />
+          <Route path="configuration/channels" element={<WhatsAppScreen />} />
+          <Route path="automation/bots" element={<BotBuilderScreen variant="simple" />} />
+          <Route path="automation/versions" element={<BotBuilderScreen variant="builder" />} />
           <Route path="automation/support-handoffs" element={<SupportHandoffsScreen />} />
           <Route path="settings/readiness" element={<ReadinessScreen />} />
           <Route path="settings/import" element={<MerchantImportScreen />} />
           <Route path="settings" element={<BusinessScreen />} />
-          <Route path="*" element={<Placeholder title="Planned module" />} />
+          <Route path="*" element={<Placeholder title="This page is not available yet" />} />
         </Route>
       </Route>
     </Routes>
