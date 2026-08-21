@@ -528,6 +528,9 @@ func currentModuleName(session ConversationSession) string {
 
 func (s *Service) execute(ctx context.Context, snapshot bot.VersionConfiguration, session *ConversationSession, input InboundMessage) (RuntimeResult, error) {
 	variables := parseJSONMap(session.Variables)
+	defer func() {
+		session.Variables = jsonMap(variables)
+	}()
 	system := parseJSONMap(session.SystemContext)
 	runtimeContext := RuntimeContext{Session: *session, Variables: variables, System: system}
 	result := RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{}, Metadata: map[string]any{}}
@@ -576,7 +579,6 @@ func (s *Service) execute(ctx context.Context, snapshot bot.VersionConfiguration
 		}
 		runtimeContext.Session = *session
 	}
-	session.Variables = jsonMap(variables)
 	result.SessionStatus = session.Status
 	result.Handoff = session.Status == SessionHandoff
 	return result, nil

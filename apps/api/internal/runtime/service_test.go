@@ -130,6 +130,29 @@ type runtimeTestPaymentProvider struct {
 	forceUnpaid bool
 }
 
+type failOnceRuntimePaymentProvider struct {
+	mu       sync.Mutex
+	attempts int
+}
+
+func (p *failOnceRuntimePaymentProvider) Name() string {
+	return "paystack"
+}
+
+func (p *failOnceRuntimePaymentProvider) Initialize(_ context.Context, req core.PaymentInitializeRequest) (core.PaymentInitializeResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.attempts++
+	if p.attempts == 1 {
+		return core.PaymentInitializeResponse{}, errors.New("temporary provider failure")
+	}
+	return core.PaymentInitializeResponse{Reference: req.Reference, AuthorizationURL: "https://payments.zidicommerce.local/pay/" + req.Reference, ProviderMetadata: "{}"}, nil
+}
+
+func (p *failOnceRuntimePaymentProvider) Verify(_ context.Context, reference string) (core.PaymentVerification, error) {
+	return core.PaymentVerification{Reference: reference, Paid: false, Status: "pending"}, nil
+}
+
 func (p runtimeTestPaymentProvider) Name() string {
 	return p.name
 }
@@ -736,6 +759,65 @@ func TestRuntimeGeneratedOrderPaymentFailureCanCancel(t *testing.T) {
 	}
 	if order.Status != core.OrderCancelled {
 		t.Fatalf("expected cancelled order, got %+v", order)
+	}
+}
+
+func TestRuntimePersistsOrderOutputsWhenPaymentInitializationFails(t *testing.T) {
+	config := bot.VersionConfiguration{Version: bot.BotVersion{StartStepKey: "start"}, Steps: []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepEnd, Title: "Done", Message: "Done."}}}
+	provider := &failOnceRuntimePaymentProvider{}
+	fx := newRuntimeFixtureWithPaymentProvider(t, config, provider)
+	botService := bot.NewService(fx.db)
+	createdBot, err := botService.CreateSelfServiceBot(context.Background(), fx.actor, bot.SelfServiceBotInput{Name: "Acme Assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions, err := botService.ListVersions(context.Background(), fx.actor, createdBot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := botService.PublishVersion(context.Background(), fx.actor, versions[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Model(&core.Channel{}).Where("id = ?", fx.channel.ID).Update("config", `{"bot_id":"`+createdBot.ID.String()+`"}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	seedCommerce(t, fx)
+
+	send := func(id string, text string) RuntimeResult {
+		t.Helper()
+		result, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, id, "conv-payment-retry", text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	send("pr-start", "start")
+	var failed RuntimeResult
+	for index, text := range []string{"order", "1", "1", "1", "1", "review", "1", "customer@example.com"} {
+		failed = send("pr-order-"+strconv.Itoa(index), text)
+	}
+	if !strings.Contains(joinMessageTexts(failed.Messages), "could not initialize payment") {
+		t.Fatalf("expected the first payment initialization to fail, got %+v", failed.Messages)
+	}
+
+	var session ConversationSession
+	if err := fx.db.Where("external_conversation_id = ?", "conv-payment-retry").First(&session).Error; err != nil {
+		t.Fatal(err)
+	}
+	variables := parseJSONMap(session.Variables)
+	if stringValue(variables["order_id"]) == "" {
+		t.Fatalf("expected the successfully created order ID to be persisted, got %s", session.Variables)
+	}
+
+	retried := send("pr-retry", "retry")
+	if !strings.Contains(joinMessageTexts(retried.Messages), "https://payments.zidicommerce.local/pay/") {
+		t.Fatalf("expected payment initialization retry to return a link, got %+v", retried.Messages)
+	}
+	provider.mu.Lock()
+	attempts := provider.attempts
+	provider.mu.Unlock()
+	if attempts != 2 {
+		t.Fatalf("expected exactly two payment initialization attempts, got %d", attempts)
 	}
 }
 
