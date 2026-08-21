@@ -16,6 +16,7 @@ type Config struct {
 	ServerPort    string
 	LogLevel      string
 	MigrationsDir string
+	CORSOrigins   string
 	Database      DatabaseConfig
 	JWT           JWTConfig
 	Payment       PaymentConfig
@@ -62,6 +63,7 @@ func Load() (Config, error) {
 		ServerPort:    getenv("SERVER_PORT", "8080"),
 		LogLevel:      getenv("LOG_LEVEL", "info"),
 		MigrationsDir: getenv("MIGRATIONS_DIR", "migrations"),
+		CORSOrigins:   getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
 		Database: DatabaseConfig{
 			URL:      os.Getenv("DATABASE_URL"),
 			Host:     getenv("DATABASE_HOST", "localhost"),

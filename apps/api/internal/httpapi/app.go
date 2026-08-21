@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
@@ -33,6 +34,12 @@ func New(deps Dependencies) *fiber.App {
 	})
 
 	app.Use(requestLogger(deps.Logger))
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: deps.Config.CORSOrigins,
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization, X-Request-ID",
+		AllowMethods: "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+		MaxAge:       86400,
+	}))
 	app.Get("/health", healthHandler(deps.DB))
 
 	v1 := app.Group("/v1")

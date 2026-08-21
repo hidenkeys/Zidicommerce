@@ -2,20 +2,20 @@
   "stores": [
     {
       "external_key": "bingchun-lagos-test-store",
-      "name": "Lagos Test Store",
-      "code": "BCNG-LAGOS-TEST",
+      "name": "Bingchun Jara Mall",
+      "code": "BCNG-JARA",
       "status": "active",
-      "address": "Replace with approved Bing Chun store address",
+      "address": "Jara Mall, 22 Simbiat Abiola Way, Ikeja, Lagos 101233",
       "city": "Lagos",
       "country": "NG",
       "hours": [
-        { "day_of_week": 1, "opens_at": "09:00", "closes_at": "21:00", "is_closed": false },
-        { "day_of_week": 2, "opens_at": "09:00", "closes_at": "21:00", "is_closed": false },
-        { "day_of_week": 3, "opens_at": "09:00", "closes_at": "21:00", "is_closed": false },
-        { "day_of_week": 4, "opens_at": "09:00", "closes_at": "21:00", "is_closed": false },
-        { "day_of_week": 5, "opens_at": "09:00", "closes_at": "21:00", "is_closed": false },
-        { "day_of_week": 6, "opens_at": "09:00", "closes_at": "21:00", "is_closed": false },
-        { "day_of_week": 0, "opens_at": "12:00", "closes_at": "20:00", "is_closed": false }
+        { "day_of_week": 1, "opens_at": "00:00", "closes_at": "23:59", "is_closed": false },
+        { "day_of_week": 2, "opens_at": "00:00", "closes_at": "23:59", "is_closed": false },
+        { "day_of_week": 3, "opens_at": "00:00", "closes_at": "23:59", "is_closed": false },
+        { "day_of_week": 4, "opens_at": "00:00", "closes_at": "23:59", "is_closed": false },
+        { "day_of_week": 5, "opens_at": "00:00", "closes_at": "23:59", "is_closed": false },
+        { "day_of_week": 6, "opens_at": "00:00", "closes_at": "23:59", "is_closed": false },
+        { "day_of_week": 0, "opens_at": "00:00", "closes_at": "23:59", "is_closed": false }
       ],
       "fulfilment_modes": [
         { "mode": "pickup", "enabled": true },
@@ -34,36 +34,56 @@
   ],
   "products": [
     {
-      "external_key": "bingchun-milk-tea-placeholder",
+      "external_key": "bingchun-milk-tea",
       "category_external_key": "bingchun-milk-tea",
       "name": "Milk Tea",
       "slug": "milk-tea",
-      "description": "Replace with approved Bing Chun product description.",
+      "description": "Bing Chun milk tea pilot product.",
       "status": "active",
       "variants": [
         {
           "external_key": "bingchun-milk-tea-regular",
           "sku": "BCNG-MT-REG",
           "name": "Regular",
-          "price_minor": 0,
+          "price_minor": 150000,
           "currency": "NGN",
           "status": "active"
         }
       ],
-      "images": [
+      "images": []
+    },
+    {
+      "external_key": "bingchun-fruit-tea",
+      "category_external_key": "bingchun-fruit-tea",
+      "name": "Fruit Tea",
+      "slug": "fruit-tea",
+      "description": "Bing Chun fruit tea pilot product.",
+      "status": "active",
+      "variants": [
         {
-          "url": "https://example.com/replace-with-approved-image.png",
-          "alt_text": "Milk Tea"
+          "external_key": "bingchun-fruit-tea-regular",
+          "sku": "BCNG-FT-REG",
+          "name": "Regular",
+          "price_minor": 180000,
+          "currency": "NGN",
+          "status": "active"
         }
-      ]
+      ],
+      "images": []
     }
   ],
   "inventory": [
     {
       "store_external_key": "bingchun-lagos-test-store",
       "variant_external_key": "bingchun-milk-tea-regular",
-      "on_hand": 0,
-      "reorder_threshold": 0
+      "on_hand": 100,
+      "reorder_threshold": 10
+    },
+    {
+      "store_external_key": "bingchun-lagos-test-store",
+      "variant_external_key": "bingchun-fruit-tea-regular",
+      "on_hand": 100,
+      "reorder_threshold": 10
     }
   ],
   "channels": [
