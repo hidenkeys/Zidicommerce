@@ -23,10 +23,12 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Get("/runtime/conversations", h.listConversations)
 	router.Get("/runtime/conversations/:id", h.getConversation)
 	router.Get("/runtime/conversations/:id/messages", h.listConversationMessages)
+	router.Post("/runtime/conversations/:id/reply", h.replyToConversation)
 	router.Get("/runtime/support-handoffs", h.listSupportHandoffs)
 	router.Get("/runtime/support-tickets", h.listSupportTickets)
 	router.Post("/runtime/support-handoffs/:id/claim", h.claimSupportHandoff)
 	router.Post("/runtime/support-handoffs/:id/resolve", h.resolveSupportHandoff)
+	router.Post("/runtime/support-handoffs/:id/reopen", h.reopenSupportHandoff)
 	router.Get("/runtime/support-handoffs/:id/notes", h.listSupportHandoffNotes)
 	router.Post("/runtime/support-handoffs/:id/notes", h.addSupportHandoffNote)
 }
@@ -77,6 +79,19 @@ func (h *Handler) listConversationMessages(c *fiber.Ctx) error {
 	return respond(c, data, err)
 }
 
+func (h *Handler) replyToConversation(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input ConversationReplyInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.ReplyToConversation(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
 func (h *Handler) listSupportHandoffs(c *fiber.Ctx) error {
 	data, err := h.service.ListSupportHandoffs(c.UserContext(), currentUser(c), c.Query("status"))
 	return respond(c, data, err)
@@ -114,6 +129,15 @@ func (h *Handler) resolveSupportHandoff(c *fiber.Ctx) error {
 		}
 	}
 	data, err := h.service.ResolveSupportHandoff(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) reopenSupportHandoff(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.ReopenSupportHandoff(c.UserContext(), currentUser(c), id)
 	return respond(c, data, err)
 }
 
@@ -167,6 +191,7 @@ func (h *Handler) whatsAppWebhook(c *fiber.Ctx) error {
 			return httperror.Forbidden("Webhook signature verification failed")
 		}
 		input.ChannelID = &channel.ID
+		h.service.log.Info("whatsapp inbound accepted", "organization_id", channel.OrganizationID, "channel_id", channel.ID, "message_id", input.ExternalMessageID, "message_type", stringValue(input.Metadata["message_type"]))
 		result, err := h.service.ProcessMessage(c.UserContext(), input)
 		if err != nil {
 			return err

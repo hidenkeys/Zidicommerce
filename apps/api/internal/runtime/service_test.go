@@ -405,12 +405,15 @@ func TestRuntimeExecutesGeneratedSelfServiceOrderAndTrackingFlow(t *testing.T) {
 		t.Fatalf("expected reset to reactivate session, got %+v", trackStart)
 	}
 	trackMenu := send("ss-track-menu", "track_order")
-	if len(trackMenu.Messages) == 0 || !strings.Contains(joinMessageTexts(trackMenu.Messages), orders[0].OrderNumber) {
-		t.Fatalf("expected recent order list, got %+v", trackMenu.Messages)
+	trackText := joinMessageTexts(trackMenu.Messages)
+	if !strings.Contains(trackText, orders[0].OrderNumber) {
+		t.Fatalf("expected recent order, got %+v", trackMenu.Messages)
 	}
-	trackStatus := send("ss-track-select", "1")
-	if !strings.Contains(joinMessageTexts(trackStatus.Messages), "Order confirmed") {
-		t.Fatalf("expected order status message, got %+v", trackStatus.Messages)
+	if strings.Contains(trackText, "Choose an order using its number") {
+		t.Fatalf("single order should not ask for a numeric selection, got %+v", trackMenu.Messages)
+	}
+	if !strings.Contains(trackText, "Here is the latest status") && !strings.Contains(trackText, "most recent order") {
+		t.Fatalf("expected auto-shown order status for a single order, got %+v", trackMenu.Messages)
 	}
 	sendOther := func(id string, text string) RuntimeResult {
 		t.Helper()
@@ -568,7 +571,7 @@ func TestRuntimeDisabledModuleCannotBeReachedFromEntryMenu(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0].Text, "available options") {
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0].Text, "I didn't recognize that option") {
 		t.Fatalf("expected disabled module option to be rejected at entry, got %+v", result.Messages)
 	}
 	var session ConversationSession

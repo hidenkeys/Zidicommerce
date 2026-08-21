@@ -93,7 +93,7 @@ func (s *Service) CreateSelfServiceBot(ctx context.Context, actor auth.CurrentUs
 		Status:          BotStatusDraft,
 		DefaultLanguage: "en",
 		Timezone:        "Africa/Lagos",
-		FallbackConfig:  `{"message":"I did not understand that yet. Please choose one of the available options or type start to begin again.","missing_variable":"not available"}`,
+		FallbackConfig:  `{"message":"I didn't recognize that option. Please choose one of the options above, or type menu to return to the main menu.","missing_variable":"not available"}`,
 		HandoffConfig:   `{"enabled":true,"message":"A team member will take over this conversation shortly."}`,
 		Metadata:        `{"builder":"self_service","phase":"8"}`,
 	}
@@ -193,7 +193,7 @@ func (s *Service) CreateSelfServiceBot(ctx context.Context, actor auth.CurrentUs
 			{"id": "cancel", "label": "Cancel order"},
 			{"id": "support", "label": "Talk to support"},
 		}), Validation: "{}", Metadata: "{}"}
-		trackOrderQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "track_order_choice", Text: "Choose an order using its number.", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "track_order_choice", Options: "[]", Validation: "{}", Metadata: "{}"}
+		trackOrderQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "track_order_choice", Text: "Which order would you like to track? Reply with the number next to it, or type menu to go back.", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "track_order_choice", Options: "[]", Validation: "{}", Metadata: "{}"}
 		faqQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "faq_query", Text: "What would you like to know?", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "faq_query", Options: "[]", Validation: "{}", Metadata: "{}"}
 		complaintQuestion := Question{ID: uuid.New(), OrganizationID: actor.OrganizationID, VersionID: version.ID, QuestionKey: "complaint_message", Text: "Tell us what happened. Include your order number if you have one.", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "complaint_message", Options: "[]", Validation: "{}", Metadata: "{}"}
 		questions := []Question{menuQuestion, storeQuestion, categoryQuestion, productQuestion, quantityQuestion, cartQuestion, fulfilmentQuestion, deliveryAddressQuestion, emailQuestion, paymentQuestion, trackOrderQuestion, faqQuestion, complaintQuestion}

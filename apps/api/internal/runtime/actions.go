@@ -592,11 +592,17 @@ func (a commerceActions) getCustomerOrders(ctx context.Context, runtimeContext R
 	for _, order := range orders {
 		rows = append(rows, orderOutputs(order))
 	}
-	message := numberedRowsMessage("Choose an order to track:", rows, func(row map[string]any) string {
-		return fmt.Sprintf("%s - %s - %s", stringValue(row["order_number"]), customerOrderStatus(stringValue(row["order_status"])), formatMinorCurrency(int64Value(row["total_minor"]), stringValue(row["currency"])))
+	message := numberedRowsMessage("Which order would you like to track?", rows, func(row map[string]any) string {
+		return fmt.Sprintf("%s — %s — %s", stringValue(row["order_number"]), formatMinorCurrency(int64Value(row["total_minor"]), stringValue(row["currency"])), customerOrderStatus(stringValue(row["order_status"])))
 	})
 	if len(rows) == 0 {
-		message = "I could not find any recent orders for this WhatsApp number."
+		message = emptyOrdersMessage()
+	} else if len(rows) == 1 {
+		row := rows[0]
+		message = fmt.Sprintf("Your most recent order is %s.\n\nStatus: %s\nTotal: %s", stringValue(row["order_number"]), customerOrderStatus(stringValue(row["order_status"])), formatMinorCurrency(int64Value(row["total_minor"]), stringValue(row["currency"])))
+		if store := strings.TrimSpace(stringValue(row["store_name"])); store != "" {
+			message = fmt.Sprintf("Your most recent order is %s.\n\nStatus: %s\nStore: %s\nTotal: %s", stringValue(row["order_number"]), customerOrderStatus(stringValue(row["order_status"])), store, formatMinorCurrency(int64Value(row["total_minor"]), stringValue(row["currency"])))
+		}
 	}
 	return map[string]any{"orders": rows, "count": len(rows), "message": message}, nil
 }
@@ -604,7 +610,7 @@ func (a commerceActions) getCustomerOrders(ctx context.Context, runtimeContext R
 func (a commerceActions) selectOrder(_ context.Context, _ RuntimeContext, inputs map[string]any) (map[string]any, error) {
 	row, err := selectRuntimeRow(inputs["orders"], inputs["selection"])
 	if err != nil {
-		return nil, runtimeError(ErrInvalidInput, "Choose an order using its number.")
+		return nil, runtimeError(ErrInvalidInput, unrecognizedOptionMessage())
 	}
 	return map[string]any{"order_id": stringValue(row["order_id"]), "order_number": stringValue(row["order_number"]), "message": "Order selected: " + stringValue(row["order_number"])}, nil
 }
@@ -833,7 +839,17 @@ func cartOutputs(summary core.CartSummary) map[string]any {
 }
 
 func orderOutputs(order core.Order) map[string]any {
-	return map[string]any{"order_id": order.ID.String(), "order_number": order.OrderNumber, "order_status": order.Status, "fulfilment_type": order.FulfilmentType, "subtotal_minor": order.SubtotalMinor, "delivery_fee_minor": order.DeliveryFeeMinor, "total_minor": order.TotalMinor, "currency": order.Currency}
+	return map[string]any{
+		"order_id":           order.ID.String(),
+		"order_number":       order.OrderNumber,
+		"order_status":       order.Status,
+		"fulfilment_type":    order.FulfilmentType,
+		"subtotal_minor":     order.SubtotalMinor,
+		"delivery_fee_minor": order.DeliveryFeeMinor,
+		"total_minor":        order.TotalMinor,
+		"currency":           order.Currency,
+		"store_name":         order.Store.Name,
+	}
 }
 
 func cartSummaryMessage(summary core.CartSummary) string {
@@ -973,7 +989,7 @@ func selectRuntimeRow(value any, selection any) (map[string]any, error) {
 			return row, nil
 		}
 	}
-	return nil, runtimeError(ErrInvalidInput, "Please choose one of the available options.")
+	return nil, runtimeError(ErrInvalidInput, unrecognizedOptionMessage())
 }
 
 func mapSlice(value any) []map[string]any {

@@ -92,6 +92,10 @@ type SupportHandoffNoteInput struct {
 	Internal bool   `json:"internal"`
 }
 
+type ConversationReplyInput struct {
+	Text string `json:"text"`
+}
+
 type ConversationSummary struct {
 	ID                     uuid.UUID  `json:"id"`
 	OrganizationID         uuid.UUID  `json:"organization_id"`

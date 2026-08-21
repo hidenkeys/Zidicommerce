@@ -103,6 +103,14 @@ func (s *Service) ProcessMessage(ctx context.Context, input InboundMessage) (Run
 		return RuntimeResult{}, err
 	}
 	input.CustomerID = &customer.ID
+	s.log.Info("runtime inbound message",
+		"organization_id", channel.OrganizationID,
+		"channel_id", channel.ID,
+		"provider", channel.Provider,
+		"message_id", input.ExternalMessageID,
+		"command", string(classifyCommand(input.Text)),
+		"text_preview", truncateLogText(input.Text, 80),
+	)
 
 	session, snapshot, err := s.loadOrCreateSession(ctx, channel, input)
 	if err != nil {
@@ -111,6 +119,7 @@ func (s *Service) ProcessMessage(ctx context.Context, input InboundMessage) (Run
 	}
 	result, err := s.execute(ctx, snapshot, &session, input)
 	if err != nil {
+		s.log.Error("runtime execution failed", "organization_id", channel.OrganizationID, "conversation_id", session.ID, "current_step", session.CurrentStepKey, "module", currentModuleName(session), "error", publicRuntimeError(err).Message)
 		s.recordEvent(ctx, session, EventRuntimeError, "error", "", "", map[string]any{"error": publicRuntimeError(err)})
 		result = RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{s.fallbackMessage(snapshot, err)}, Error: publicRuntimeError(err)}
 	}
@@ -121,7 +130,18 @@ func (s *Service) ProcessMessage(ctx context.Context, input InboundMessage) (Run
 	if err := s.markProcessed(ctx, processed, &session.ID, "processed", result); err != nil {
 		return RuntimeResult{}, err
 	}
-	s.log.Info("runtime message processed", "organization_id", channel.OrganizationID, "bot_id", session.BotID, "bot_version_id", session.BotVersionID, "channel_id", channel.ID, "conversation_id", session.ID, "message_id", input.ExternalMessageID, "status", result.SessionStatus)
+	s.log.Info("runtime message processed",
+		"organization_id", channel.OrganizationID,
+		"conversation_id", session.ID,
+		"bot_version_id", session.BotVersionID,
+		"channel_id", channel.ID,
+		"current_step", session.CurrentStepKey,
+		"module", currentModuleName(session),
+		"selected_option", strings.TrimSpace(input.Text),
+		"message_id", input.ExternalMessageID,
+		"status", result.SessionStatus,
+		"outbound_count", len(result.Messages),
+	)
 	return result, nil
 }
 
@@ -212,6 +232,56 @@ func (s *Service) ListConversationMessages(ctx context.Context, actor auth.Curre
 	var messages []ConversationMessage
 	err := s.db.WithContext(ctx).Where("organization_id = ? AND session_id = ?", actor.OrganizationID, sessionID).Order("created_at ASC").Find(&messages).Error
 	return messages, err
+}
+
+func (s *Service) ReplyToConversation(ctx context.Context, actor auth.CurrentUser, sessionID uuid.UUID, input ConversationReplyInput) (ConversationMessage, error) {
+	if !actor.Role.CanOperateStore() && actor.Role != authz.SupportAgent {
+		return ConversationMessage{}, httperror.Forbidden("You cannot reply to conversations")
+	}
+	text := strings.TrimSpace(input.Text)
+	if text == "" {
+		return ConversationMessage{}, httperror.BadRequest("Reply text is required")
+	}
+	session, err := s.GetConversation(ctx, actor, sessionID)
+	if err != nil {
+		return ConversationMessage{}, err
+	}
+	var channel core.Channel
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, session.ChannelID).First(&channel).Error; err != nil {
+		return ConversationMessage{}, mapNotFoundCode(err, ErrChannelNotFound, "Channel not found")
+	}
+	outbound := ConversationMessage{ID: uuid.New(), OrganizationID: session.OrganizationID, SessionID: session.ID, ChannelID: session.ChannelID, Direction: DirectionOutbound, MessageType: MessageText, Sender: "agent", Body: text, Metadata: jsonValue(map[string]any{"source": "admin_reply"})}
+	if err := s.db.WithContext(ctx).Create(&outbound).Error; err != nil {
+		return ConversationMessage{}, err
+	}
+	result := RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{Type: MessageText, Text: text}}}
+	inbound := InboundMessage{ChannelID: &channel.ID, ExternalMessageID: "agent-reply-" + outbound.ID.String(), ExternalConversationID: session.ExternalConversationID, Sender: session.ExternalConversationID}
+	if _, err := s.DispatchOutbound(ctx, channel, inbound, result); err != nil {
+		s.log.Warn("runtime agent reply dispatch failed", "conversation_id", session.ID, "channel_id", channel.ID)
+	}
+	s.log.Info("runtime agent reply sent", "organization_id", session.OrganizationID, "conversation_id", session.ID, "channel_id", channel.ID)
+	return outbound, nil
+}
+
+func (s *Service) ReopenSupportHandoff(ctx context.Context, actor auth.CurrentUser, handoffID uuid.UUID) (SupportHandoff, error) {
+	if !actor.Role.CanOperateStore() && actor.Role != authz.SupportAgent {
+		return SupportHandoff{}, httperror.Forbidden("You cannot reopen support handoffs")
+	}
+	var handoff SupportHandoff
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error; err != nil {
+			return mapNotFoundCode(err, ErrSessionNotFound, "Support handoff not found")
+		}
+		now := s.now()
+		if err := tx.Model(&handoff).Updates(map[string]any{"status": "open", "resolved_at": nil, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&ConversationSession{}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoff.SessionID).Updates(map[string]any{"status": SessionHandoff, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		return tx.Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error
+	})
+	return handoff, err
 }
 
 func (s *Service) ListSupportHandoffs(ctx context.Context, actor auth.CurrentUser, status string) ([]SupportHandoff, error) {
@@ -422,7 +492,7 @@ func (s *Service) loadOrCreateSession(ctx context.Context, channel core.Channel,
 		if expired && session.Status == SessionActive {
 			session.Status = SessionExpired
 		}
-		shouldReset := input.SimulatorStart || isResetText(input.Text)
+		shouldReset := input.SimulatorStart || isHardResetText(input.Text)
 		if !shouldReset && (session.Status == SessionActive || session.Status == SessionHandoff) {
 			snapshot, err := s.loadSnapshot(ctx, channel.OrganizationID, session.BotID, session.BotVersionID)
 			return session, snapshot, err
@@ -535,29 +605,61 @@ func (s *Service) execute(ctx context.Context, snapshot bot.VersionConfiguration
 	runtimeContext := RuntimeContext{Session: *session, Variables: variables, System: system}
 	result := RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{}, Metadata: map[string]any{}}
 	if session.Status == SessionHandoff {
-		return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Handoff: true, Messages: []OutboundMessage{{Type: MessageText, Text: "A team member is handling this conversation."}}}, nil
+		if classifyCommand(input.Text) == commandRestart || classifyCommand(input.Text) == commandMenu {
+			returnToEntry(snapshot, session, runtimeContext)
+			variables = map[string]any{}
+			runtimeContext.Variables = variables
+		} else {
+			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Handoff: true, Messages: []OutboundMessage{{Type: MessageText, Text: "A team member is handling this conversation. Type 'menu' if you want to start a new request."}}}, nil
+		}
 	}
 	if session.Status == SessionCompleted || session.Status == SessionExpired || session.Status == SessionCancelled {
 		if !isResetText(input.Text) {
-			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{Type: MessageText, Text: "This conversation has ended. Send 'start' to begin again."}}}, nil
+			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{Type: MessageText, Text: "This conversation has ended. Send 'hi' or 'menu' to begin again."}}}, nil
 		}
-		session.CurrentStepKey = snapshot.Version.StartStepKey
-		session.Status = SessionActive
-		session.ExpectedInput = ""
+		returnToEntry(snapshot, session, runtimeContext)
 		variables = map[string]any{}
 		runtimeContext.Variables = variables
 	}
+	if handled, err := s.handleLifecycle(snapshot, session, input, runtimeContext, &result); err != nil {
+		return result, err
+	} else if handled {
+		if session.ExpectedInput != "" {
+			result.SessionStatus = session.Status
+			return result, nil
+		}
+	}
 	steps := indexSteps(snapshot.Steps)
-	if session.ExpectedInput != "" {
+	if session.ExpectedInput == lifecycleTrackEmpty {
+		if handled := s.handleTrackEmptyChoice(snapshot, session, input, runtimeContext, &result); handled {
+			if session.ExpectedInput != "" {
+				result.SessionStatus = session.Status
+				return result, nil
+			}
+		}
+	} else if session.ExpectedInput != "" {
 		step, ok := steps[session.CurrentStepKey]
 		if !ok {
 			return result, runtimeErrorf(ErrInvalidStep, "This bot is not configured correctly.", "waiting step %s not found", session.CurrentStepKey)
 		}
 		if err := s.acceptAnswer(step, snapshot, session, input, runtimeContext); err != nil {
-			result.Messages = append(result.Messages, s.validationMessage(snapshot, err))
-			return result, nil
+			retries := int64Value(runtimeContext.System["invalid_input_retries"]) + 1
+			runtimeContext.System["invalid_input_retries"] = retries
+			session.SystemContext = jsonMap(runtimeContext.System)
+			if retries >= maxInvalidRetries {
+				result.Messages = append(result.Messages, OutboundMessage{Type: MessageText, Text: "Let's start over from the main menu."})
+				returnToEntry(snapshot, session, runtimeContext)
+				variables = map[string]any{}
+				runtimeContext.Variables = variables
+			} else {
+				result.Messages = append(result.Messages, s.validationMessage(snapshot, err))
+				return result, nil
+			}
+		} else {
+			runtimeContext.System["invalid_input_retries"] = 0
+			session.SystemContext = jsonMap(runtimeContext.System)
+			s.recordEvent(ctx, *session, EventAnswerReceived, "info", step.StepKey, "", map[string]any{"selected_option": strings.TrimSpace(input.Text)})
 		}
-		s.recordEvent(ctx, *session, EventAnswerReceived, "info", step.StepKey, "", nil)
 	}
 	guard := 0
 	for session.Status == SessionActive && session.ExpectedInput == "" {
@@ -632,7 +734,7 @@ func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.V
 			s.recordEvent(ctx, *session, EventActionFailed, "error", step.StepKey, action.ActionKey, map[string]any{"error": publicRuntimeError(err)})
 			return false, err
 		}
-		s.recordEvent(ctx, *session, EventActionCompleted, "info", step.StepKey, action.ActionKey, map[string]any{"outputs": scrubOutputs(outputs)})
+		s.recordEvent(ctx, *session, EventActionCompleted, "info", step.StepKey, action.ActionKey, map[string]any{"outputs": scrubOutputs(outputs), "action_result": stringValue(outputs["message"])})
 		if stringValue(outputs["message"]) != "" {
 			result.Messages = append(result.Messages, OutboundMessage{Type: MessageText, Text: stringValue(outputs["message"])})
 		}
@@ -640,6 +742,28 @@ func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.V
 			session.Status = SessionHandoff
 			_ = s.openSupportHandoff(ctx, *session, stringValue(outputs["reason"]), runtimeContext)
 			return false, nil
+		}
+		if action.ActionType == "get_customer_orders" {
+			count := int(int64Value(outputs["count"]))
+			if count == 0 {
+				if len(result.Messages) > 0 {
+					result.Messages[len(result.Messages)-1].Type = MessageButtons
+					result.Messages[len(result.Messages)-1].Options = trackEmptyOptions()
+				}
+				session.ExpectedInput = lifecycleTrackEmpty
+				return false, nil
+			}
+			if count == 1 {
+				next, ok := stepByKey(snapshot, step.NextStepKey)
+				if ok && next.QuestionID != nil {
+					if question, qerr := findQuestion(snapshot.Questions, next.QuestionID); qerr == nil && question.VariableName != "" {
+						setPath(runtimeContext.Variables, question.VariableName, "1")
+					}
+				} else {
+					setPath(runtimeContext.Variables, "track_order_choice", "1")
+				}
+				return s.advance(session, skipSelectableQuestion(snapshot, step.NextStepKey)), nil
+			}
 		}
 		return s.advance(session, step.NextStepKey), nil
 	case bot.StepModule:
@@ -686,6 +810,131 @@ func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.V
 		return false, nil
 	default:
 		return false, runtimeErrorf(ErrInvalidStep, "This bot is not configured correctly.", "unsupported step type %s", step.Type)
+	}
+}
+
+func (s *Service) handleLifecycle(snapshot bot.VersionConfiguration, session *ConversationSession, input InboundMessage, runtimeContext RuntimeContext, result *RuntimeResult) (bool, error) {
+	command := classifyCommand(input.Text)
+	if command == commandNone {
+		return false, nil
+	}
+	if s.commandCapturedByCurrentQuestion(snapshot, session, input) {
+		return false, nil
+	}
+	atEntry := session.CurrentStepKey == snapshot.Version.StartStepKey
+	switch command {
+	case commandGreeting:
+		if atEntry && session.ExpectedInput != "" && session.ExpectedInput != lifecycleTrackEmpty {
+			session.ExpectedInput = ""
+			return true, nil
+		}
+		if atEntry && session.ExpectedInput == "" {
+			return false, nil
+		}
+		result.Messages = append(result.Messages, OutboundMessage{Type: MessageText, Text: "Starting over from the main menu."})
+		returnToEntry(snapshot, session, runtimeContext)
+		clearRuntimeVariables(runtimeContext)
+		return true, nil
+	case commandMenu, commandRestart, commandCancel:
+		if command == commandCancel {
+			result.Messages = append(result.Messages, OutboundMessage{Type: MessageText, Text: "Okay, I cancelled that request."})
+		}
+		returnToEntry(snapshot, session, runtimeContext)
+		clearRuntimeVariables(runtimeContext)
+		return true, nil
+	case commandBack:
+		frame, ok := popModuleFrame(runtimeContext.System)
+		session.SystemContext = jsonMap(runtimeContext.System)
+		if ok && strings.TrimSpace(frame.ReturnStepKey) != "" {
+			session.ExpectedInput = ""
+			session.CurrentStepKey = frame.ReturnStepKey
+			result.Messages = append(result.Messages, OutboundMessage{Type: MessageText, Text: "Going back."})
+			return true, nil
+		}
+		result.Messages = append(result.Messages, OutboundMessage{Type: MessageText, Text: "Returning to the main menu."})
+		returnToEntry(snapshot, session, runtimeContext)
+		clearRuntimeVariables(runtimeContext)
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func (s *Service) commandCapturedByCurrentQuestion(snapshot bot.VersionConfiguration, session *ConversationSession, input InboundMessage) bool {
+	command := classifyCommand(input.Text)
+	if command != commandCancel && command != commandBack {
+		return false
+	}
+	if session.ExpectedInput == "" || session.ExpectedInput == lifecycleTrackEmpty {
+		return false
+	}
+	step, ok := stepByKey(snapshot, session.CurrentStepKey)
+	if !ok || step.QuestionID == nil {
+		return false
+	}
+	question, err := findQuestion(snapshot.Questions, step.QuestionID)
+	if err != nil {
+		return false
+	}
+	options := parseOptions(s.effectiveQuestionOptions(snapshot, step, question))
+	if len(options) == 0 {
+		return false
+	}
+	_, matchErr := matchSingleChoice(input.Text, options)
+	return matchErr == nil
+}
+
+func clearRuntimeVariables(runtimeContext RuntimeContext) {
+	for key := range runtimeContext.Variables {
+		delete(runtimeContext.Variables, key)
+	}
+}
+
+func (s *Service) handleTrackEmptyChoice(snapshot bot.VersionConfiguration, session *ConversationSession, input InboundMessage, runtimeContext RuntimeContext, result *RuntimeResult) bool {
+	text := normalizeCommand(input.Text)
+	switch text {
+	case "1", "order", "place an order", "place order":
+		session.ExpectedInput = ""
+		clearRuntimeVariables(runtimeContext)
+		setPath(runtimeContext.Variables, "intent", "order")
+		if key := findStepKeyByModule(snapshot, "ORDER"); key != "" {
+			session.CurrentStepKey = key
+			delete(runtimeContext.System, "module_stack")
+			session.SystemContext = jsonMap(runtimeContext.System)
+			return true
+		}
+		returnToEntry(snapshot, session, runtimeContext)
+		return true
+	case "2", "support", "contact support", "complaint":
+		session.ExpectedInput = ""
+		clearRuntimeVariables(runtimeContext)
+		setPath(runtimeContext.Variables, "intent", "support")
+		if key := findHandoffStep(snapshot); key != "" {
+			session.CurrentStepKey = key
+			delete(runtimeContext.System, "module_stack")
+			session.SystemContext = jsonMap(runtimeContext.System)
+			return true
+		}
+		if key := findStepKeyByModule(snapshot, "CONTACT_SUPPORT"); key != "" {
+			session.CurrentStepKey = key
+			return true
+		}
+		returnToEntry(snapshot, session, runtimeContext)
+		return true
+	case "3", "menu", "main menu":
+		session.ExpectedInput = ""
+		clearRuntimeVariables(runtimeContext)
+		returnToEntry(snapshot, session, runtimeContext)
+		return true
+	default:
+		if classifyCommand(input.Text) != commandNone {
+			session.ExpectedInput = ""
+			clearRuntimeVariables(runtimeContext)
+			returnToEntry(snapshot, session, runtimeContext)
+			return true
+		}
+		result.Messages = append(result.Messages, OutboundMessage{Type: MessageButtons, Text: unrecognizedOptionMessage(), Options: trackEmptyOptions()})
+		return true
 	}
 }
 
@@ -793,7 +1042,7 @@ func matchSingleChoice(text string, options []MessageOption) (any, error) {
 			return option.ID, nil
 		}
 	}
-	return nil, runtimeError(ErrInvalidInput, "Please choose one of the available options.")
+	return nil, runtimeError(ErrInvalidInput, unrecognizedOptionMessage())
 }
 
 func (s *Service) effectiveQuestionOptions(snapshot bot.VersionConfiguration, step bot.Step, question bot.Question) string {
@@ -1150,15 +1399,6 @@ func mapNotFoundCode(err error, code string, message string) error {
 		return runtimeError(code, message)
 	}
 	return err
-}
-
-func isResetText(text string) bool {
-	switch strings.ToLower(strings.TrimSpace(text)) {
-	case "start", "restart", "reset", "hi", "hello", "menu":
-		return true
-	default:
-		return false
-	}
 }
 
 func canUseRuntimeSimulator(role authz.Role) bool {
