@@ -557,6 +557,7 @@ function ProviderHome() {
   const provider = data.provider as Record<string, unknown>;
   const current = data.current_job as Record<string, unknown> | undefined;
   const request = current?.request as Record<string, unknown> | undefined;
+  const hasCurrentJob = Boolean(request?.id) && request?.id !== "00000000-0000-0000-0000-000000000000";
   return (
     <div>
       <h1>Hi, {String(provider?.name || "there")}</h1>
@@ -571,7 +572,7 @@ function ProviderHome() {
         <div className="card"><span className="muted">Completed today</span><b>{String(data.completed_today ?? 0)}</b></div>
         <div className="card"><span className="muted">Earnings</span><b>{money(data.earnings_minor)}</b></div>
       </div>
-      {request ? <div className="card" style={{ marginTop: 16 }}><h2>Current job</h2><p>{String(request.description)} · {String(request.area)}</p><Link to={`/provider/jobs/${request.id}`}>Open job</Link></div> : null}
+      {hasCurrentJob ? <div className="card" style={{ marginTop: 16 }}><h2>Current job</h2><p>{String(request?.description)} · {String(request?.area)}</p><Link to={`/provider/jobs/${request?.id}`}>Open job</Link></div> : null}
     </div>
   );
 }
