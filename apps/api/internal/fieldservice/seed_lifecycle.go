@@ -145,13 +145,19 @@ func SeedLifecycleJobs(ctx context.Context, db *gorm.DB, commerce *core.Service,
 		if err != nil {
 			return fmt.Errorf("demo customer %s: %w", job.Customer.Name, err)
 		}
-		var existing int64
-		if err := db.WithContext(ctx).Model(&Request{}).
+		var existing Request
+		err = db.WithContext(ctx).
 			Where("organization_id = ? AND customer_id = ? AND pool_id = ? AND description = ?", actor.OrganizationID, customer.ID, pool.ID, job.Description).
-			Count(&existing).Error; err != nil {
+			First(&existing).Error
+		if err != nil && err != gorm.ErrRecordNotFound {
 			return err
 		}
-		if existing > 0 {
+		if err == nil {
+			if existing.Status == RequestMatching || existing.Status == RequestDispatching {
+				if err := resumeSeedDispatch(ctx, db, commerce, field, actor, job, existing); err != nil {
+					return fmt.Errorf("resume demo job %s: %w", job.Description, err)
+				}
+			}
 			continue
 		}
 		if err := seedOneJob(ctx, db, commerce, field, actor, job, pool, customer); err != nil {
@@ -194,7 +200,39 @@ func seedOneJob(ctx context.Context, db *gorm.DB, commerce *core.Service, field 
 	if job.Stage == "dispatching" {
 		return nil
 	}
+	return advanceSeedJobFromDispatch(ctx, db, commerce, field, actor, job, request)
+}
 
+// resumeSeedDispatch repairs a seed run interrupted after payment but before a
+// provider could be notified. Updating the configured location and rerunning
+// deterministic matching is safe because StartMatching replaces score rows and
+// never creates a second assignment.
+func resumeSeedDispatch(ctx context.Context, db *gorm.DB, commerce *core.Service, field *Service, actor auth.CurrentUser, job SeedJob, request Request) error {
+	lat, lng, ok := GeocodeLagos(job.Customer.Area)
+	updates := map[string]any{
+		"customer_name": job.Customer.Name, "customer_phone": job.Customer.Phone,
+		"area": job.Customer.Area, "address": job.Customer.Address, "preferred_at": job.PreferredAt,
+	}
+	if ok {
+		updates["latitude"], updates["longitude"] = lat, lng
+	}
+	if err := db.WithContext(ctx).Model(&Request{}).Where("organization_id = ? AND id = ?", actor.OrganizationID, request.ID).Updates(updates).Error; err != nil {
+		return err
+	}
+	if err := field.StartMatching(ctx, actor, request.ID); err != nil {
+		return err
+	}
+	if job.Stage == "dispatching" {
+		return nil
+	}
+	updated, err := field.getRequest(ctx, actor.OrganizationID, request.ID)
+	if err != nil {
+		return err
+	}
+	return advanceSeedJobFromDispatch(ctx, db, commerce, field, actor, job, updated)
+}
+
+func advanceSeedJobFromDispatch(ctx context.Context, db *gorm.DB, commerce *core.Service, field *Service, actor auth.CurrentUser, job SeedJob, request Request) error {
 	providerActor, attemptID, err := notifiedProviderActor(ctx, db, field, actor, request.ID)
 	if err != nil {
 		return err

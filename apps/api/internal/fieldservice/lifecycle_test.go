@@ -518,6 +518,57 @@ func TestSeedLifecycleIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestSeedLifecycleResumesDispatchAfterLocationCorrection(t *testing.T) {
+	fx := newFieldFixture(t)
+	ctx := context.Background()
+	providerIDs := []uuid.UUID{fx.john.ID, fx.far.ID}
+	if err := fx.db.Model(&Provider{}).Where("organization_id = ? AND id IN ?", fx.actor.OrganizationID, providerIDs).
+		Update("availability", AvailabilityOffline).Error; err != nil {
+		t.Fatal(err)
+	}
+	description := "Seeded request with an initially unsupported location"
+	request, err := fx.field.CreateRequest(ctx, fx.actor, CreateRequestInput{
+		CustomerID: fx.customer.ID, PoolID: fx.plumber.ID, CustomerName: "Amaka", CustomerPhone: "+2348011111111",
+		Area: "Unknown district", Address: "Unknown district", Description: description, PreferredAt: "today",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, payment, err := fx.field.InitializeBookingFee(ctx, fx.actor, request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.commerce.VerifyPayment(ctx, fx.actor, core.PaymentVerifyInput{Reference: payment.Reference}); err != nil {
+		t.Fatal(err)
+	}
+	var attempts int64
+	if err := fx.db.Model(&DispatchAttempt{}).Where("request_id = ?", request.ID).Count(&attempts).Error; err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 0 {
+		t.Fatal("expected the unsupported location to produce no dispatch attempt")
+	}
+	if err := fx.db.Model(&Provider{}).Where("organization_id = ? AND id IN ?", fx.actor.OrganizationID, providerIDs).
+		Update("availability", AvailabilityAvailable).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	jobs := []SeedJob{{
+		Customer: SeedCustomer{Name: "Amaka", Phone: "+2348011111111", Area: "Lekki", Address: "12 Admiralty Way"},
+		Pool:     "Plumber", Description: description, PreferredAt: "today", Stage: "assigned",
+	}}
+	if err := SeedLifecycleJobs(ctx, fx.db, fx.commerce, fx.field, fx.actor, jobs); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := fx.field.getRequest(ctx, fx.actor.OrganizationID, request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != RequestAssigned || updated.AssignedProviderID == nil {
+		t.Fatalf("resumed request status = %s, assigned provider = %v", updated.Status, updated.AssignedProviderID)
+	}
+}
+
 func TestSeededCompletedJobsFeedTheOverview(t *testing.T) {
 	fx := newFieldFixture(t)
 	ctx := context.Background()
