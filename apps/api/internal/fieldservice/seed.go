@@ -74,7 +74,7 @@ func SeedTenant(ctx context.Context, db *gorm.DB, commerce *core.Service, bots *
 	if err == gorm.ErrRecordNotFound {
 		org = organization.Organization{
 			ID: uuid.New(), Name: profile.OrganizationName, Slug: profile.OrganizationSlug, Currency: "NGN", Timezone: "Africa/Lagos",
-			Country: "NG", Status: "active", OnboardingState: `{"complete":true}`, Metadata: `{"seed":"field_service","use_case":"handyman"}`,
+			Country: "NG", Status: "active", OnboardingState: `{"complete":true}`, Metadata: fieldServiceOrganizationMetadata(""),
 		}
 		if err := db.WithContext(ctx).Create(&org).Error; err != nil {
 			return SeedResult{}, err
@@ -83,6 +83,7 @@ func SeedTenant(ctx context.Context, db *gorm.DB, commerce *core.Service, bots *
 		return SeedResult{}, err
 	} else if err := db.WithContext(ctx).Model(&organization.Organization{}).Where("id = ?", org.ID).Updates(map[string]any{
 		"name": profile.OrganizationName, "status": "active", "currency": "NGN", "timezone": "Africa/Lagos", "country": "NG",
+		"metadata": fieldServiceOrganizationMetadata(org.Metadata),
 	}).Error; err != nil {
 		return SeedResult{}, err
 	}
@@ -174,6 +175,15 @@ func SeedTenant(ctx context.Context, db *gorm.DB, commerce *core.Service, bots *
 		OrganizationID: org.ID, OwnerEmail: profile.Owner.Email, ProviderEmail: sampleEmail, Password: password,
 		ProviderCount: len(profile.Providers), PoolCount: len(profile.Pools), BotID: serviceBot.ID, BotStatus: serviceBot.Status, ChannelStatus: channel.Status,
 	}, nil
+}
+
+func fieldServiceOrganizationMetadata(existing string) string {
+	metadata := map[string]any{}
+	_ = json.Unmarshal([]byte(existing), &metadata)
+	metadata["seed"] = "field_service"
+	metadata["use_case"] = "handyman"
+	body, _ := json.Marshal(metadata)
+	return string(body)
 }
 
 func ensurePublishedServiceBot(ctx context.Context, db *gorm.DB, bots *bot.Service, actor auth.CurrentUser, profile SeedProfile) (bot.Bot, error) {

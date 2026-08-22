@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -74,12 +75,22 @@ func TestSeedTenantIsIdempotentAndOrganizationScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Model(&organization.Organization{}).Where("id = ?", first.OrganizationID).Update("metadata", `{"legacy":"keep"}`).Error; err != nil {
+		t.Fatal(err)
+	}
 	second, err := SeedTenant(context.Background(), db, commerce, bots, field, profile, options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.OrganizationID != second.OrganizationID || first.BotID != second.BotID {
 		t.Fatal("idempotent seed changed organization or bot identity")
+	}
+	var seededOrganization organization.Organization
+	if err := db.Where("id = ?", first.OrganizationID).First(&seededOrganization).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(seededOrganization.Metadata, `"seed":"field_service"`) || !strings.Contains(seededOrganization.Metadata, `"legacy":"keep"`) {
+		t.Fatalf("field-service metadata was not merged for an existing organization: %s", seededOrganization.Metadata)
 	}
 	assertCount := func(model any, want int64) {
 		t.Helper()
