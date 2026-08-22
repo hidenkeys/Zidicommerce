@@ -28,6 +28,7 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Get("/bots", h.listBots)
 	router.Post("/bots", h.createBot)
 	router.Post("/bots/self-service", h.createSelfServiceBot)
+	router.Post("/bots/service-booking", h.createServiceBookingBot)
 	router.Get("/bots/:id", h.getBot)
 	router.Patch("/bots/:id", h.updateBot)
 	router.Get("/bots/:id/share-link", h.shareLink)
@@ -92,6 +93,15 @@ func (h *Handler) createSelfServiceBot(c *fiber.Ctx) error {
 		return err
 	}
 	data, err := h.service.CreateSelfServiceBot(c.UserContext(), currentUser(c), input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) createServiceBookingBot(c *fiber.Ctx) error {
+	var input ServiceBookingBotInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.CreateServiceBookingBot(c.UserContext(), currentUser(c), input.Name, input.WelcomeMessage)
 	return respond(c, data, err)
 }
 

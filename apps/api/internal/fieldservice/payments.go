@@ -13,6 +13,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
 )
 
 func (s *Service) createPaymentOrder(ctx context.Context, actor auth.CurrentUser, request Request, amountMinor int64, currency, purpose string, relatedID uuid.UUID) (core.Order, core.Payment, error) {
@@ -355,6 +356,12 @@ func (s *Service) ListProviderViews(ctx context.Context, actor auth.CurrentUser)
 	}
 	views := make([]ProviderView, 0, len(providers))
 	for _, provider := range providers {
+		if provider.UserID != nil {
+			var user organization.User
+			if s.db.WithContext(ctx).Select("email").Where("id = ? AND organization_id = ?", *provider.UserID, actor.OrganizationID).First(&user).Error == nil {
+				provider.Email = user.Email
+			}
+		}
 		var active, open int64
 		_ = s.db.WithContext(ctx).Model(&Assignment{}).
 			Where("organization_id = ? AND provider_id = ? AND status NOT IN ?", actor.OrganizationID, provider.ID, []string{RequestCompleted, RequestCancelled}).

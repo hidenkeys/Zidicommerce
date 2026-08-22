@@ -21,6 +21,7 @@ export function AssistantPage() {
   const [config, setConfig] = useState<BotConfig | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [name, setName] = useState("");
+  const [assistantType, setAssistantType] = useState("commerce");
   const [creating, setCreating] = useState(false);
   const [testSessionID, setTestSessionID] = useState("");
   const [testInput, setTestInput] = useState("");
@@ -66,7 +67,11 @@ export function AssistantPage() {
     event.preventDefault();
     setCreating(true);
     try {
-      await apiPost<Bot>("/bots/self-service", {
+      const fieldService = assistantType === "field_service";
+      await apiPost<Bot>(fieldService ? "/bots/service-booking" : "/bots/self-service", fieldService ? {
+        name: name || "Service assistant",
+        welcome_message: "Welcome. I can help you book a trusted professional for your home-service request.",
+      } : {
         name: name || "Store assistant",
         description: "Customer assistant",
         welcome_message: "Welcome. I can help you place an order, track an order, answer questions, or contact support.",
@@ -175,9 +180,15 @@ export function AssistantPage() {
         <Flash message={message} />
         <Card>
           <h3>Create your assistant</h3>
-          <p>This sets up ordering, tracking, questions, complaints, and support. You can turn each one on or off next.</p>
+          <p>Choose the starter that matches how your business serves customers. You can adjust and publish it next.</p>
           <form className="form-grid" onSubmit={createAssistant}>
             <label className="full">Assistant name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Store assistant" /></label>
+            <label className="full">Business flow
+              <select value={assistantType} onChange={(event) => setAssistantType(event.target.value)}>
+                <option value="commerce">Products and orders</option>
+                <option value="field_service">Field service / handyman bookings</option>
+              </select>
+            </label>
             <div className="full"><button type="submit" disabled={creating}>Create assistant</button></div>
           </form>
         </Card>

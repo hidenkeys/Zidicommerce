@@ -4,7 +4,7 @@ import { apiGet } from "../api/client";
 import { Card, EmptyState, Flash, LoadingState, Metric, Page, SetupItem, StatusDot } from "../components/ui";
 import { humanStatus, isToday, money, relativeTime, setupHref, type Row } from "../lib/format";
 
-type Organization = Row & { name?: string; currency?: string };
+type Organization = Row & { name?: string; currency?: string; metadata?: string };
 type Channel = Row & { provider: string; display_name: string; display_number?: string; status: string };
 type SetupStatus = { complete_count: number; total_count: number; ready: boolean; items: { key: string; label: string; complete: boolean; description: string }[] };
 type PaymentConfiguration = Row & { provider: string; display_name: string; status: string; enabled: boolean };
@@ -21,14 +21,31 @@ export function OverviewPage() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [payments, setPayments] = useState<PaymentConfiguration[]>([]);
   const [bots, setBots] = useState<Bot[]>([]);
+  const [fieldOverview, setFieldOverview] = useState<Row | null>(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
       try {
-        const [orgResponse, orderResponse, conversationResponse, inventoryResponse, setupResponse, channelResponse, paymentResponse, botResponse] = await Promise.all([
-          apiGet<Organization>("/organizations/current"),
+        const orgResponse = await apiGet<Organization>("/organizations/current");
+        setOrg(orgResponse.data);
+        const metadata = String(orgResponse.data.metadata ?? "").toLowerCase();
+        const fieldService = metadata.includes("field_service") || metadata.includes("handyman");
+        if (fieldService) {
+          const [fieldResponse, channelResponse, paymentResponse, botResponse] = await Promise.all([
+            apiGet<Row>("/field/overview"),
+            apiGet<Channel[]>("/channels"),
+            apiGet<PaymentConfiguration[]>("/payment-configurations").catch(() => ({ data: [] as PaymentConfiguration[] })),
+            apiGet<Bot[]>("/bots").catch(() => ({ data: [] as Bot[] })),
+          ]);
+          setFieldOverview(fieldResponse.data);
+          setChannels(channelResponse.data);
+          setPayments(paymentResponse.data);
+          setBots(botResponse.data);
+          return;
+        }
+        const [orderResponse, conversationResponse, inventoryResponse, setupResponse, channelResponse, paymentResponse, botResponse] = await Promise.all([
           apiGet<Row[]>("/orders"),
           apiGet<Row[]>("/runtime/conversations"),
           apiGet<Row[]>("/inventory"),
@@ -37,7 +54,6 @@ export function OverviewPage() {
           apiGet<PaymentConfiguration[]>("/payment-configurations").catch(() => ({ data: [] as PaymentConfiguration[] })),
           apiGet<Bot[]>("/bots").catch(() => ({ data: [] as Bot[] })),
         ]);
-        setOrg(orgResponse.data);
         setOrders(orderResponse.data);
         setConversations(conversationResponse.data);
         setInventory(inventoryResponse.data);
@@ -68,11 +84,43 @@ export function OverviewPage() {
   const currency = String(org?.currency ?? todayOrders[0]?.currency ?? "NGN");
   const merchantItems = (setupStatus?.items ?? []).filter((item) => merchantSetupKeys.includes(item.key));
   const setupDone = merchantItems.filter((item) => item.complete).length;
+  const fieldPortalURL = String(import.meta.env.VITE_FIELD_PORTAL_URL ?? "").replace(/\/$/, "");
 
   if (loading) {
     return (
       <Page title={org?.name || "Overview"}>
         <LoadingState label="Loading your day" />
+      </Page>
+    );
+  }
+
+  if (fieldOverview) {
+    return (
+      <Page title={org?.name || "Field service"} description="Requests, professionals, payments, and customer conversations at a glance.">
+        <Flash message={message} />
+        <div className="metrics">
+          <Metric label="Requests today" value={Number(fieldOverview.todays_requests ?? 0)} />
+          <Metric label="Active jobs" value={Number(fieldOverview.active_jobs ?? 0)} />
+          <Metric label="Available handymen" value={Number(fieldOverview.available_providers ?? 0)} />
+          <Metric label="Completed jobs" value={Number(fieldOverview.completed_jobs ?? 0)} />
+          <Metric label="Booking fees" value={money(fieldOverview.booking_fees_minor, String(org?.currency ?? "NGN"))} />
+          <Metric label="Total revenue" value={money(fieldOverview.revenue_minor, String(org?.currency ?? "NGN"))} />
+        </div>
+        <div className="split">
+          <Card>
+            <h3>Field operations</h3>
+            <p>Manage handymen, service categories, jobs, quotes, and conversations in the operations workspace.</p>
+            {fieldPortalURL ? <a className="button primary" href={`${fieldPortalURL}/owner`}>Open field operations</a> : <p className="muted">The field operations URL has not been configured.</p>}
+          </Card>
+          <Card>
+            <h3>Customer assistant</h3>
+            <p><StatusDot live={Boolean(bot?.published_version_id) && bot?.status === "active"} label={bot?.published_version_id ? "Live" : "Not published"} /></p>
+            <p><strong>{bot?.name || "No assistant yet"}</strong></p>
+            <p className="muted">{whatsapp?.status === "active" ? `WhatsApp ${whatsapp.display_number || "connected"}` : "WhatsApp not connected"}</p>
+            <p className="muted">{paystack?.enabled ? "Payments connected" : "Using platform payment settings"}</p>
+            <div className="page-actions"><Link to="/assistant">Open assistant</Link><Link to="/settings/whatsapp">WhatsApp</Link><Link to="/settings/payments">Payments</Link></div>
+          </Card>
+        </div>
       </Page>
     );
   }

@@ -165,6 +165,18 @@ func (s *Service) ListPools(ctx context.Context, actor auth.CurrentUser) ([]Pool
 	return pools, err
 }
 
+// ListManageablePools includes inactive categories so an owner can reactivate
+// them. Customer-facing runtime actions continue to use ListPools, which only
+// returns active services.
+func (s *Service) ListManageablePools(ctx context.Context, actor auth.CurrentUser) ([]Pool, error) {
+	if err := s.requireOwner(actor); err != nil {
+		return nil, err
+	}
+	var pools []Pool
+	err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("sort_order ASC, name ASC").Find(&pools).Error
+	return pools, err
+}
+
 func (s *Service) UpsertPool(ctx context.Context, actor auth.CurrentUser, input Pool) (Pool, error) {
 	if err := s.requireOwner(actor); err != nil {
 		return Pool{}, err
@@ -187,7 +199,7 @@ func (s *Service) UpsertPool(ctx context.Context, actor auth.CurrentUser, input 
 		s.audit(ctx, actor, "service_pool", input.ID, "service_pool_created", fmt.Sprintf(`{"name":%q}`, input.Name))
 		return input, nil
 	}
-	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, input.ID).Updates(map[string]any{
+	if err := s.db.WithContext(ctx).Model(&Pool{}).Where("organization_id = ? AND id = ?", actor.OrganizationID, input.ID).Updates(map[string]any{
 		"name": input.Name, "slug": input.Slug, "description": input.Description, "status": input.Status, "sort_order": input.SortOrder, "updated_at": s.now(),
 	}).Error; err != nil {
 		return Pool{}, err
@@ -213,6 +225,7 @@ func (s *Service) UpsertProvider(ctx context.Context, actor auth.CurrentUser, in
 	}
 	input.OrganizationID = actor.OrganizationID
 	input.Name = strings.TrimSpace(input.Name)
+	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
 	if input.Name == "" {
 		return Provider{}, httperror.BadRequest("Provider name is required")
 	}
@@ -246,9 +259,32 @@ func (s *Service) UpsertProvider(ctx context.Context, actor auth.CurrentUser, in
 			if err := tx.Model(&Provider{}).Where("organization_id = ? AND id = ?", actor.OrganizationID, input.ID).Updates(map[string]any{
 				"name": input.Name, "phone": input.Phone, "whatsapp_number": input.WhatsAppNumber, "area": input.Area, "address": input.Address,
 				"latitude": input.Latitude, "longitude": input.Longitude, "availability": input.Availability, "status": input.Status,
-				"profile_image_url": input.ProfileImageURL, "updated_at": s.now(),
+				"profile_image_url": input.ProfileImageURL, "rating_average": input.RatingAverage, "updated_at": s.now(),
 			}).Error; err != nil {
 				return err
+			}
+			if input.UserID == nil {
+				var existing Provider
+				if err := tx.Select("user_id").Where("organization_id = ? AND id = ?", actor.OrganizationID, input.ID).First(&existing).Error; err != nil {
+					return err
+				}
+				input.UserID = existing.UserID
+			}
+			if input.UserID != nil {
+				userStatus := "active"
+				if input.Status == "inactive" {
+					userStatus = "inactive"
+				}
+				updates := map[string]any{"status": userStatus, "updated_at": s.now()}
+				if input.Email != "" {
+					updates["email"] = input.Email
+				}
+				if err := tx.Model(&organization.User{}).Where("id = ? AND organization_id = ?", *input.UserID, actor.OrganizationID).Updates(updates).Error; err != nil {
+					return err
+				}
+				if err := tx.Model(&organization.OrganizationMembership{}).Where("organization_id = ? AND user_id = ?", actor.OrganizationID, *input.UserID).Updates(map[string]any{"status": userStatus, "updated_at": s.now()}).Error; err != nil {
+					return err
+				}
 			}
 		}
 		if err := tx.Where("provider_id = ?", input.ID).Delete(&ProviderPool{}).Error; err != nil {
@@ -692,9 +728,12 @@ func (s *Service) notify(ctx context.Context, organizationID uuid.UUID, recipien
 }
 
 func (s *Service) ensureProviderUserTx(tx *gorm.DB, actor auth.CurrentUser, provider Provider, password string) (uuid.UUID, error) {
-	email := strings.ToLower(strings.TrimSpace(provider.PublicCode)) + "@providers.zidicommerce.local"
-	if strings.Contains(provider.Phone, "@") {
-		email = strings.ToLower(strings.TrimSpace(provider.Phone))
+	email := strings.ToLower(strings.TrimSpace(provider.Email))
+	if email == "" {
+		email = strings.ToLower(strings.TrimSpace(provider.PublicCode)) + "@providers.zidicommerce.local"
+	}
+	if !strings.Contains(email, "@") {
+		return uuid.Nil, httperror.BadRequest("A valid provider email is required")
 	}
 	if password == "" {
 		password = "ChangeMeSoon1!"

@@ -1,10 +1,12 @@
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { apiGet } from "../api/client";
 import { useAuth } from "../auth";
 import { roleLabel } from "../lib/format";
 
 type NavGroup = {
   label: string;
-  items: string[][];
+  items: Array<[string, string, boolean?]>;
   roles?: string[];
   collapsed?: boolean;
 };
@@ -97,7 +99,20 @@ function pageMeta(pathname: string) {
 export function Shell() {
   const { user, logout } = useAuth();
   const location = useLocation();
-  const visibleGroups = groups.filter((group) => !group.roles || group.roles.includes(user.role));
+  const [fieldService, setFieldService] = useState(false);
+  const fieldPortalURL = import.meta.env.VITE_FIELD_PORTAL_URL ?? "";
+  useEffect(() => {
+    apiGet<Record<string, unknown>>("/organizations/current").then((response) => {
+      const metadata = String(response.data.metadata ?? "").toLowerCase();
+      setFieldService(metadata.includes("field_service") || metadata.includes("handyman"));
+    }).catch(() => undefined);
+  }, []);
+  const visibleGroups = groups
+    .filter((group) => !group.roles || group.roles.includes(user.role))
+    .filter((group) => !fieldService || group.label !== "Commerce");
+  if (fieldService && fieldPortalURL) {
+    visibleGroups.splice(1, 0, { label: "Field service", items: [["Operations", `${fieldPortalURL.replace(/\/$/, "")}/owner`, true]] });
+  }
   const meta = pageMeta(location.pathname);
 
   return (
@@ -115,10 +130,10 @@ export function Shell() {
           {visibleGroups.map((group) => (
             <section key={group.label} className={group.collapsed ? "nav-advanced" : undefined}>
               <p>{group.label}</p>
-              {group.items.map(([label, path]) => (
-                <NavLink key={path} to={path} end={path === "/"}>
-                  {label}
-                </NavLink>
+              {group.items.map(([label, path, external]) => external ? (
+                <a key={path} href={path}>{label}</a>
+              ) : (
+                <NavLink key={path} to={path} end={path === "/"}>{label}</NavLink>
               ))}
             </section>
           ))}

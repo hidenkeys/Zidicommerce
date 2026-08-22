@@ -1384,6 +1384,7 @@ function BotBuilderScreen({ variant = "builder" }: { variant?: "simple" | "build
   const [selectedBotID, setSelectedBotID] = useState("");
   const [selectedVersionID, setSelectedVersionID] = useState("");
   const [botForm, setBotForm] = useState({ name: "", description: "" });
+  const [botTemplate, setBotTemplate] = useState("field_service");
   const [faqForm, setFaqForm] = useState({ question: "", answer: "", keywords: "" });
   const [faqQuery, setFaqQuery] = useState("");
   const [faqMatch, setFaqMatch] = useState<Row | null>(null);
@@ -1486,7 +1487,11 @@ function BotBuilderScreen({ variant = "builder" }: { variant?: "simple" | "build
 
   async function createSelfServiceBot(event: FormEvent) {
     event.preventDefault();
-    const response = await apiPost<Bot>("/bots/self-service", {
+    const fieldService = botTemplate === "field_service";
+    const response = await apiPost<Bot>(fieldService ? "/bots/service-booking" : "/bots/self-service", fieldService ? {
+      name: botForm.name,
+      welcome_message: "Welcome. I can help you book a trusted professional for your home-service request.",
+    } : {
       ...botForm,
       welcome_message: "Welcome. I can help you place an order, track an order, answer questions, or contact support.",
       require_payment: true,
@@ -1495,7 +1500,7 @@ function BotBuilderScreen({ variant = "builder" }: { variant?: "simple" | "build
       allow_merchant_rider: false,
     });
     setBotForm({ name: "", description: "" });
-    setMessage("Self-service commerce bot created with starter modules.");
+    setMessage(fieldService ? "Field-service assistant created with booking, payment, matching, and handoff steps." : "Self-service commerce bot created with starter modules.");
     await loadBots(response.data.id);
   }
 
@@ -1749,6 +1754,12 @@ function BotBuilderScreen({ variant = "builder" }: { variant?: "simple" | "build
           <strong>Create self-service bot</strong>
           <input placeholder="Bot name" value={botForm.name} onChange={(event) => setBotForm({ ...botForm, name: event.target.value })} />
           <input placeholder="Description" value={botForm.description} onChange={(event) => setBotForm({ ...botForm, description: event.target.value })} />
+          <label>Starter flow
+            <select value={botTemplate} onChange={(event) => setBotTemplate(event.target.value)}>
+              <option value="field_service">Field service / handyman</option>
+              <option value="commerce">Products and orders</option>
+            </select>
+          </label>
           <button type="submit">Create guided bot</button>
           <button type="button" onClick={createEmptyBot}>Create empty bot</button>
         </form>

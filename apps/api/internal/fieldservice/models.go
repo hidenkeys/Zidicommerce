@@ -96,6 +96,7 @@ type Provider struct {
 	Status           string     `json:"status"`
 	CurrentJobStatus string     `json:"current_job_status"`
 	ProfileImageURL  string     `json:"profile_image_url"`
+	Email            string     `gorm:"-" json:"email,omitempty"`
 	Metadata         string     `json:"metadata"`
 	Pools            []Pool     `gorm:"many2many:service_provider_pools;joinForeignKey:ProviderID;joinReferences:PoolID" json:"pools,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`

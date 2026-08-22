@@ -176,6 +176,91 @@ func TestEndToEndServiceBooking(t *testing.T) {
 	}
 }
 
+func TestOwnerCanEditDeactivateAndReactivateServicePool(t *testing.T) {
+	fx := newFieldFixture(t)
+	ctx := context.Background()
+
+	updated, err := fx.field.UpsertPool(ctx, fx.actor, Pool{
+		ID: fx.painter.ID, Name: "Decorative Painter", Slug: fx.painter.Slug,
+		Status: "inactive", SortOrder: 9,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "Decorative Painter" || updated.Status != "inactive" || updated.SortOrder != 9 {
+		t.Fatalf("pool update was not persisted: %+v", updated)
+	}
+	active, err := fx.field.ListPools(ctx, fx.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pool := range active {
+		if pool.ID == updated.ID {
+			t.Fatal("inactive service leaked into the customer-facing pool list")
+		}
+	}
+	manageable, err := fx.field.ListManageablePools(ctx, fx.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, pool := range manageable {
+		found = found || pool.ID == updated.ID
+	}
+	if !found {
+		t.Fatal("owner cannot find the inactive service to reactivate it")
+	}
+	updated.Status = "active"
+	if _, err := fx.field.UpsertPool(ctx, fx.actor, updated); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProviderProfileUsesOwnerSuppliedLoginAndDeactivationDisablesAccount(t *testing.T) {
+	fx := newFieldFixture(t)
+	ctx := context.Background()
+	provider, err := fx.field.UpsertProvider(ctx, fx.actor, Provider{
+		Name: "Acceptance Handyman", Email: "acceptance.handyman@example.com", Phone: "+2348000000042",
+		Area: "Ikeja", Availability: AvailabilityAvailable, Status: "active", RatingAverage: 4.2,
+	}, []uuid.UUID{fx.plumber.ID}, "StrongPilotPassword1!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.UserID == nil || provider.RatingAverage != 4.2 {
+		t.Fatalf("provider login or initial rating was not saved: %+v", provider)
+	}
+	var user organization.User
+	if err := fx.db.Where("id = ?", *provider.UserID).First(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	if user.Email != "acceptance.handyman@example.com" || user.Status != "active" {
+		t.Fatalf("unexpected provider user: %+v", user)
+	}
+	provider.Email = "acceptance.updated@example.com"
+	provider.Status = "inactive"
+	provider.RatingAverage = 4.5
+	updated, err := fx.field.UpsertProvider(ctx, fx.actor, provider, []uuid.UUID{fx.plumber.ID}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "inactive" || updated.RatingAverage != 4.5 {
+		t.Fatalf("provider profile update failed: %+v", updated)
+	}
+	if err := fx.db.Where("id = ?", *provider.UserID).First(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	if user.Email != "acceptance.updated@example.com" || user.Status != "inactive" {
+		t.Fatalf("provider login was not synchronized: %+v", user)
+	}
+	var membership organization.OrganizationMembership
+	if err := fx.db.Where("organization_id = ? AND user_id = ?", fx.actor.OrganizationID, *provider.UserID).First(&membership).Error; err != nil {
+		t.Fatal(err)
+	}
+	if membership.Status != "inactive" {
+		t.Fatalf("provider membership should be inactive, got %s", membership.Status)
+	}
+}
+
 func TestRuntimeCancelRequestCancelsPendingBookingAndIsIdempotent(t *testing.T) {
 	fx := newFieldFixture(t)
 	ctx := context.Background()

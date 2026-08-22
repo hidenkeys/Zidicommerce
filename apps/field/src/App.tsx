@@ -3,6 +3,7 @@ import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } fr
 import { api, clearToken, getToken, setToken } from "./api";
 
 type User = { id: string; role: string; email?: string; organization_id: string };
+const ADMIN_BASE_URL = String(import.meta.env.VITE_ADMIN_BASE_URL ?? "").replace(/\/$/, "");
 
 function money(minor?: unknown) {
   const value = Number(minor ?? 0) / 100;
@@ -61,7 +62,7 @@ function useSession() {
   return { user, ready, setUser };
 }
 
-function Shell({ user, links, children }: { user: User; links: { to: string; label: string }[]; children: ReactNode }) {
+function Shell({ user, links, children }: { user: User; links: { to: string; label: string; external?: boolean }[]; children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   return (
@@ -69,7 +70,9 @@ function Shell({ user, links, children }: { user: User; links: { to: string; lab
       <aside className="nav">
         <strong>{user.role === "service_provider" ? "Provider" : "Business"}</strong>
         <span>{user.email || "Signed in"}</span>
-        {links.map((link) => (
+        {links.map((link) => link.external ? (
+          <a key={link.to} href={link.to}>{link.label}</a>
+        ) : (
           <Link key={link.to} className={location.pathname === link.to || (link.to !== "/owner" && link.to !== "/provider" && location.pathname.startsWith(link.to)) ? "active" : ""} to={link.to}>{link.label}</Link>
         ))}
         <button className="ghost" onClick={() => { clearToken(); navigate("/login"); }}>Sign out</button>
@@ -114,6 +117,7 @@ const LAGOS_AREAS = [
 type ProviderForm = {
   id: string;
   name: string;
+  email: string;
   phone: string;
   whatsapp_number: string;
   area: string;
@@ -122,11 +126,12 @@ type ProviderForm = {
   status: string;
   pool_ids: string[];
   password: string;
+  rating_average: string;
 };
 
 const emptyProvider: ProviderForm = {
-  id: "", name: "", phone: "", whatsapp_number: "", area: "Lekki", address: "",
-  availability: "available", status: "active", pool_ids: [], password: "",
+  id: "", name: "", email: "", phone: "", whatsapp_number: "", area: "Lekki", address: "",
+  availability: "available", status: "active", pool_ids: [], password: "", rating_average: "0",
 };
 
 function ProviderForm({ pools, initial, onSaved, onCancel }: {
@@ -159,12 +164,14 @@ function ProviderForm({ pools, initial, onSaved, onCancel }: {
       await api.saveProvider({
         ...(form.id ? { id: form.id } : {}),
         name: form.name.trim(),
+        email: form.email.trim(),
         phone: form.phone.trim(),
         whatsapp_number: (form.whatsapp_number || form.phone).trim(),
         area: form.area,
         address: form.address.trim() || `${form.area}, Lagos`,
         availability: form.availability,
         status: form.status,
+        rating_average: Math.max(0, Math.min(5, Number(form.rating_average || 0))),
         pool_ids: form.pool_ids,
         ...(form.password ? { password: form.password } : {}),
       });
@@ -181,6 +188,7 @@ function ProviderForm({ pools, initial, onSaved, onCancel }: {
       <h2 style={{ margin: 0 }}>{editing ? "Edit handyman" : "Add a handyman"}</h2>
       <div className="grid tight">
         <label>Name<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+        <label>Email<input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@example.com" /></label>
         <label>Phone<input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+2348..." /></label>
         <label>WhatsApp<input value={form.whatsapp_number} onChange={(e) => setForm({ ...form, whatsapp_number: e.target.value })} placeholder="Same as phone" /></label>
         <label>Area
@@ -204,6 +212,7 @@ function ProviderForm({ pools, initial, onSaved, onCancel }: {
             <option value="inactive">Deactivated</option>
           </select>
         </label>
+        <label>Initial rating<input type="number" min="0" max="5" step="0.1" value={form.rating_average} onChange={(e) => setForm({ ...form, rating_average: e.target.value })} /></label>
         {editing ? null : <label>Portal password<input value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Leave blank for default" /></label>}
       </div>
       <div>
@@ -257,6 +266,7 @@ function Providers() {
     setEditing({
       id: String(row.id),
       name: String(row.name ?? ""),
+      email: String(row.email ?? ""),
       phone: String(row.phone ?? ""),
       whatsapp_number: String(row.whatsapp_number ?? ""),
       area: String(row.area ?? "Lekki"),
@@ -265,6 +275,7 @@ function Providers() {
       status: String(row.status ?? "active"),
       pool_ids: Array.isArray(row.pools) ? (row.pools as Array<{ id: string }>).map((pool) => String(pool.id)) : [],
       password: "",
+      rating_average: String(row.rating_average ?? "0"),
     });
   }
 
@@ -300,6 +311,7 @@ function Providers() {
           <div className="card row" key={String(row.id)}>
             <div>
               <strong>{String(row.name)}{row.status === "inactive" ? " · deactivated" : ""}</strong>
+              <div className="muted">{String(row.email || "No email")}</div>
               <div className="muted">{String(row.area)} · {Number(row.rating_average).toFixed(1)}★ · {String(row.jobs_completed)} jobs · {money(row.earnings_minor)} earned</div>
               <div className="muted">{Array.isArray(row.pools) ? (row.pools as Array<{ name: string }>).map((p) => p.name).join(", ") : ""}</div>
               {Number(row.active_jobs) > 0 || Number(row.open_requests) > 0 ? (
@@ -865,6 +877,7 @@ export default function App() {
     { to: "/owner/payments", label: "Payments" },
     { to: "/owner/audit", label: "Audit" },
     { to: "/owner/settings", label: "Settings" },
+    ...(ADMIN_BASE_URL ? [{ to: `${ADMIN_BASE_URL}/assistant`, label: "Assistant setup", external: true }] : []),
   ], []);
   const providerLinks = useMemo(() => [
     { to: "/provider", label: "Home" },

@@ -66,7 +66,12 @@ func (h *Handler) overview(c *fiber.Ctx) error {
 }
 
 func (h *Handler) listPools(c *fiber.Ctx) error {
-	data, err := h.service.ListPools(c.UserContext(), mustUser(c))
+	actor := mustUser(c)
+	if actor.Role.CanManageOrganization() {
+		data, err := h.service.ListManageablePools(c.UserContext(), actor)
+		return respond(c, data, err)
+	}
+	data, err := h.service.ListPools(c.UserContext(), actor)
 	return respond(c, data, err)
 }
 

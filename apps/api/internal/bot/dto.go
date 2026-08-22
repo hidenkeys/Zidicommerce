@@ -127,6 +127,11 @@ type SelfServiceBotInput struct {
 	AllowMerchantRider *bool  `json:"allow_merchant_rider"`
 }
 
+type ServiceBookingBotInput struct {
+	Name           string `json:"name"`
+	WelcomeMessage string `json:"welcome_message"`
+}
+
 type FAQInput struct {
 	Question string   `json:"question"`
 	Answer   string   `json:"answer"`
