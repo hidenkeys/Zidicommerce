@@ -13,6 +13,25 @@ func (s *Service) RegisterFieldService(field *fieldservice.Service) {
 	if field == nil {
 		return
 	}
+	s.lifecycleCancel = func(ctx context.Context, runtimeContext RuntimeContext) (bool, string, error) {
+		requestIDText := stringValue(runtimeContext.Variables["request_id"])
+		if requestIDText == "" {
+			return false, "", nil
+		}
+		requestID, err := uuid.Parse(requestIDText)
+		if err != nil {
+			return true, "", runtimeErrorf(ErrInvalidInput, "I couldn't identify that request.", "invalid field-service request id: %v", err)
+		}
+		customerID := uuid.Nil
+		if runtimeContext.Session.CustomerID != nil {
+			customerID = *runtimeContext.Session.CustomerID
+		}
+		message, err := field.RuntimeCancelRequest(ctx, runtimeContext.Session.OrganizationID, customerID, runtimeContext.Session.ID, requestID)
+		if err != nil {
+			return true, "", err
+		}
+		return true, message, nil
+	}
 	s.RegisterAction("get_service_welcome", func(ctx context.Context, runtimeContext RuntimeContext, _ map[string]any) (map[string]any, error) {
 		return field.RuntimeWelcome(ctx, runtimeContext.Session.OrganizationID)
 	})

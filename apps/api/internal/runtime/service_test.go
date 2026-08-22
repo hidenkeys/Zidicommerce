@@ -1153,6 +1153,45 @@ func TestRuntimeResetTextRestartsActiveSession(t *testing.T) {
 	}
 }
 
+func TestRuntimeCancelInvokesPersistenceHookBeforeReset(t *testing.T) {
+	questionID := uuid.New()
+	config := bot.VersionConfiguration{
+		Version:   bot.BotVersion{StartStepKey: "ask"},
+		Questions: []bot.Question{{ID: questionID, QuestionKey: "ask_name", Text: "Name?", Type: "text", ResponseMode: "free_text", Required: true, VariableName: "name"}},
+		Steps:     []bot.Step{{ID: uuid.New(), StepKey: "ask", Type: bot.StepQuestion, Title: "Ask", QuestionID: &questionID, NextStepKey: "done"}, {ID: uuid.New(), StepKey: "done", Type: bot.StepEnd, Title: "Done", Message: "Saved."}},
+	}
+	fx := newRuntimeFixture(t, config)
+	called := false
+	fx.service.lifecycleCancel = func(_ context.Context, runtimeContext RuntimeContext) (bool, string, error) {
+		called = true
+		if stringValue(runtimeContext.Variables["request_id"]) != "request-1" {
+			t.Fatalf("cancellation hook did not receive persisted request context: %+v", runtimeContext.Variables)
+		}
+		return true, "Persisted request cancelled.", nil
+	}
+	started, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, "cancel-hook-1", "conv-cancel-hook", "start"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Model(&ConversationSession{}).Where("id = ?", started.ConversationID).Update("variables", `{"request_id":"request-1"}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, "cancel-hook-2", "conv-cancel-hook", "cancel"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || !strings.Contains(joinMessageTexts(cancelled.Messages), "Persisted request cancelled") {
+		t.Fatalf("expected persistence hook confirmation, got %+v", cancelled.Messages)
+	}
+	session, err := fx.service.GetConversation(context.Background(), fx.actor, cancelled.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Variables != "{}" || session.CurrentStepKey != config.Version.StartStepKey {
+		t.Fatalf("expected reset only after cancellation, got step=%s variables=%s", session.CurrentStepKey, session.Variables)
+	}
+}
+
 func TestWhatsAppSignatureVerificationRequiresConfiguredSecret(t *testing.T) {
 	config := bot.VersionConfiguration{Version: bot.BotVersion{StartStepKey: "start"}, Steps: []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepEnd, Title: "Done", Message: "Done."}}}
 	fx := newRuntimeFixture(t, config)

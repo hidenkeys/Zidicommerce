@@ -176,6 +176,121 @@ func TestEndToEndServiceBooking(t *testing.T) {
 	}
 }
 
+func TestRuntimeCancelRequestCancelsPendingBookingAndIsIdempotent(t *testing.T) {
+	fx := newFieldFixture(t)
+	ctx := context.Background()
+	sessionID := uuid.New()
+	request, err := fx.field.CreateRequest(ctx, fx.actor, CreateRequestInput{
+		CustomerID: fx.customer.ID, PoolID: fx.plumber.ID, SessionID: &sessionID,
+		CustomerName: "Amaka", CustomerPhone: "+2348011111111", Area: "Lekki", Address: "Admiralty Way", Description: "Leaking tap",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, payment, err := fx.field.InitializeBookingFee(ctx, fx.actor, request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payment == nil || request.BookingOrderID == nil {
+		t.Fatal("expected a pending booking order and payment")
+	}
+
+	message, err := fx.field.RuntimeCancelRequest(ctx, fx.actor.OrganizationID, fx.customer.ID, sessionID, request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(message, request.PublicCode) {
+		t.Fatalf("expected cancellation confirmation with request code, got %q", message)
+	}
+	cancelled, err := fx.field.GetRequest(ctx, fx.actor, request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != RequestCancelled {
+		t.Fatalf("expected cancelled request, got %s", cancelled.Status)
+	}
+	order, err := fx.commerce.GetOrder(ctx, fx.actor, *request.BookingOrderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != core.OrderCancelled {
+		t.Fatalf("expected cancelled booking order, got %s", order.Status)
+	}
+	storedPayment, err := fx.commerce.GetPaymentByReference(ctx, fx.actor, payment.Reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedPayment.Status != core.PaymentExpired {
+		t.Fatalf("expected expired payment, got %s", storedPayment.Status)
+	}
+
+	message, err = fx.field.RuntimeCancelRequest(ctx, fx.actor.OrganizationID, fx.customer.ID, sessionID, request.ID)
+	if err != nil || !strings.Contains(message, "already cancelled") {
+		t.Fatalf("expected idempotent cancellation, got message=%q err=%v", message, err)
+	}
+}
+
+func TestRuntimeCancelRequestIsCustomerAndConversationScoped(t *testing.T) {
+	fx := newFieldFixture(t)
+	ctx := context.Background()
+	sessionID := uuid.New()
+	request, err := fx.field.CreateRequest(ctx, fx.actor, CreateRequestInput{
+		CustomerID: fx.customer.ID, PoolID: fx.plumber.ID, SessionID: &sessionID, Area: "Lekki", Description: "Leaking tap",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.field.RuntimeCancelRequest(ctx, fx.actor.OrganizationID, uuid.New(), sessionID, request.ID); err == nil {
+		t.Fatal("another customer could cancel the request")
+	}
+	if _, err := fx.field.RuntimeCancelRequest(ctx, fx.actor.OrganizationID, fx.customer.ID, uuid.New(), request.ID); err == nil {
+		t.Fatal("another conversation could cancel the request")
+	}
+	current, err := fx.field.GetRequest(ctx, fx.actor, request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != RequestDraft {
+		t.Fatalf("unauthorized cancellation changed request status to %s", current.Status)
+	}
+}
+
+func TestCancelledBookingIsNotRevivedByLatePaymentCallback(t *testing.T) {
+	fx := newFieldFixture(t)
+	ctx := context.Background()
+	sessionID := uuid.New()
+	request, err := fx.field.CreateRequest(ctx, fx.actor, CreateRequestInput{
+		CustomerID: fx.customer.ID, PoolID: fx.plumber.ID, SessionID: &sessionID, Area: "Lekki", Description: "Leaking tap",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, payment, err := fx.field.InitializeBookingFee(ctx, fx.actor, request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.field.RuntimeCancelRequest(ctx, fx.actor.OrganizationID, fx.customer.ID, sessionID, request.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.commerce.VerifyPayment(ctx, fx.actor, core.PaymentVerifyInput{Reference: payment.Reference}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := fx.field.GetRequest(ctx, fx.actor, request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != RequestCancelled {
+		t.Fatalf("late payment callback revived request as %s", current.Status)
+	}
+	order, err := fx.commerce.GetOrder(ctx, fx.actor, *request.BookingOrderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != core.OrderCancelled {
+		t.Fatalf("late payment callback revived order as %s", order.Status)
+	}
+}
+
 func TestProviderDeclineMovesToNext(t *testing.T) {
 	fx := newFieldFixture(t)
 	ctx := context.Background()

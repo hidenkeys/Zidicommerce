@@ -1499,6 +1499,20 @@ func (s *Service) RecordNotification(ctx context.Context, actor auth.CurrentUser
 	return notification, nil
 }
 
+// SkipUndeliverableNotifications closes notifications that can never be sent.
+// It is scoped to one tenant and never touches notifications with a channel
+// and recipient, so it cannot suppress real outbound work.
+func (s *Service) SkipUndeliverableNotifications(ctx context.Context, organizationID uuid.UUID) (int64, error) {
+	if organizationID == uuid.Nil {
+		return 0, httperror.BadRequest("Organization is required")
+	}
+	now := s.now()
+	result := s.db.WithContext(ctx).Model(&CommerceNotification{}).
+		Where("organization_id = ? AND status IN ? AND (channel_id IS NULL OR recipient = '')", organizationID, []string{"queued", "retry_pending", "failed"}).
+		Updates(map[string]any{"status": "skipped", "error_message": "notification has no channel or recipient", "next_attempt_at": nil, "updated_at": now})
+	return result.RowsAffected, result.Error
+}
+
 func (s *Service) storeQuery(db *gorm.DB, actor auth.CurrentUser) *gorm.DB {
 	query := db.Model(&Store{}).Where("stores.organization_id = ?", actor.OrganizationID)
 	if actor.Role == authz.StoreStaff || actor.Role == authz.StoreManager {

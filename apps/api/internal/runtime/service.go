@@ -29,14 +29,15 @@ import (
 const defaultSessionTTL = 24 * time.Hour
 
 type Service struct {
-	db             *gorm.DB
-	commerce       *core.Service
-	jobs           *jobs.Service
-	actions        *ActionRegistry
-	senders        map[string]ChannelSender
-	log            *slog.Logger
-	handoffInbound HandoffInboundHandler
-	now            func() time.Time
+	db              *gorm.DB
+	commerce        *core.Service
+	jobs            *jobs.Service
+	actions         *ActionRegistry
+	senders         map[string]ChannelSender
+	log             *slog.Logger
+	handoffInbound  HandoffInboundHandler
+	lifecycleCancel LifecycleCancelHandler
+	now             func() time.Time
 }
 
 func NewService(db *gorm.DB, commerce *core.Service, logger *slog.Logger) *Service {
@@ -642,7 +643,7 @@ func (s *Service) execute(ctx context.Context, snapshot bot.VersionConfiguration
 		variables = map[string]any{}
 		runtimeContext.Variables = variables
 	}
-	if handled, err := s.handleLifecycle(snapshot, session, input, runtimeContext, &result); err != nil {
+	if handled, err := s.handleLifecycle(ctx, snapshot, session, input, runtimeContext, &result); err != nil {
 		return result, err
 	} else if handled {
 		if session.ExpectedInput != "" {
@@ -834,7 +835,7 @@ func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.V
 	}
 }
 
-func (s *Service) handleLifecycle(snapshot bot.VersionConfiguration, session *ConversationSession, input InboundMessage, runtimeContext RuntimeContext, result *RuntimeResult) (bool, error) {
+func (s *Service) handleLifecycle(ctx context.Context, snapshot bot.VersionConfiguration, session *ConversationSession, input InboundMessage, runtimeContext RuntimeContext, result *RuntimeResult) (bool, error) {
 	command := classifyCommand(input.Text)
 	if command == commandNone {
 		return false, nil
@@ -858,7 +859,19 @@ func (s *Service) handleLifecycle(snapshot bot.VersionConfiguration, session *Co
 		return true, nil
 	case commandMenu, commandRestart, commandCancel:
 		if command == commandCancel {
-			result.Messages = append(result.Messages, OutboundMessage{Type: MessageText, Text: "Okay, I cancelled that request."})
+			message := "Okay, I cancelled that request."
+			if s.lifecycleCancel != nil {
+				handled, cancellationMessage, err := s.lifecycleCancel(ctx, runtimeContext)
+				if err != nil {
+					s.log.Warn("runtime lifecycle cancellation failed", "organization_id", session.OrganizationID, "conversation_id", session.ID, "error", err)
+					result.Messages = append(result.Messages, OutboundMessage{Type: MessageText, Text: "I couldn't cancel that request because its payment or fulfilment status may have changed. Please check its status or contact support."})
+					return true, nil
+				}
+				if handled && strings.TrimSpace(cancellationMessage) != "" {
+					message = cancellationMessage
+				}
+			}
+			result.Messages = append(result.Messages, OutboundMessage{Type: MessageText, Text: message})
 		}
 		returnToEntry(snapshot, session, runtimeContext)
 		clearRuntimeVariables(runtimeContext)

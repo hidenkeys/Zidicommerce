@@ -496,6 +496,10 @@ func (s *Service) confirmBookingFee(ctx context.Context, actor auth.CurrentUser,
 	if request.Status != RequestAwaitingPayment && request.Status != RequestDraft {
 		return nil
 	}
+	order, err := s.commerce.GetOrder(ctx, actor, orderID)
+	if err != nil || order.Status != core.OrderPaid {
+		return nil
+	}
 	if err := s.db.WithContext(ctx).Model(&Request{}).Where("id = ?", request.ID).Updates(map[string]any{"status": RequestMatching, "booking_order_id": orderID, "updated_at": s.now()}).Error; err != nil {
 		return err
 	}

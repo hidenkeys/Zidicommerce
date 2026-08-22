@@ -114,6 +114,11 @@ func main() {
 				"organization_id", result.OrganizationID,
 				"owner_email", result.OwnerEmail,
 				"password_source", passwordSource(cfg.FieldService.DemoPassword))
+			if count, cleanupErr := commerceService.SkipUndeliverableNotifications(ctx, result.OrganizationID); cleanupErr != nil {
+				log.Warn("failed to close undeliverable demo notifications", "organization_id", result.OrganizationID, "error", cleanupErr)
+			} else if count > 0 {
+				log.Info("closed undeliverable demo notifications", "organization_id", result.OrganizationID, "count", count)
+			}
 		}
 	}
 

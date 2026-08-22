@@ -12,6 +12,8 @@ import (
 
 type HandoffInboundHandler func(ctx context.Context, organizationID, sessionID uuid.UUID, text string) (handled bool, reply string, err error)
 
+type LifecycleCancelHandler func(ctx context.Context, runtimeContext RuntimeContext) (handled bool, message string, err error)
+
 func (s *Service) RegisterAction(key string, handler ActionHandler) {
 	if s.actions == nil {
 		s.actions = NewActionRegistry(s.db, s.commerce)

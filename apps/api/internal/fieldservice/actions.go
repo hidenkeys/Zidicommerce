@@ -10,6 +10,8 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
+	"gorm.io/gorm"
 )
 
 func runtimeActor(organizationID uuid.UUID) auth.CurrentUser {
@@ -109,6 +111,70 @@ func (s *Service) RuntimeCheckBookingPayment(ctx context.Context, organizationID
 		return map[string]any{"payment_status": "pending", "message": "I haven't confirmed that payment yet. Open the link, then reply I HAVE PAID."}, nil
 	}
 	return map[string]any{"payment_status": core.PaymentPaid, "message": "Payment confirmed. We're matching you with a professional now."}, nil
+}
+
+// RuntimeCancelRequest cancels only the request created by this customer in
+// this conversation. It is intentionally limited to the pre-payment states.
+func (s *Service) RuntimeCancelRequest(ctx context.Context, organizationID, customerID, sessionID, requestID uuid.UUID) (string, error) {
+	if organizationID == uuid.Nil || customerID == uuid.Nil || sessionID == uuid.Nil || requestID == uuid.Nil {
+		return "", httperror.BadRequest("The request could not be identified")
+	}
+	actor := runtimeActor(organizationID)
+	var request Request
+	err := s.db.WithContext(ctx).
+		Where("organization_id = ? AND id = ? AND customer_id = ? AND conversation_session_id = ?", organizationID, requestID, customerID, sessionID).
+		First(&request).Error
+	if err == gorm.ErrRecordNotFound {
+		return "", httperror.NotFound("Request not found")
+	}
+	if err != nil {
+		return "", err
+	}
+	if request.Status == RequestCancelled {
+		return "Okay, this request is already cancelled.", nil
+	}
+	if request.Status != RequestDraft && request.Status != RequestAwaitingPayment {
+		return "", httperror.Conflict("This request can no longer be cancelled from chat")
+	}
+
+	if request.BookingOrderID != nil {
+		order, err := s.commerce.GetOrder(ctx, actor, *request.BookingOrderID)
+		if err != nil {
+			return "", err
+		}
+		if order.CustomerID != request.CustomerID {
+			return "", httperror.Forbidden("The booking order does not belong to this customer")
+		}
+		if order.Status != core.OrderCancelled {
+			if order.Status != core.OrderAwaitingPayment {
+				return "", httperror.Conflict("This request can no longer be cancelled from chat")
+			}
+			if _, err := s.commerce.TransitionOrder(ctx, actor, order.ID, core.TransitionInput{
+				Status:         core.OrderCancelled,
+				Reason:         "customer_cancelled_before_payment",
+				IdempotencyKey: "runtime-service-cancel-" + request.ID.String(),
+			}); err != nil {
+				return "", err
+			}
+		}
+		if err := s.db.WithContext(ctx).Model(&core.Payment{}).
+			Where("organization_id = ? AND order_id = ? AND status = ?", organizationID, order.ID, core.PaymentPending).
+			Updates(map[string]any{"status": core.PaymentExpired, "updated_at": s.now()}).Error; err != nil {
+			return "", err
+		}
+	}
+
+	update := s.db.WithContext(ctx).Model(&Request{}).
+		Where("organization_id = ? AND id = ? AND customer_id = ? AND conversation_session_id = ? AND status IN ?", organizationID, requestID, customerID, sessionID, []string{RequestDraft, RequestAwaitingPayment}).
+		Updates(map[string]any{"status": RequestCancelled, "updated_at": s.now()})
+	if update.Error != nil {
+		return "", update.Error
+	}
+	if update.RowsAffected != 1 {
+		return "", httperror.Conflict("This request can no longer be cancelled from chat")
+	}
+	s.audit(ctx, actor, "service_request", request.ID, "service_request_cancelled", `{"source":"customer_chat","before_payment":true}`)
+	return "Okay, I cancelled request " + request.PublicCode + ". No payment is due.", nil
 }
 
 func numbered(rows []map[string]any) string {

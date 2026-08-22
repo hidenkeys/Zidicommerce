@@ -1213,6 +1213,42 @@ func TestUpdateVariantPrice(t *testing.T) {
 	}
 }
 
+func TestSkipUndeliverableNotificationsIsTenantScoped(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	channelID := uuid.New()
+	otherOrgID := uuid.New()
+	notifications := []CommerceNotification{
+		{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, NotificationType: "seed_one", Recipient: "2348000000000", Status: "queued", Payload: "{}"},
+		{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, ChannelID: &channelID, NotificationType: "seed_two", Recipient: "", Status: "failed", Payload: "{}"},
+		{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, ChannelID: &channelID, NotificationType: "real", Recipient: "2348000000001", Status: "queued", Payload: "{}"},
+		{ID: uuid.New(), OrganizationID: otherOrgID, NotificationType: "other_tenant", Recipient: "2348000000002", Status: "queued", Payload: "{}"},
+	}
+	if err := fx.db.Create(&notifications).Error; err != nil {
+		t.Fatal(err)
+	}
+	count, err := fx.service.SkipUndeliverableNotifications(context.Background(), fx.actor.OrganizationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("expected two undeliverable notifications to be skipped, got %d", count)
+	}
+	var stored []CommerceNotification
+	if err := fx.db.Where("id IN ?", []uuid.UUID{notifications[0].ID, notifications[1].ID, notifications[2].ID, notifications[3].ID}).Find(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[uuid.UUID]string{}
+	for _, notification := range stored {
+		statuses[notification.ID] = notification.Status
+	}
+	if statuses[notifications[0].ID] != "skipped" || statuses[notifications[1].ID] != "skipped" {
+		t.Fatalf("expected only undeliverable tenant notifications skipped, got %+v", statuses)
+	}
+	if statuses[notifications[2].ID] != "queued" || statuses[notifications[3].ID] != "queued" {
+		t.Fatalf("deliverable or cross-tenant notification was changed: %+v", statuses)
+	}
+}
+
 type namedPaymentProvider struct {
 	name        string
 	paid        bool
