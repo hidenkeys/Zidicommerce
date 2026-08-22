@@ -63,9 +63,12 @@ func (s *Service) AdoptWhatsAppNumber(ctx context.Context, input AdoptChannelInp
 		}
 
 		// The credentials travel with the number so they never have to be
-		// re-entered (or pass through configuration) to move it.
+		// re-entered (or pass through configuration) to move it. The webhook
+		// verify token belongs to the number's Meta app rather than to a
+		// workspace, so it travels too.
 		carriedSecrets := source.SecretConfig
 		carriedDisplay := source.DisplayNumber
+		carriedConfig := jsonMap(source.Config)
 
 		var destination Channel
 		err = tx.Where("organization_id = ? AND provider = ?", target.ID, "whatsapp").
@@ -96,6 +99,11 @@ func (s *Service) AdoptWhatsAppNumber(ctx context.Context, input AdoptChannelInp
 		config := jsonMap(destination.Config)
 		if token := strings.TrimSpace(input.VerifyToken); token != "" {
 			config["verify_token"] = token
+		}
+		if stringFromAny(config["verify_token"]) == "" {
+			if carried := stringFromAny(carriedConfig["verify_token"]); carried != "" {
+				config["verify_token"] = carried
+			}
 		}
 		if botID := strings.TrimSpace(input.BotID); botID != "" {
 			config["bot_id"] = botID

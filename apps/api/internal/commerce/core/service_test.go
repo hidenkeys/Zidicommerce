@@ -1418,7 +1418,8 @@ func TestAdoptWhatsAppNumberMovesItBetweenWorkspaces(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	input := AdoptChannelInput{PhoneNumberID: "shared-phone-id", TargetOrgSlug: "pilot-workspace", VerifyToken: "pilot-token", BotID: "pilot-bot"}
+	// No VerifyToken supplied: it must travel with the number from the origin.
+	input := AdoptChannelInput{PhoneNumberID: "shared-phone-id", TargetOrgSlug: "pilot-workspace", BotID: "pilot-bot"}
 	if err := fx.service.AdoptWhatsAppNumber(ctx, input, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -1443,7 +1444,7 @@ func TestAdoptWhatsAppNumberMovesItBetweenWorkspaces(t *testing.T) {
 		t.Fatal("credentials did not travel with the number")
 	}
 	config := jsonMap(adopted.Config)
-	if stringFromAny(config["verify_token"]) != "pilot-token" || stringFromAny(config["bot_id"]) != "pilot-bot" {
+	if stringFromAny(config["verify_token"]) != "origin-token" || stringFromAny(config["bot_id"]) != "pilot-bot" {
 		t.Fatalf("target config not applied: %s", adopted.Config)
 	}
 
