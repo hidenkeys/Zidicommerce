@@ -6,6 +6,7 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -1342,8 +1343,10 @@ func TestDisconnectChannelReleasesThePhoneNumber(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if disconnected.Status != StatusInactive {
-		t.Fatalf("expected inactive, got %s", disconnected.Status)
+	// The channels table constrains status to ('draft','active','disabled'),
+	// so writing the shared "inactive" value here fails in Postgres.
+	if disconnected.Status != ChannelStatusDisabled {
+		t.Fatalf("expected disabled, got %s", disconnected.Status)
 	}
 	if disconnected.PhoneNumberID != "" {
 		t.Fatalf("disconnecting must release the number, still holds %q", disconnected.PhoneNumberID)
@@ -1428,7 +1431,7 @@ func TestAdoptWhatsAppNumberMovesItBetweenWorkspaces(t *testing.T) {
 	if err := fx.db.Where("id = ?", origin.ID).First(&released).Error; err != nil {
 		t.Fatal(err)
 	}
-	if released.PhoneNumberID != "" || released.Status != StatusInactive {
+	if released.PhoneNumberID != "" || released.Status != ChannelStatusDisabled {
 		t.Fatalf("origin should have released the number, got %q/%s", released.PhoneNumberID, released.Status)
 	}
 
@@ -1469,5 +1472,27 @@ func TestAdoptWhatsAppNumberMovesItBetweenWorkspaces(t *testing.T) {
 	fx.db.Model(&Channel{}).Where("provider = ? AND phone_number_id = ?", "whatsapp", "shared-phone-id").Count(&holders)
 	if holders != 1 {
 		t.Fatalf("re-running adoption created a second holder: %d", holders)
+	}
+}
+
+func TestChannelStatusValuesMatchTheSchemaConstraint(t *testing.T) {
+	// The migration is the source of truth for what the channels table accepts.
+	// Writing a status it rejects fails only in Postgres, which the sqlite test
+	// fixture cannot reproduce, so assert the constant against the migration.
+	migration, err := os.ReadFile("../../../../../migrations/000001_zidicommerce_foundation.sql")
+	if err != nil {
+		t.Skipf("migration not readable from here: %v", err)
+	}
+	const constraint = "status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'disabled'))"
+	if !strings.Contains(string(migration), constraint) {
+		t.Fatalf("channels status constraint changed; re-check ChannelStatusDisabled")
+	}
+	for _, status := range []string{StatusActive, ChannelStatusDisabled, "draft"} {
+		if !strings.Contains(constraint, "'"+status+"'") {
+			t.Fatalf("channel status %q is not accepted by the schema", status)
+		}
+	}
+	if strings.Contains(constraint, "'"+StatusInactive+"'") {
+		t.Fatal("schema now accepts inactive; ChannelStatusDisabled may be redundant")
 	}
 }

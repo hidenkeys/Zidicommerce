@@ -87,7 +87,7 @@ func (s *Service) AdoptWhatsAppNumber(ctx context.Context, input AdoptChannelInp
 		// holder must let go before the new one can claim it.
 		if source.ID != uuid.Nil && source.ID != destination.ID {
 			if err := tx.Model(&Channel{}).Where("id = ?", source.ID).Updates(map[string]any{
-				"phone_number_id": "", "status": StatusInactive, "updated_at": s.now(),
+				"phone_number_id": "", "status": ChannelStatusDisabled, "updated_at": s.now(),
 			}).Error; err != nil {
 				return err
 			}

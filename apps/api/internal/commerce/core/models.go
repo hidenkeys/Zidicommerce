@@ -10,6 +10,11 @@ const (
 	StatusActive   = "active"
 	StatusInactive = "inactive"
 
+	// ChannelStatusDisabled is the off state for a channel. The channels table
+	// constrains status to ('draft','active','disabled'), so the shared
+	// StatusInactive value is rejected there.
+	ChannelStatusDisabled = "disabled"
+
 	FulfilmentPickup        = "pickup"
 	FulfilmentCustomerRider = "customer_rider"
 	FulfilmentMerchantRider = "merchant_rider"

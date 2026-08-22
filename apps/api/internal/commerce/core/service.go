@@ -1416,7 +1416,7 @@ func (s *Service) DisconnectChannel(ctx context.Context, actor auth.CurrentUser,
 		return Channel{}, mapNotFound(err, "Channel not found")
 	}
 	if err := s.db.WithContext(ctx).Model(&channel).Updates(map[string]any{
-		"status": StatusInactive, "phone_number_id": "", "updated_at": s.now(),
+		"status": ChannelStatusDisabled, "phone_number_id": "", "updated_at": s.now(),
 	}).Error; err != nil {
 		return Channel{}, err
 	}
