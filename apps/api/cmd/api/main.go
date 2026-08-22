@@ -121,6 +121,34 @@ func main() {
 			}
 		}
 	}
+	if cfg.FieldService.PilotSeedProfile != "" {
+		if cfg.FieldService.PilotPassword == "" {
+			log.Error("field service pilot seed skipped", "error", "FIELD_SERVICE_PILOT_PASSWORD is required")
+		} else if profile, profileErr := fieldservice.LoadSeedProfile(cfg.FieldService.PilotSeedProfile); profileErr != nil {
+			log.Error("field service pilot profile failed", "error", profileErr)
+		} else {
+			seedCommerce := core.NewService(db, core.SafeTestProvider{})
+			seedField := fieldservice.NewService(db, seedCommerce, log)
+			seedCommerce.ConfigureAfterPaymentPaid(seedField.OnPaymentPaid)
+			result, seedErr := fieldservice.SeedTenant(ctx, db, seedCommerce, botService, seedField, profile, fieldservice.SeedOptions{
+				Password: cfg.FieldService.PilotPassword, ProviderPortalURL: cfg.FieldService.ProviderPortalURL,
+			})
+			if seedErr != nil {
+				log.Error("field service pilot seed failed", "profile", cfg.FieldService.PilotSeedProfile, "error", seedErr)
+			} else {
+				log.Info("field service pilot tenant ready",
+					"organization_id", result.OrganizationID, "owner_email", result.OwnerEmail,
+					"providers", result.ProviderCount, "pools", result.PoolCount,
+					"bot_status", result.BotStatus, "channel_status", result.ChannelStatus,
+					"password_source", "FIELD_SERVICE_PILOT_PASSWORD")
+				if count, cleanupErr := commerceService.SkipUndeliverableNotifications(ctx, result.OrganizationID); cleanupErr != nil {
+					log.Warn("failed to close undeliverable pilot notifications", "organization_id", result.OrganizationID, "error", cleanupErr)
+				} else if count > 0 {
+					log.Info("closed undeliverable pilot notifications", "organization_id", result.OrganizationID, "count", count)
+				}
+			}
+		}
+	}
 
 	app := httpapi.New(httpapi.Dependencies{
 		Config:       cfg,

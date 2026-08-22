@@ -15,7 +15,7 @@ function statusLabel(value?: unknown) {
 
 function Login({ onAuthenticated }: { onAuthenticated: (user: User) => void }) {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("owner@lagoshome.demo");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   async function onSubmit(event: FormEvent) {

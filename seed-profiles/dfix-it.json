@@ -1,0 +1,62 @@
+{
+  "organization_name": "DFix It",
+  "organization_slug": "dfix-it",
+  "owner": {
+    "email": "owner@dfixit.demo",
+    "first_name": "Dayo",
+    "last_name": "Fixit"
+  },
+  "welcome_message": "Welcome to DFix It 👋\nWe connect you with trusted professionals for home and maintenance services across Lagos.\n\nWhat service do you need today?",
+  "booking_fee_minor": 500000,
+  "acceptance_window_seconds": 300,
+  "max_distance_km": 30,
+  "matching_weights": {
+    "service": 0.35,
+    "availability": 0.20,
+    "distance": 0.25,
+    "rating": 0.15,
+    "experience": 0.05
+  },
+  "pools": [
+    "Plumber",
+    "Electrician",
+    "Carpenter",
+    "Painter",
+    "AC Technician",
+    "Tiler",
+    "Generator Technician",
+    "Appliance Repair"
+  ],
+  "providers": [
+    {"code":"chinedu-ikeja","name":"Chinedu Okafor","email":"chinedu.okafor@dfixit.demo","phone":"+2347005550101","area":"Ikeja","address":"Allen Avenue, Ikeja","latitude":6.6018,"longitude":3.3515,"pools":["Plumber","Tiler"],"rating":4.8,"rating_count":57,"jobs_completed":63,"availability":"available"},
+    {"code":"kemi-lekki","name":"Kemi Afolayan","email":"kemi.afolayan@dfixit.demo","phone":"+2347005550102","area":"Lekki","address":"Admiralty Way, Lekki Phase 1","latitude":6.4474,"longitude":3.4723,"pools":["Electrician","Generator Technician"],"rating":4.7,"rating_count":44,"jobs_completed":49,"availability":"available"},
+    {"code":"musa-vi","name":"Musa Abdullahi","email":"musa.abdullahi@dfixit.demo","phone":"+2347005550103","area":"Victoria Island","address":"Akin Adesola Street, Victoria Island","latitude":6.4281,"longitude":3.4219,"pools":["Carpenter","Tiler"],"rating":4.6,"rating_count":38,"jobs_completed":45,"availability":"available"},
+    {"code":"tola-yaba","name":"Tola Bamidele","email":"tola.bamidele@dfixit.demo","phone":"+2347005550104","area":"Yaba","address":"Herbert Macaulay Way, Yaba","latitude":6.5095,"longitude":3.3711,"pools":["Painter"],"rating":4.5,"rating_count":31,"jobs_completed":35,"availability":"available"},
+    {"code":"efe-surulere","name":"Efe Omoruyi","email":"efe.omoruyi@dfixit.demo","phone":"+2347005550105","area":"Surulere","address":"Bode Thomas Street, Surulere","latitude":6.5000,"longitude":3.3500,"pools":["AC Technician","Appliance Repair"],"rating":4.9,"rating_count":76,"jobs_completed":82,"availability":"available"},
+    {"code":"seyi-maryland","name":"Seyi Adekunle","email":"seyi.adekunle@dfixit.demo","phone":"+2347005550106","area":"Maryland","address":"Mobolaji Bank Anthony Way, Maryland","latitude":6.5764,"longitude":3.3682,"pools":["Plumber"],"rating":4.3,"rating_count":24,"jobs_completed":28,"availability":"available"},
+    {"code":"ada-magodo","name":"Adaeze Nwosu","email":"adaeze.nwosu@dfixit.demo","phone":"+2347005550107","area":"Magodo","address":"CMD Road, Magodo","latitude":6.6183,"longitude":3.3823,"pools":["Painter","Tiler"],"rating":4.8,"rating_count":52,"jobs_completed":58,"availability":"available"},
+    {"code":"ibrahim-gbagada","name":"Ibrahim Lawal","email":"ibrahim.lawal@dfixit.demo","phone":"+2347005550108","area":"Gbagada","address":"Diya Street, Gbagada","latitude":6.5447,"longitude":3.3892,"pools":["Generator Technician","Electrician"],"rating":4.6,"rating_count":41,"jobs_completed":47,"availability":"busy"},
+    {"code":"nneka-ajah","name":"Nneka Eze","email":"nneka.eze@dfixit.demo","phone":"+2347005550109","area":"Ajah","address":"Ado Road, Ajah","latitude":6.4698,"longitude":3.5646,"pools":["Appliance Repair","AC Technician"],"rating":4.7,"rating_count":36,"jobs_completed":40,"availability":"available"},
+    {"code":"kunle-ikorodu","name":"Kunle Ajayi","email":"kunle.ajayi@dfixit.demo","phone":"+2347005550110","area":"Ikorodu","address":"Lagos Road, Ikorodu","latitude":6.6194,"longitude":3.5105,"pools":["Carpenter"],"rating":4.2,"rating_count":18,"jobs_completed":22,"availability":"available"},
+    {"code":"amina-festac","name":"Amina Bello","email":"amina.bello@dfixit.demo","phone":"+2347005550111","area":"Festac","address":"2nd Avenue, Festac Town","latitude":6.4698,"longitude":3.2825,"pools":["Plumber","Appliance Repair"],"rating":4.5,"rating_count":29,"jobs_completed":34,"availability":"available"},
+    {"code":"femi-agege","name":"Femi Adebayo","email":"femi.adebayo@dfixit.demo","phone":"+2347005550112","area":"Agege","address":"Old Abeokuta Road, Agege","latitude":6.6253,"longitude":3.3129,"pools":["Electrician","Generator Technician"],"rating":4.4,"rating_count":27,"jobs_completed":33,"availability":"available"},
+    {"code":"halima-ogba","name":"Halima Sule","email":"halima.sule@dfixit.demo","phone":"+2347005550113","area":"Ogba","address":"College Road, Ogba","latitude":6.6298,"longitude":3.3425,"pools":["Painter"],"rating":4.7,"rating_count":46,"jobs_completed":51,"availability":"available"},
+    {"code":"emeka-oshodi","name":"Emeka Chukwu","email":"emeka.chukwu@dfixit.demo","phone":"+2347005550114","area":"Oshodi","address":"Oshodi-Apapa Expressway, Oshodi","latitude":6.5550,"longitude":3.3436,"pools":["AC Technician"],"rating":4.6,"rating_count":33,"jobs_completed":39,"availability":"available"},
+    {"code":"blessing-alausa","name":"Blessing Etuk","email":"blessing.etuk@dfixit.demo","phone":"+2347005550115","area":"Alausa","address":"Obafemi Awolowo Way, Alausa","latitude":6.6173,"longitude":3.3584,"pools":["Tiler","Carpenter"],"rating":4.9,"rating_count":68,"jobs_completed":74,"availability":"available"},
+    {"code":"segun-anthony","name":"Segun Adeleke","email":"segun.adeleke@dfixit.demo","phone":"+2347005550116","area":"Anthony","address":"Ikorodu Road, Anthony","latitude":6.5620,"longitude":3.3671,"pools":["Generator Technician"],"rating":4.3,"rating_count":22,"jobs_completed":26,"availability":"available"},
+    {"code":"rita-island","name":"Rita Mensah","email":"rita.mensah@dfixit.demo","phone":"+2347005550117","area":"Lagos Island","address":"Marina Road, Lagos Island","latitude":6.4549,"longitude":3.3947,"pools":["Appliance Repair"],"rating":4.5,"rating_count":35,"jobs_completed":42,"availability":"available"},
+    {"code":"david-vi","name":"David Eze","email":"david.eze@dfixit.demo","phone":"+2347005550118","area":"Victoria Island","address":"Adeola Odeku Street, Victoria Island","latitude":6.4310,"longitude":3.4190,"pools":["Electrician"],"rating":4.8,"rating_count":61,"jobs_completed":69,"availability":"available"},
+    {"code":"grace-ikeja","name":"Grace Umeh","email":"grace.umeh@dfixit.demo","phone":"+2347005550119","area":"Ikeja","address":"Opebi Road, Ikeja","latitude":6.5880,"longitude":3.3630,"pools":["Painter","Carpenter"],"rating":4.1,"rating_count":16,"jobs_completed":20,"availability":"offline"},
+    {"code":"john-lekki","name":"John Adeyemi","email":"john.adeyemi@dfixit.demo","phone":"+2347005550120","area":"Lekki","address":"Freedom Way, Lekki Phase 1","latitude":6.4410,"longitude":3.4680,"pools":["Plumber","AC Technician"],"rating":4.9,"rating_count":83,"jobs_completed":91,"availability":"available"}
+  ],
+  "jobs": [
+    {"customer":{"name":"Amaka Obi","phone":"+2347006660201","area":"Lekki","address":"12 Admiralty Way, Lekki Phase 1"},"pool":"Plumber","description":"Leaking pipe under the kitchen sink is flooding the cabinet","preferred_at":"today before 6pm","stage":"completed","labour_minor":2000000,"materials_minor":1250000,"quote_notes":"Replace the trap and two flexible hoses; materials included.","rating":5,"feedback":"Quick, tidy and professional.","chat":[{"from":"provider","body":"I am on my way and should arrive in 25 minutes."},{"from":"customer","body":"Thank you, security has your name."},{"from":"provider","body":"The trap is cracked. I am sending the repair quote now."}]},
+    {"customer":{"name":"Tobi Adeniran","phone":"+2347006660202","area":"Ikeja","address":"7 Isaac John Street, Ikeja GRA"},"pool":"Appliance Repair","description":"Washing machine fills with water but will not spin","preferred_at":"tomorrow morning","stage":"completed","labour_minor":1500000,"materials_minor":800000,"quote_notes":"Drive belt replacement and drum bearing service.","rating":4,"feedback":"The machine is working well again.","chat":[{"from":"provider","body":"Is the machine front-loading or top-loading?"},{"from":"customer","body":"Front-loading, an LG model."}]},
+    {"customer":{"name":"Chioma Nwankwo","phone":"+2347006660203","area":"Yaba","address":"34 Herbert Macaulay Way, Yaba"},"pool":"Electrician","description":"Living-room sockets stopped working after a power surge","preferred_at":"today","stage":"quote_sent","labour_minor":1800000,"materials_minor":1450000,"quote_notes":"Replace the ring circuit breaker and two burnt sockets.","chat":[{"from":"provider","body":"Are the lights on the same circuit still working?"},{"from":"customer","body":"The lights are fine; only the sockets are dead."}]},
+    {"customer":{"name":"Bayo Salami","phone":"+2347006660204","area":"Surulere","address":"22 Bode Thomas Street, Surulere"},"pool":"AC Technician","description":"Bedroom AC is not cooling and makes a rattling noise","preferred_at":"this evening","stage":"in_progress","chat":[{"from":"provider","body":"I have arrived and I am checking the outdoor unit now."}]},
+    {"customer":{"name":"Ngozi Eze","phone":"+2347006660205","area":"Victoria Island","address":"1 Adeola Odeku Street, Victoria Island"},"pool":"Carpenter","description":"Wardrobe door came off its hinges and will not close","preferred_at":"any time this week","stage":"dispatching"},
+    {"customer":{"name":"Uche Okafor","phone":"+2347006660206","area":"Gbagada","address":"5 Diya Street, Gbagada Phase 2"},"pool":"Painter","description":"Repaint two bedrooms; the walls are already prepared","preferred_at":"next Saturday","stage":"awaiting_fee"},
+    {"customer":{"name":"Reni Williams","phone":"+2347006660207","area":"Maryland","address":"18 Mende Road, Maryland"},"pool":"Tiler","description":"Six bathroom wall tiles are loose and need replacement","preferred_at":"Friday afternoon","stage":"assigned","chat":[{"from":"provider","body":"I have accepted the job and will bring matching tile samples."}]},
+    {"customer":{"name":"Dele Bakare","phone":"+2347006660208","area":"Ogba","address":"9 Ajayi Road, Ogba"},"pool":"Generator Technician","description":"Generator starts but shuts down after five minutes","preferred_at":"tomorrow afternoon","stage":"completed","labour_minor":2200000,"materials_minor":950000,"quote_notes":"Fuel-line service and replacement of the faulty oil-pressure sensor.","rating":5,"feedback":"Clear diagnosis and excellent service.","chat":[{"from":"provider","body":"The oil-pressure sensor is failing after the engine warms up."}]}
+  ]
+}

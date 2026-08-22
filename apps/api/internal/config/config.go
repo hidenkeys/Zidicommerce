@@ -30,6 +30,8 @@ type FieldServiceConfig struct {
 	SeedDemo          bool
 	DemoPassword      string
 	ProviderPortalURL string
+	PilotSeedProfile  string
+	PilotPassword     string
 }
 
 type DatabaseConfig struct {
@@ -98,6 +100,8 @@ func Load() (Config, error) {
 			SeedDemo:          strings.EqualFold(strings.TrimSpace(os.Getenv("FIELD_SERVICE_DEMO_SEED")), "true"),
 			DemoPassword:      strings.TrimSpace(os.Getenv("FIELD_SERVICE_DEMO_PASSWORD")),
 			ProviderPortalURL: strings.TrimRight(strings.TrimSpace(os.Getenv("FIELD_SERVICE_PORTAL_URL")), "/"),
+			PilotSeedProfile:  strings.TrimSpace(os.Getenv("FIELD_SERVICE_PILOT_SEED_PROFILE")),
+			PilotPassword:     strings.TrimSpace(os.Getenv("FIELD_SERVICE_PILOT_PASSWORD")),
 		},
 		Email: EmailConfig{
 			Mode:       getenv("EMAIL_MODE", "log"),

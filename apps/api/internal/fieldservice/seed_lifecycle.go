@@ -11,41 +11,41 @@ import (
 	"gorm.io/gorm"
 )
 
-// seedCustomer is one demo household.
-type seedCustomer struct {
-	Name    string
-	Phone   string
-	Area    string
-	Address string
+// SeedCustomer is one demo household in a configuration-driven seed profile.
+type SeedCustomer struct {
+	Name    string `json:"name"`
+	Phone   string `json:"phone"`
+	Area    string `json:"area"`
+	Address string `json:"address"`
 }
 
 // seedJob describes a demo request and how far along its lifecycle it should be
 // driven. The seeder drives each one through the real service methods rather
 // than inserting rows, so the demo data is only ever in states the running
 // system can actually produce.
-type seedJob struct {
-	Customer    seedCustomer
-	Pool        string
-	Description string
-	PreferredAt string
+type SeedJob struct {
+	Customer    SeedCustomer `json:"customer"`
+	Pool        string       `json:"pool"`
+	Description string       `json:"description"`
+	PreferredAt string       `json:"preferred_at"`
 	// Stage is how far to take the job: awaiting_fee, dispatching, assigned,
 	// in_progress, quote_sent, or completed.
-	Stage       string
-	LabourMinor int64
-	MaterialMin int64
-	QuoteNotes  string
-	Rating      int
-	Feedback    string
-	Chat        []seedChatLine
+	Stage       string         `json:"stage"`
+	LabourMinor int64          `json:"labour_minor"`
+	MaterialMin int64          `json:"materials_minor"`
+	QuoteNotes  string         `json:"quote_notes"`
+	Rating      int            `json:"rating"`
+	Feedback    string         `json:"feedback"`
+	Chat        []SeedChatLine `json:"chat"`
 }
 
-type seedChatLine struct {
-	From string // "customer" or "provider"
-	Body string
+type SeedChatLine struct {
+	From string `json:"from"` // "customer" or "provider"
+	Body string `json:"body"`
 }
 
-func demoCustomers() []seedCustomer {
-	return []seedCustomer{
+func demoCustomers() []SeedCustomer {
+	return []SeedCustomer{
 		{"Amaka Obi", "+2348031234567", "Lekki", "12 Admiralty Way, Lekki Phase 1"},
 		{"Tobi Adeniran", "+2348051112233", "Ikeja", "7 Isaac John Street, Ikeja GRA"},
 		{"Chioma Nwankwo", "+2348097654321", "Yaba", "34 Herbert Macaulay Way, Yaba"},
@@ -55,9 +55,9 @@ func demoCustomers() []seedCustomer {
 	}
 }
 
-func demoJobs() []seedJob {
+func demoJobs() []SeedJob {
 	customers := demoCustomers()
-	return []seedJob{
+	return []SeedJob{
 		{
 			Customer: customers[0], Pool: "Plumber",
 			Description: "Leaking pipe under the kitchen sink, water pooling in the cabinet",
@@ -65,7 +65,7 @@ func demoJobs() []seedJob {
 			LabourMinor: 2000000, MaterialMin: 1250000,
 			QuoteNotes: "Replace the trap and both flexible hoses. Parts included.",
 			Rating:     5, Feedback: "Arrived early and cleaned up afterwards.",
-			Chat: []seedChatLine{
+			Chat: []SeedChatLine{
 				{"provider", "On my way, should be with you in about 30 minutes."},
 				{"customer", "Thank you, the gate is open."},
 				{"provider", "The trap is cracked. Sending you a quote now."},
@@ -78,7 +78,7 @@ func demoJobs() []seedJob {
 			LabourMinor: 1500000, MaterialMin: 800000,
 			QuoteNotes: "Drive belt replacement and drum bearing service.",
 			Rating:     4, Feedback: "Fixed it, took a little longer than expected.",
-			Chat: []seedChatLine{
+			Chat: []SeedChatLine{
 				{"provider", "Is the machine front loading or top loading?"},
 				{"customer", "Front loading, an LG."},
 			},
@@ -89,7 +89,7 @@ func demoJobs() []seedJob {
 			PreferredAt: "today", Stage: "quote_sent",
 			LabourMinor: 1800000, MaterialMin: 1450000,
 			QuoteNotes: "Replace the tripped ring circuit breaker and two burnt sockets.",
-			Chat: []seedChatLine{
+			Chat: []SeedChatLine{
 				{"provider", "Are the lights on the same circuit still working?"},
 				{"customer", "Lights are fine, only the sockets are dead."},
 			},
@@ -98,7 +98,7 @@ func demoJobs() []seedJob {
 			Customer: customers[2], Pool: "AC Technician",
 			Description: "Bedroom AC is not cooling and makes a rattling noise",
 			PreferredAt: "this evening", Stage: "in_progress",
-			Chat: []seedChatLine{
+			Chat: []SeedChatLine{
 				{"provider", "I have arrived, checking the outdoor unit now."},
 			},
 		},
@@ -120,6 +120,12 @@ func demoJobs() []seedJob {
 // is safe to run repeatedly: a job whose customer, service and description
 // already exist is skipped rather than duplicated.
 func SeedLifecycle(ctx context.Context, db *gorm.DB, commerce *core.Service, field *Service, actor auth.CurrentUser) error {
+	return SeedLifecycleJobs(ctx, db, commerce, field, actor, demoJobs())
+}
+
+// SeedLifecycleJobs drives configured sample work through the production
+// service methods. It is safe to run repeatedly for the same organization.
+func SeedLifecycleJobs(ctx context.Context, db *gorm.DB, commerce *core.Service, field *Service, actor auth.CurrentUser, jobs []SeedJob) error {
 	pools, err := field.ListPools(ctx, actor)
 	if err != nil {
 		return err
@@ -128,7 +134,7 @@ func SeedLifecycle(ctx context.Context, db *gorm.DB, commerce *core.Service, fie
 	for _, pool := range pools {
 		poolsByName[pool.Name] = pool
 	}
-	for _, job := range demoJobs() {
+	for _, job := range jobs {
 		pool, ok := poolsByName[job.Pool]
 		if !ok {
 			continue
@@ -155,7 +161,7 @@ func SeedLifecycle(ctx context.Context, db *gorm.DB, commerce *core.Service, fie
 	return nil
 }
 
-func seedOneJob(ctx context.Context, db *gorm.DB, commerce *core.Service, field *Service, actor auth.CurrentUser, job seedJob, pool Pool, customer core.Customer) error {
+func seedOneJob(ctx context.Context, db *gorm.DB, commerce *core.Service, field *Service, actor auth.CurrentUser, job SeedJob, pool Pool, customer core.Customer) error {
 	lat, lng, _ := GeocodeLagos(job.Customer.Area)
 	request, err := field.CreateRequest(ctx, actor, CreateRequestInput{
 		CustomerID: customer.ID, PoolID: pool.ID,
@@ -267,7 +273,7 @@ func notifiedProviderActor(ctx context.Context, db *gorm.DB, field *Service, act
 // can see where credentials go. It stays in draft: the runtime and outbound
 // sender only use active channels, so nothing tries to call Meta until real
 // credentials are filled in.
-func seedWhatsAppChannel(ctx context.Context, db *gorm.DB, commerce *core.Service, actor auth.CurrentUser) error {
+func seedWhatsAppChannel(ctx context.Context, db *gorm.DB, commerce *core.Service, actor auth.CurrentUser, companyName string, botID uuid.UUID) error {
 	ensure := func(provider, displayName, status, config string) error {
 		var existing int64
 		if err := db.WithContext(ctx).Model(&core.Channel{}).
@@ -285,13 +291,13 @@ func seedWhatsAppChannel(ctx context.Context, db *gorm.DB, commerce *core.Servic
 	}
 	// The WhatsApp channel stays in draft until real Meta credentials are added:
 	// the runtime and the outbound sender only use active channels.
-	if err := ensure("whatsapp", DemoCompanyName+" WhatsApp", "draft",
-		`{"note":"Add the Meta phone number id, access token and webhook secret, then set this channel active."}`); err != nil {
+	if err := ensure("whatsapp", companyName+" WhatsApp", "draft",
+		fmt.Sprintf(`{"bot_id":%q,"note":"Add the Meta phone number id, access token and webhook secret, then set this channel active."}`, botID.String())); err != nil {
 		return err
 	}
 	// An active test channel lets the bot simulator and the demo run before those
 	// credentials exist. It has no registered sender, so outbound messages are
 	// recorded and marked skipped rather than leaving the system.
-	return ensure("test", DemoCompanyName+" simulator", core.StatusActive,
-		`{"note":"Local demo channel. Messages are recorded, never sent to a real customer."}`)
+	return ensure("test", companyName+" simulator", core.StatusActive,
+		fmt.Sprintf(`{"bot_id":%q,"note":"Demo channel. Messages are recorded, never sent to a real customer."}`, botID.String()))
 }

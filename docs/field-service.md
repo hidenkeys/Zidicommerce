@@ -164,6 +164,8 @@ API service:
 | `FIELD_SERVICE_DEMO_PASSWORD` | Password for the seeded owner and provider logins. **Always set this outside local development** — otherwise the built-in development default is used |
 | `FIELD_SERVICE_PORTAL_URL` | Provider portal link included in dispatch notifications |
 | `FIELD_SERVICE_CUSTOMER_EMAIL_DOMAIN` | Domain for the placeholder address built from a WhatsApp customer's phone number. Defaults to `customers.zidihq.com`. It must be a real domain — payment providers validate the address and reject reserved TLDs such as `.local` |
+| `FIELD_SERVICE_PILOT_SEED_PROFILE` | Optional path to a configuration-driven tenant profile JSON bundled with the API image |
+| `FIELD_SERVICE_PILOT_PASSWORD` | Password used for that profile's owner and provider portal accounts; required when a pilot profile is configured and never stored in profile JSON or logs |
 
 The seed runs after migrations, is idempotent across redeploys, is scoped to its
 own organization, and never fails API startup. Its sample payment history is
@@ -173,6 +175,12 @@ traffic still uses whatever `PAYMENT_PROVIDER` specifies. The password is never 
 the logs — only its source. Once the tenant exists you can set
 `FIELD_SERVICE_DEMO_SEED=false`; leaving it on is harmless but does work on
 every boot.
+
+Additional pilot tenants use `SeedTenant` and a data-only `SeedProfile`. The
+profile holds the organization, pools, providers, and sample lifecycle data,
+while credentials remain environment variables. Provisioning is idempotent by
+organization slug and tenant-scoped natural keys, so a redeploy repairs the
+configured tenant rather than creating a duplicate.
 
 ## Running the demo
 
