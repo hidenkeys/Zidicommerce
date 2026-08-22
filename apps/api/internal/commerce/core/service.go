@@ -1305,7 +1305,7 @@ func (s *Service) CreateChannel(ctx context.Context, actor auth.CurrentUser, inp
 		return Channel{}, httperror.BadRequest("Channel provider and display name are required")
 	}
 	channel := Channel{ID: uuid.New(), OrganizationID: actor.OrganizationID, Provider: input.Provider, DisplayName: input.DisplayName, PhoneNumberID: input.PhoneNumberID, DisplayNumber: input.DisplayNumber, Status: defaultString(input.Status, "draft"), Config: jsonObject(input.Config), SecretConfig: jsonObject(input.SecretConfig)}
-	err := s.db.WithContext(ctx).Create(&channel).Error
+	err := mapChannelNumberConflict(s.db.WithContext(ctx).Create(&channel).Error)
 	if err == nil {
 		_ = s.auditTx(s.db.WithContext(ctx), &actor.OrganizationID, &actor.ID, "channel", &channel.ID, "channel_created", fmt.Sprintf(`{"provider":%q}`, channel.Provider))
 	}
@@ -1355,7 +1355,7 @@ func (s *Service) UpdateChannel(ctx context.Context, actor auth.CurrentUser, cha
 		updates["secret_config"] = jsonValue(secrets)
 	}
 	if err := s.db.WithContext(ctx).Model(&channel).Updates(updates).Error; err != nil {
-		return Channel{}, err
+		return Channel{}, mapChannelNumberConflict(err)
 	}
 	_ = s.auditTx(s.db.WithContext(ctx), &actor.OrganizationID, &actor.ID, "channel", &channel.ID, "channel_updated", fmt.Sprintf(`{"provider":%q}`, channel.Provider))
 	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, channelID).First(&channel).Error; err != nil {
@@ -1404,8 +1404,42 @@ func (s *Service) TestChannel(ctx context.Context, actor auth.CurrentUser, chann
 	return map[string]any{"status": status, "issues": issues, "provider": channel.Provider, "display_number": channel.DisplayNumber}, nil
 }
 
+// DisconnectChannel takes a channel offline and releases its provider phone
+// number. The number is globally unique across workspaces, so holding on to it
+// after disconnecting would permanently block reconnecting it anywhere else.
 func (s *Service) DisconnectChannel(ctx context.Context, actor auth.CurrentUser, channelID uuid.UUID) (Channel, error) {
-	return s.UpdateChannel(ctx, actor, channelID, ChannelInput{Status: StatusInactive})
+	if !actor.Role.CanManageOrganization() {
+		return Channel{}, httperror.Forbidden("You cannot manage channels")
+	}
+	var channel Channel
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, channelID).First(&channel).Error; err != nil {
+		return Channel{}, mapNotFound(err, "Channel not found")
+	}
+	if err := s.db.WithContext(ctx).Model(&channel).Updates(map[string]any{
+		"status": StatusInactive, "phone_number_id": "", "updated_at": s.now(),
+	}).Error; err != nil {
+		return Channel{}, err
+	}
+	_ = s.auditTx(s.db.WithContext(ctx), &actor.OrganizationID, &actor.ID, "channel", &channel.ID, "channel_disconnected", fmt.Sprintf(`{"provider":%q}`, channel.Provider))
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, channelID).First(&channel).Error; err != nil {
+		return Channel{}, err
+	}
+	return channel, nil
+}
+
+// mapChannelNumberConflict turns the global (provider, phone_number_id) unique
+// violation into an actionable message. Without this the owner UI reports an
+// opaque failure and the credentials look like they saved when they did not.
+func mapChannelNumberConflict(err error) error {
+	if err == nil {
+		return nil
+	}
+	text := strings.ToLower(err.Error())
+	if strings.Contains(text, "idx_channels_provider_phone") ||
+		(strings.Contains(text, "phone_number_id") && (strings.Contains(text, "duplicate key") || strings.Contains(text, "unique constraint"))) {
+		return httperror.Conflict("That WhatsApp number is already connected to another workspace. Disconnect it there first, then connect it here.")
+	}
+	return err
 }
 
 func (s *Service) ListPaymentConfigurations(ctx context.Context, actor auth.CurrentUser) ([]PaymentConfiguration, error) {

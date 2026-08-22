@@ -1316,3 +1316,81 @@ func paystackTestSignature(secret string, body []byte) string {
 	mac.Write(body)
 	return hex.EncodeToString(mac.Sum(nil))
 }
+
+// withProviderPhoneIndex recreates the production partial unique index from
+// migrations/000002. AutoMigrate does not create it, so without this the tests
+// cannot exercise the real cross-workspace number conflict.
+func withProviderPhoneIndex(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_provider_phone ON channels(provider, phone_number_id) WHERE phone_number_id <> ''`).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDisconnectChannelReleasesThePhoneNumber(t *testing.T) {
+	fx := newCommerceFixture(t, 7)
+	withProviderPhoneIndex(t, fx.db)
+	ctx := context.Background()
+	channel, err := fx.service.CreateChannel(ctx, fx.actor, ChannelInput{
+		Provider: "whatsapp", DisplayName: "WhatsApp", PhoneNumberID: "phone-shared",
+		DisplayNumber: "+2348000000000", Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disconnected, err := fx.service.DisconnectChannel(ctx, fx.actor, channel.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disconnected.Status != StatusInactive {
+		t.Fatalf("expected inactive, got %s", disconnected.Status)
+	}
+	if disconnected.PhoneNumberID != "" {
+		t.Fatalf("disconnecting must release the number, still holds %q", disconnected.PhoneNumberID)
+	}
+	// The released number can now be claimed by another channel.
+	reused, err := fx.service.CreateChannel(ctx, fx.actor, ChannelInput{
+		Provider: "whatsapp", DisplayName: "WhatsApp again", PhoneNumberID: "phone-shared",
+		DisplayNumber: "+2348000000000", Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("released number should be reusable: %v", err)
+	}
+	if reused.PhoneNumberID != "phone-shared" {
+		t.Fatalf("unexpected number %q", reused.PhoneNumberID)
+	}
+}
+
+func TestTakenWhatsAppNumberReportsAConflict(t *testing.T) {
+	fx := newCommerceFixture(t, 7)
+	withProviderPhoneIndex(t, fx.db)
+	ctx := context.Background()
+	if _, err := fx.service.CreateChannel(ctx, fx.actor, ChannelInput{
+		Provider: "whatsapp", DisplayName: "First", PhoneNumberID: "phone-taken",
+		DisplayNumber: "+2348000000001", Status: StatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := fx.service.CreateChannel(ctx, fx.actor, ChannelInput{
+		Provider: "whatsapp", DisplayName: "Second", DisplayNumber: "+2348000000002", Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Claiming a number another channel already holds must be an actionable
+	// conflict, not an opaque server error that looks like a successful save.
+	_, err = fx.service.UpdateChannel(ctx, fx.actor, second.ID, ChannelInput{PhoneNumberID: "phone-taken"})
+	if err == nil {
+		t.Fatal("expected a conflict when claiming a number that is already in use")
+	}
+	apiErr, ok := err.(httperror.APIError)
+	if !ok {
+		t.Fatalf("expected an APIError, got %T: %v", err, err)
+	}
+	if apiErr.StatusCode != 409 {
+		t.Fatalf("expected 409, got %d (%s)", apiErr.StatusCode, apiErr.Message)
+	}
+	if !strings.Contains(strings.ToLower(apiErr.Message), "already connected") {
+		t.Fatalf("message is not actionable: %q", apiErr.Message)
+	}
+}
