@@ -636,12 +636,16 @@ function Payments() {
       <p>Booking fees and quote payments.</p>
       <div className="list">
         {rows.map((row, index) => (
-          <div className="card row" key={`${row.code}-${index}`}>
+          <div className="card row wrap" key={`${row.code}-${index}`}>
             <div>
               <strong>{String(row.code)}</strong>
-              <div className="muted">{statusLabel(row.kind)} · {statusLabel(row.status)}</div>
+              <div className="muted">{statusLabel(row.kind)} · {statusLabel(row.status)} · {String(row.customer_name || row.customer_phone || "Customer")}</div>
+              <div className="muted">Request {String(row.request_code || row.code)}{row.reference ? ` · ${String(row.reference)}` : " · No payment reference yet"}</div>
             </div>
-            <span>{money(row.amount_minor)}</span>
+            <div>
+              <strong>{money(row.amount_minor)}</strong>
+              <div className="muted">{row.created_at ? new Date(String(row.created_at)).toLocaleString() : "Time unavailable"}</div>
+            </div>
           </div>
         ))}
       </div>

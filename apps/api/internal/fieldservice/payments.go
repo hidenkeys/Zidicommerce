@@ -152,22 +152,74 @@ func (s *Service) ListTransactions(ctx context.Context, actor auth.CurrentUser) 
 		return nil, err
 	}
 	var quotes []Quote
-	_ = s.db.WithContext(ctx).Where("organization_id = ? AND status IN ?", actor.OrganizationID, []string{QuoteSent, QuoteApproved, QuotePaid, QuoteDeclined}).Order("created_at DESC").Limit(100).Find(&quotes)
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND status IN ?", actor.OrganizationID, []string{QuoteSent, QuoteApproved, QuotePaid, QuoteDeclined}).Order("created_at DESC").Limit(100).Find(&quotes).Error; err != nil {
+		return nil, err
+	}
 	var requests []Request
-	_ = s.db.WithContext(ctx).Where("organization_id = ? AND booking_order_id IS NOT NULL", actor.OrganizationID).Order("created_at DESC").Limit(100).Find(&requests)
+	if err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("created_at DESC").Limit(200).Find(&requests).Error; err != nil {
+		return nil, err
+	}
+	requestByID := make(map[uuid.UUID]Request, len(requests))
+	orderIDs := make([]uuid.UUID, 0, len(quotes)+len(requests))
+	for _, request := range requests {
+		requestByID[request.ID] = request
+		if request.BookingOrderID != nil {
+			orderIDs = append(orderIDs, *request.BookingOrderID)
+		}
+	}
+	for _, quote := range quotes {
+		if quote.PaymentOrderID != nil {
+			orderIDs = append(orderIDs, *quote.PaymentOrderID)
+		}
+	}
+	var payments []core.Payment
+	if len(orderIDs) > 0 {
+		if err := s.db.WithContext(ctx).Where("organization_id = ? AND order_id IN ?", actor.OrganizationID, orderIDs).Order("created_at DESC").Find(&payments).Error; err != nil {
+			return nil, err
+		}
+	}
+	paymentByOrder := make(map[uuid.UUID]core.Payment, len(payments))
+	for _, payment := range payments {
+		if _, exists := paymentByOrder[payment.OrderID]; !exists {
+			paymentByOrder[payment.OrderID] = payment
+		}
+	}
 	out := make([]map[string]any, 0, len(quotes)+len(requests))
 	for _, quote := range quotes {
+		request := requestByID[quote.RequestID]
+		payment := core.Payment{}
+		if quote.PaymentOrderID != nil {
+			payment = paymentByOrder[*quote.PaymentOrderID]
+		}
+		status := quote.Status
+		createdAt := quote.CreatedAt
+		if payment.ID != uuid.Nil {
+			status = payment.Status
+			createdAt = payment.CreatedAt
+		}
 		out = append(out, map[string]any{
-			"kind": "quote", "code": quote.PublicCode, "amount_minor": quote.TotalMinor, "currency": quote.Currency, "status": quote.Status, "created_at": quote.CreatedAt,
+			"kind": "quote", "code": quote.PublicCode, "request_code": request.PublicCode,
+			"customer_name": request.CustomerName, "customer_phone": request.CustomerPhone,
+			"amount_minor": quote.TotalMinor, "currency": quote.Currency, "status": status,
+			"provider": payment.Provider, "reference": payment.Reference, "verified_at": payment.VerifiedAt, "created_at": createdAt,
 		})
 	}
 	for _, request := range requests {
-		status := "booking_fee"
-		if request.Status != RequestAwaitingPayment && request.Status != RequestDraft {
-			status = "booking_fee_paid"
+		if request.BookingOrderID == nil {
+			continue
+		}
+		payment := paymentByOrder[*request.BookingOrderID]
+		status := "pending"
+		createdAt := request.CreatedAt
+		if payment.ID != uuid.Nil {
+			status = payment.Status
+			createdAt = payment.CreatedAt
 		}
 		out = append(out, map[string]any{
-			"kind": "booking_fee", "code": request.PublicCode, "amount_minor": request.BookingFeeMinor, "currency": "NGN", "status": status, "created_at": request.CreatedAt,
+			"kind": "booking_fee", "code": request.PublicCode, "request_code": request.PublicCode,
+			"customer_name": request.CustomerName, "customer_phone": request.CustomerPhone,
+			"amount_minor": request.BookingFeeMinor, "currency": "NGN", "status": status,
+			"provider": payment.Provider, "reference": payment.Reference, "verified_at": payment.VerifiedAt, "created_at": createdAt,
 		})
 	}
 	return out, nil

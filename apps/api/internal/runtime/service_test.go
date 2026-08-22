@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -200,6 +201,32 @@ func TestRuntimeExecutesMessageQuestionAndEnd(t *testing.T) {
 	}
 	if !strings.Contains(session.Variables, "Ada") {
 		t.Fatalf("expected variable to be persisted, got %s", session.Variables)
+	}
+}
+
+func TestSimulatorKeepsOneCustomerIdentityPerSession(t *testing.T) {
+	config := bot.VersionConfiguration{
+		Version: bot.BotVersion{StartStepKey: "start"},
+		Steps:   []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepMessage, Title: "Start", Message: "Welcome.", NextStepKey: "done"}, {ID: uuid.New(), StepKey: "done", Type: bot.StepEnd, Title: "Done", Message: "Done."}},
+	}
+	fx := newRuntimeFixture(t, config)
+	session, err := fx.service.StartTestSession(context.Background(), fx.actor, RuntimeStartInput{
+		BotID: fx.bot.ID, ChannelID: fx.channel.ID, ExternalConversationID: "admin-test-customer", Sender: "2348000000000",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, text := range []string{"Hey", "Again"} {
+		if _, err := fx.service.ProcessTestMessage(context.Background(), fx.actor, RuntimeMessageInput{SessionID: session.ID, ExternalMessageID: fmt.Sprintf("sim-%d", index), Text: text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var customerCount int64
+	if err := fx.db.Model(&core.Customer{}).Where("organization_id = ?", fx.actor.OrganizationID).Count(&customerCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if customerCount != 1 {
+		t.Fatalf("expected one simulator customer, got %d", customerCount)
 	}
 }
 

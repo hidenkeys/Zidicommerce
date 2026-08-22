@@ -173,7 +173,14 @@ func (s *Service) ProcessTestMessage(ctx context.Context, actor auth.CurrentUser
 	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, input.SessionID).First(&session).Error; err != nil {
 		return RuntimeResult{}, mapNotFoundCode(err, ErrSessionNotFound, "Runtime session not found")
 	}
-	inbound := InboundMessage{ChannelID: &session.ChannelID, TrustedOrganizationID: &actor.OrganizationID, ExternalMessageID: defaultString(input.ExternalMessageID, uuid.NewString()), ExternalConversationID: session.ExternalConversationID, Sender: defaultString(session.ExternalConversationID, "simulator"), Text: input.Text, Location: input.Location, Metadata: input.Metadata, Timestamp: s.now()}
+	sender := defaultString(session.ExternalConversationID, "simulator")
+	if session.CustomerID != nil {
+		var customer core.Customer
+		if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, *session.CustomerID).First(&customer).Error; err == nil && strings.TrimSpace(customer.Phone) != "" {
+			sender = customer.Phone
+		}
+	}
+	inbound := InboundMessage{ChannelID: &session.ChannelID, TrustedOrganizationID: &actor.OrganizationID, ExternalMessageID: defaultString(input.ExternalMessageID, uuid.NewString()), ExternalConversationID: session.ExternalConversationID, Sender: sender, Text: input.Text, Location: input.Location, Metadata: input.Metadata, Timestamp: s.now()}
 	return s.ProcessMessage(ctx, inbound)
 }
 

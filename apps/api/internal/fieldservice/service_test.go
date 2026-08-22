@@ -176,6 +176,28 @@ func TestEndToEndServiceBooking(t *testing.T) {
 	if john.RatingAverage < 4 {
 		t.Fatalf("rating not stored: %v", john.RatingAverage)
 	}
+	transactions, err := fx.field.ListTransactions(ctx, fx.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenBooking, seenQuote := false, false
+	for _, transaction := range transactions {
+		if transaction["customer_name"] != "Amaka" || transaction["request_code"] != request.PublicCode {
+			continue
+		}
+		if transaction["reference"] == "" || transaction["created_at"] == nil {
+			t.Fatalf("transaction is missing its payment reference or timestamp: %+v", transaction)
+		}
+		switch transaction["kind"] {
+		case "booking_fee":
+			seenBooking = transaction["amount_minor"] == int64(500000) && transaction["status"] == core.PaymentPaid
+		case "quote":
+			seenQuote = transaction["amount_minor"] == int64(3250000) && transaction["status"] == core.PaymentPaid
+		}
+	}
+	if !seenBooking || !seenQuote {
+		t.Fatalf("expected readable paid booking and quote transactions, got %+v", transactions)
+	}
 	joined := strings.Join(fx.bridge.messages, "\n")
 	if !strings.Contains(joined, "New service request") || !strings.Contains(joined, "John") {
 		t.Fatalf("expected provider/customer notifications, got %s", joined)
