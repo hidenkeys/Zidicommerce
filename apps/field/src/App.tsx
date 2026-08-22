@@ -261,6 +261,7 @@ function Providers() {
         && (!statusFilter || String(row.status) === statusFilter);
     });
   }, [poolFilter, rows, search, statusFilter]);
+  const activePools = useMemo(() => pools.filter((pool) => String(pool.status) !== "inactive"), [pools]);
 
   function editRow(row: Record<string, unknown>) {
     setEditing({
@@ -285,7 +286,7 @@ function Providers() {
       <p>Who is available, where they work, what they have earned.</p>
       {editing ? (
         <ProviderForm
-          pools={pools}
+          pools={activePools}
           initial={editing}
           onCancel={() => setEditing(null)}
           onSaved={() => { setEditing(null); load(); }}
@@ -297,7 +298,7 @@ function Providers() {
         <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, phone, area or service" />
         <select aria-label="Filter by service" value={poolFilter} onChange={(event) => setPoolFilter(event.target.value)}>
           <option value="">All services</option>
-          {pools.map((pool) => <option key={String(pool.id)} value={String(pool.id)}>{String(pool.name)}</option>)}
+          {activePools.map((pool) => <option key={String(pool.id)} value={String(pool.id)}>{String(pool.name)}</option>)}
         </select>
         <select aria-label="Filter by account status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
           <option value="">All account statuses</option>

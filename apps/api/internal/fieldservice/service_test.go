@@ -249,15 +249,15 @@ func TestProviderProfileUsesOwnerSuppliedLoginAndDeactivationDisablesAccount(t *
 	if err := fx.db.Where("id = ?", *provider.UserID).First(&user).Error; err != nil {
 		t.Fatal(err)
 	}
-	if user.Email != "acceptance.updated@example.com" || user.Status != "inactive" {
+	if user.Email != "acceptance.updated@example.com" || user.Status != "disabled" {
 		t.Fatalf("provider login was not synchronized: %+v", user)
 	}
 	var membership organization.OrganizationMembership
 	if err := fx.db.Where("organization_id = ? AND user_id = ?", fx.actor.OrganizationID, *provider.UserID).First(&membership).Error; err != nil {
 		t.Fatal(err)
 	}
-	if membership.Status != "inactive" {
-		t.Fatalf("provider membership should be inactive, got %s", membership.Status)
+	if membership.Status != "disabled" {
+		t.Fatalf("provider membership should be disabled, got %s", membership.Status)
 	}
 }
 

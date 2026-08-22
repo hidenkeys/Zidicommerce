@@ -273,7 +273,7 @@ func (s *Service) UpsertProvider(ctx context.Context, actor auth.CurrentUser, in
 			if input.UserID != nil {
 				userStatus := "active"
 				if input.Status == "inactive" {
-					userStatus = "inactive"
+					userStatus = "disabled"
 				}
 				updates := map[string]any{"status": userStatus, "updated_at": s.now()}
 				if input.Email != "" {

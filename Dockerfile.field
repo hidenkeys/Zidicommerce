@@ -11,6 +11,8 @@ COPY packages/shared packages/shared
 
 ARG VITE_API_BASE_URL
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+ARG VITE_ADMIN_BASE_URL
+ENV VITE_ADMIN_BASE_URL=$VITE_ADMIN_BASE_URL
 RUN npm run build --workspace apps/field
 
 FROM nginx:1.27-alpine
