@@ -32,6 +32,12 @@ type FieldServiceConfig struct {
 	ProviderPortalURL string
 	PilotSeedProfile  string
 	PilotPassword     string
+	// Adopt* move an already-configured WhatsApp number to another workspace at
+	// startup, for deployments whose database has no public endpoint.
+	AdoptPhoneNumberID string
+	AdoptTargetOrgSlug string
+	AdoptVerifyToken   string
+	AdoptBotID         string
 }
 
 type DatabaseConfig struct {
@@ -97,11 +103,15 @@ func Load() (Config, error) {
 			SecretEncryptionKey: os.Getenv("PAYMENT_SECRET_ENCRYPTION_KEY"),
 		},
 		FieldService: FieldServiceConfig{
-			SeedDemo:          strings.EqualFold(strings.TrimSpace(os.Getenv("FIELD_SERVICE_DEMO_SEED")), "true"),
-			DemoPassword:      strings.TrimSpace(os.Getenv("FIELD_SERVICE_DEMO_PASSWORD")),
-			ProviderPortalURL: strings.TrimRight(strings.TrimSpace(os.Getenv("FIELD_SERVICE_PORTAL_URL")), "/"),
-			PilotSeedProfile:  strings.TrimSpace(os.Getenv("FIELD_SERVICE_PILOT_SEED_PROFILE")),
-			PilotPassword:     strings.TrimSpace(os.Getenv("FIELD_SERVICE_PILOT_PASSWORD")),
+			SeedDemo:           strings.EqualFold(strings.TrimSpace(os.Getenv("FIELD_SERVICE_DEMO_SEED")), "true"),
+			DemoPassword:       strings.TrimSpace(os.Getenv("FIELD_SERVICE_DEMO_PASSWORD")),
+			ProviderPortalURL:  strings.TrimRight(strings.TrimSpace(os.Getenv("FIELD_SERVICE_PORTAL_URL")), "/"),
+			PilotSeedProfile:   strings.TrimSpace(os.Getenv("FIELD_SERVICE_PILOT_SEED_PROFILE")),
+			PilotPassword:      strings.TrimSpace(os.Getenv("FIELD_SERVICE_PILOT_PASSWORD")),
+			AdoptPhoneNumberID: strings.TrimSpace(os.Getenv("WHATSAPP_ADOPT_PHONE_NUMBER_ID")),
+			AdoptTargetOrgSlug: strings.TrimSpace(os.Getenv("WHATSAPP_ADOPT_TARGET_ORG_SLUG")),
+			AdoptVerifyToken:   strings.TrimSpace(os.Getenv("WHATSAPP_ADOPT_VERIFY_TOKEN")),
+			AdoptBotID:         strings.TrimSpace(os.Getenv("WHATSAPP_ADOPT_BOT_ID")),
 		},
 		Email: EmailConfig{
 			Mode:       getenv("EMAIL_MODE", "log"),

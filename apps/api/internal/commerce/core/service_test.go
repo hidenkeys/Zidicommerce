@@ -1394,3 +1394,79 @@ func TestTakenWhatsAppNumberReportsAConflict(t *testing.T) {
 		t.Fatalf("message is not actionable: %q", apiErr.Message)
 	}
 }
+
+func TestAdoptWhatsAppNumberMovesItBetweenWorkspaces(t *testing.T) {
+	fx := newCommerceFixture(t, 8)
+	withProviderPhoneIndex(t, fx.db)
+	ctx := context.Background()
+
+	// The number starts out owned by the fixture's workspace, credentials and all.
+	origin, err := fx.service.CreateChannel(ctx, fx.actor, ChannelInput{
+		Provider: "whatsapp", DisplayName: "WhatsApp", PhoneNumberID: "shared-phone-id",
+		DisplayNumber: "+2348000000000", Status: StatusActive,
+		Config:       `{"verify_token":"origin-token","bot_id":"origin-bot"}`,
+		SecretConfig: `{"access_token":"carried-token","app_secret":"carried-secret"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	targetID := uuid.New()
+	if err := fx.db.Create(&organization.Organization{
+		ID: targetID, Name: "Pilot", Slug: "pilot-workspace", Status: "active", Metadata: "{}",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	input := AdoptChannelInput{PhoneNumberID: "shared-phone-id", TargetOrgSlug: "pilot-workspace", VerifyToken: "pilot-token", BotID: "pilot-bot"}
+	if err := fx.service.AdoptWhatsAppNumber(ctx, input, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var released Channel
+	if err := fx.db.Where("id = ?", origin.ID).First(&released).Error; err != nil {
+		t.Fatal(err)
+	}
+	if released.PhoneNumberID != "" || released.Status != StatusInactive {
+		t.Fatalf("origin should have released the number, got %q/%s", released.PhoneNumberID, released.Status)
+	}
+
+	var adopted Channel
+	if err := fx.db.Where("organization_id = ? AND provider = ?", targetID, "whatsapp").First(&adopted).Error; err != nil {
+		t.Fatal(err)
+	}
+	if adopted.PhoneNumberID != "shared-phone-id" || adopted.Status != StatusActive {
+		t.Fatalf("target should own the active number, got %q/%s", adopted.PhoneNumberID, adopted.Status)
+	}
+	// Credentials travel with the number so they never have to be re-entered.
+	if !channelSecretPresent(adopted.SecretConfig, "access_token") || !channelSecretPresent(adopted.SecretConfig, "app_secret") {
+		t.Fatal("credentials did not travel with the number")
+	}
+	config := jsonMap(adopted.Config)
+	if stringFromAny(config["verify_token"]) != "pilot-token" || stringFromAny(config["bot_id"]) != "pilot-bot" {
+		t.Fatalf("target config not applied: %s", adopted.Config)
+	}
+
+	// Only one workspace may hold the number, so inbound cannot resolve to two.
+	var holders int64
+	fx.db.Model(&Channel{}).Where("provider = ? AND phone_number_id = ?", "whatsapp", "shared-phone-id").Count(&holders)
+	if holders != 1 {
+		t.Fatalf("expected exactly one holder of the number, got %d", holders)
+	}
+
+	// Re-running must change nothing.
+	if err := fx.service.AdoptWhatsAppNumber(ctx, input, nil); err != nil {
+		t.Fatalf("adoption should be idempotent: %v", err)
+	}
+	var after Channel
+	if err := fx.db.Where("id = ?", adopted.ID).First(&after).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after.PhoneNumberID != adopted.PhoneNumberID || after.Status != adopted.Status {
+		t.Fatal("re-running adoption changed the channel")
+	}
+	fx.db.Model(&Channel{}).Where("provider = ? AND phone_number_id = ?", "whatsapp", "shared-phone-id").Count(&holders)
+	if holders != 1 {
+		t.Fatalf("re-running adoption created a second holder: %d", holders)
+	}
+}

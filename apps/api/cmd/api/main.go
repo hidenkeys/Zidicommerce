@@ -163,6 +163,21 @@ func main() {
 		Field:        fieldservice.NewHandler(fieldService),
 	})
 
+	// Adopting a WhatsApp number is opt-in and idempotent. It exists because a
+	// provider number is globally unique across workspaces, so a pilot tenant
+	// cannot be handed a number another tenant already holds without releasing
+	// it first — and this deployment's database has no public endpoint.
+	if cfg.FieldService.AdoptPhoneNumberID != "" && cfg.FieldService.AdoptTargetOrgSlug != "" {
+		if err := commerceService.AdoptWhatsAppNumber(ctx, core.AdoptChannelInput{
+			PhoneNumberID: cfg.FieldService.AdoptPhoneNumberID,
+			TargetOrgSlug: cfg.FieldService.AdoptTargetOrgSlug,
+			VerifyToken:   cfg.FieldService.AdoptVerifyToken,
+			BotID:         cfg.FieldService.AdoptBotID,
+		}, log); err != nil {
+			log.Error("whatsapp number adoption failed", "error", err)
+		}
+	}
+
 	log.Info("starting ZidiCommerce API", "port", cfg.ServerPort, "env", cfg.AppEnv)
 	if err := app.Listen(":" + cfg.ServerPort); err != nil {
 		log.Error("server stopped", "error", err)
