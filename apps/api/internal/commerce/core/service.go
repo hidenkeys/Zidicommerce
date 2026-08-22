@@ -1343,6 +1343,17 @@ func (s *Service) UpdateChannel(ctx context.Context, actor auth.CurrentUser, cha
 	if input.Config != "" {
 		updates["config"] = jsonObject(input.Config)
 	}
+	if strings.TrimSpace(input.SecretConfig) != "" {
+		secrets := jsonMap(channel.SecretConfig)
+		for key, value := range jsonMap(input.SecretConfig) {
+			// Secret updates are partial. Empty form fields mean "keep the
+			// existing value", so rotating one credential cannot erase another.
+			if stringFromAny(value) != "" {
+				secrets[key] = value
+			}
+		}
+		updates["secret_config"] = jsonValue(secrets)
+	}
 	if err := s.db.WithContext(ctx).Model(&channel).Updates(updates).Error; err != nil {
 		return Channel{}, err
 	}
@@ -1370,6 +1381,20 @@ func (s *Service) TestChannel(ctx context.Context, actor auth.CurrentUser, chann
 	}
 	if strings.TrimSpace(channel.DisplayNumber) == "" {
 		issues = append(issues, "Display number is missing.")
+	}
+	config := jsonMap(channel.Config)
+	secrets := jsonMap(channel.SecretConfig)
+	if stringFromAny(config["verify_token"]) == "" && stringFromAny(secrets["verify_token"]) == "" {
+		issues = append(issues, "Webhook verify token is missing.")
+	}
+	if stringFromAny(config["bot_id"]) == "" {
+		issues = append(issues, "Published bot association is missing.")
+	}
+	if stringFromAny(secrets["access_token"]) == "" {
+		issues = append(issues, "WhatsApp access token is missing.")
+	}
+	if stringFromAny(secrets["app_secret"]) == "" {
+		issues = append(issues, "Meta app secret is missing.")
 	}
 	status := "ok"
 	if len(issues) > 0 {

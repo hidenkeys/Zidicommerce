@@ -1198,6 +1198,46 @@ func TestPaymentConfigurationStoresMerchantSecretEncryptedAndUsesIt(t *testing.T
 	}
 }
 
+func TestUpdateChannelMergesSecretsWithoutExposingThem(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	channel, err := fx.service.CreateChannel(context.Background(), fx.actor, ChannelInput{
+		Provider:      "whatsapp",
+		DisplayName:   "WhatsApp",
+		PhoneNumberID: "phone-id",
+		DisplayNumber: "+2348012345678",
+		Status:        StatusActive,
+		Config:        `{"bot_id":"` + uuid.NewString() + `","verify_token":"verify-token"}`,
+		SecretConfig:  `{"access_token":"old-token","app_secret":"app-secret"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := fx.service.UpdateChannel(context.Background(), fx.actor, channel.ID, ChannelInput{
+		SecretConfig: `{"access_token":"new-token","app_secret":""}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.SecretConfig != `{"access_token":"new-token","app_secret":"app-secret"}` && updated.SecretConfig != `{"app_secret":"app-secret","access_token":"new-token"}` {
+		t.Fatalf("unexpected merged secret config: %s", updated.SecretConfig)
+	}
+	body, err := json.Marshal(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "new-token") || strings.Contains(string(body), "app-secret") || strings.Contains(string(body), "secret_config") {
+		t.Fatalf("channel response exposed secret material: %s", string(body))
+	}
+	tested, err := fx.service.TestChannel(context.Background(), fx.actor, channel.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tested["status"] != "ok" {
+		t.Fatalf("expected complete channel to test ok, got %+v", tested)
+	}
+}
+
 func TestUpdateVariantPrice(t *testing.T) {
 	fx := newCommerceFixture(t, 5)
 	price := int64(500000)
