@@ -243,6 +243,58 @@ func TestProviderSeesRedactedRequestBeforeAccepting(t *testing.T) {
 	}
 }
 
+func TestExpiredDispatchIsNotShownAsActionable(t *testing.T) {
+	fx := newFieldFixture(t)
+	ctx := context.Background()
+	now := time.Now()
+	fx.field.now = func() time.Time { return now }
+	request, err := fx.field.CreateRequest(ctx, fx.actor, CreateRequestInput{
+		CustomerID: fx.customer.ID, PoolID: fx.plumber.ID, CustomerName: "Amaka Obi", CustomerPhone: "+2348011111111",
+		Area: "Lekki", Address: "12 Admiralty Way", Description: "Leaking kitchen pipe",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.field.StartMatching(ctx, fx.actor, request.ID); err != nil {
+		t.Fatal(err)
+	}
+	var attempt DispatchAttempt
+	if err := fx.db.Where("request_id = ? AND status = ?", request.ID, DispatchNotified).First(&attempt).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Model(&DispatchAttempt{}).Where("id = ?", attempt.ID).Update("expires_at", now.Add(-time.Minute)).Error; err != nil {
+		t.Fatal(err)
+	}
+	provider, err := fx.field.getProvider(ctx, fx.actor.OrganizationID, attempt.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerActor := auth.CurrentUser{ID: *provider.UserID, OrganizationID: fx.actor.OrganizationID, Role: authz.ServiceProvider}
+	inbox, err := fx.field.ListProviderInbox(ctx, providerActor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox) != 0 {
+		t.Fatalf("expired dispatch appeared in provider inbox: %+v", inbox)
+	}
+	overview, err := fx.field.Overview(ctx, fx.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending := overview["pending_provider_requests"]; pending != int64(0) {
+		t.Fatalf("expired dispatch counted as pending: %v", pending)
+	}
+	views, err := fx.field.ListProviderViews(ctx, fx.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range views {
+		if view.ID == provider.ID && view.OpenRequests != 0 {
+			t.Fatalf("expired dispatch counted for provider: %+v", view)
+		}
+	}
+}
+
 func TestOnlyOneProviderCanAcceptARequest(t *testing.T) {
 	fx := newFieldFixture(t)
 	ctx := context.Background()

@@ -421,7 +421,7 @@ func (s *Service) ListProviderInbox(ctx context.Context, actor auth.CurrentUser)
 	}
 	var attempts []DispatchAttempt
 	err = s.db.WithContext(ctx).
-		Where("organization_id = ? AND provider_id = ? AND status = ?", actor.OrganizationID, provider.ID, DispatchNotified).
+		Where("organization_id = ? AND provider_id = ? AND status = ? AND expires_at > ?", actor.OrganizationID, provider.ID, DispatchNotified, s.now()).
 		Preload("Provider").
 		Preload("Request").
 		Preload("Request.Pool").

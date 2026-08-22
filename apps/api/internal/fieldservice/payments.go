@@ -128,11 +128,15 @@ func (s *Service) Overview(ctx context.Context, actor auth.CurrentUser) (map[str
 	_ = s.db.WithContext(ctx).Model(&Quote{}).Where("organization_id = ? AND status = ?", actor.OrganizationID, "paid").Select("COALESCE(SUM(total_minor),0)").Scan(&quoteRevenue)
 	var todays int64
 	_ = s.db.WithContext(ctx).Model(&Request{}).Where("organization_id = ? AND created_at >= ?", actor.OrganizationID, s.now().Truncate(24*time.Hour)).Count(&todays)
+	var pendingProviderRequests int64
+	_ = s.db.WithContext(ctx).Model(&DispatchAttempt{}).
+		Where("organization_id = ? AND status = ? AND expires_at > ?", actor.OrganizationID, DispatchNotified, s.now()).
+		Count(&pendingProviderRequests)
 	return map[string]any{
 		"todays_requests":           todays,
 		"active_jobs":               count(&Request{}, RequestAssigned, RequestOnTheWay, RequestArrived, RequestInProgress, RequestQuoteSent, RequestQuoteApproved, RequestPaymentConfirmed),
 		"available_providers":       available,
-		"pending_provider_requests": count(&DispatchAttempt{}, DispatchNotified),
+		"pending_provider_requests": pendingProviderRequests,
 		"completed_jobs":            count(&Request{}, RequestCompleted),
 		"outstanding_quotes":        count(&Quote{}, QuoteSent),
 		"booking_fees_minor":        bookingFees,
@@ -356,7 +360,7 @@ func (s *Service) ListProviderViews(ctx context.Context, actor auth.CurrentUser)
 			Where("organization_id = ? AND provider_id = ? AND status NOT IN ?", actor.OrganizationID, provider.ID, []string{RequestCompleted, RequestCancelled}).
 			Count(&active)
 		_ = s.db.WithContext(ctx).Model(&DispatchAttempt{}).
-			Where("organization_id = ? AND provider_id = ? AND status = ?", actor.OrganizationID, provider.ID, DispatchNotified).
+			Where("organization_id = ? AND provider_id = ? AND status = ? AND expires_at > ?", actor.OrganizationID, provider.ID, DispatchNotified, s.now()).
 			Count(&open)
 		earned, ok := earnings[provider.ID.String()]
 		if !ok && actor.Role.IsServiceProvider() {
