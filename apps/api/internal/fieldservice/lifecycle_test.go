@@ -538,6 +538,47 @@ func TestHandoffVerifiesApprovedQuotePaymentAndReplies(t *testing.T) {
 	}
 }
 
+func TestHandoffRatesCompletedPaidJobOnce(t *testing.T) {
+	fx := newFieldFixture(t)
+	ctx := context.Background()
+	request, providerActor, _ := bookedJob(t, fx)
+	quote, err := fx.field.CreateQuote(ctx, providerActor, request.ID, QuoteInput{LabourMinor: 2000000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := uuid.New()
+	if err := fx.db.Model(&Request{}).Where("id = ?", request.ID).Update("conversation_session_id", sessionID).Error; err != nil {
+		t.Fatal(err)
+	}
+	payment, err := fx.field.ApproveQuote(ctx, fx.actor, quote.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.commerce.VerifyPayment(ctx, fx.actor, core.PaymentVerifyInput{Reference: payment.Reference}); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{RequestInProgress, RequestCompleted} {
+		if _, err := fx.field.TransitionJob(ctx, providerActor, request.ID, status, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	handled, reply, err := fx.field.HandleHandoffInbound(ctx, fx.actor.OrganizationID, sessionID, "5")
+	if err != nil || !handled || !strings.Contains(reply, "Thank you for the rating") {
+		t.Fatalf("rating response: handled=%v reply=%q err=%v", handled, reply, err)
+	}
+	if _, reply, err = fx.field.HandleHandoffInbound(ctx, fx.actor.OrganizationID, sessionID, "5"); err != nil || !strings.Contains(reply, "already been rated") {
+		t.Fatalf("duplicate rating response: reply=%q err=%v", reply, err)
+	}
+	var count int64
+	if err := fx.db.Model(&Rating{}).Where("request_id = ?", request.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one rating, got %d", count)
+	}
+}
+
 func TestPublicCodesDoNotCollideWithExistingOnes(t *testing.T) {
 	fx := newFieldFixture(t)
 	ctx := context.Background()

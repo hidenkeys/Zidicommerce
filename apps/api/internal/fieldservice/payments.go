@@ -3,6 +3,7 @@ package fieldservice
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -324,11 +325,18 @@ func (s *Service) SubmitRating(ctx context.Context, actor auth.CurrentUser, requ
 	if request.Status != RequestCompleted {
 		return httperror.BadRequest("You can rate this job once it is completed")
 	}
+	var existing Rating
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND request_id = ?", actor.OrganizationID, request.ID).First(&existing).Error; err == nil {
+		return httperror.BadRequest("This job has already been rated")
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
 	rating := Rating{ID: uuid.New(), OrganizationID: actor.OrganizationID, RequestID: request.ID, ProviderID: *request.AssignedProviderID, CustomerID: request.CustomerID, Score: score, Feedback: strings.TrimSpace(feedback)}
-	if err := s.db.WithContext(ctx).Where("request_id = ?", request.ID).Assign(rating).FirstOrCreate(&rating).Error; err != nil {
-		if err := s.db.WithContext(ctx).Create(&rating).Error; err != nil {
-			return err
+	if err := s.db.WithContext(ctx).Create(&rating).Error; err != nil {
+		if lookupErr := s.db.WithContext(ctx).Where("organization_id = ? AND request_id = ?", actor.OrganizationID, request.ID).First(&existing).Error; lookupErr == nil {
+			return httperror.BadRequest("This job has already been rated")
 		}
+		return err
 	}
 	var avg float64
 	_ = s.db.WithContext(ctx).Model(&Rating{}).Where("provider_id = ?", *request.AssignedProviderID).Select("AVG(score)").Scan(&avg)

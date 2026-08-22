@@ -577,6 +577,14 @@ func (s *Service) HandleHandoffInbound(ctx context.Context, organizationID, sess
 	actor := auth.CurrentUser{ID: uuid.Nil, OrganizationID: organizationID, Role: authz.MerchantAdmin}
 	s.saveMessage(ctx, organizationID, request.ID, "customer", nil, text)
 	intent := parseCustomerIntent(text)
+	if request.Status == RequestCompleted {
+		if score := parseStar(strings.ToLower(text)); score > 0 {
+			if err := s.SubmitRating(ctx, actor, request.ID, score, ""); err != nil {
+				return true, friendlyError(err), nil
+			}
+			return true, "Thank you for the rating. We hope to help you again.", nil
+		}
+	}
 
 	if quote, quoteErr := s.latestQuote(ctx, request.ID); quoteErr == nil {
 		if isPaymentConfirmation(text) {
@@ -620,15 +628,6 @@ func (s *Service) HandleHandoffInbound(ctx context.Context, organizationID, sess
 			return true, "Quote declined. You can keep chatting here if you'd like to adjust the job.", nil
 		case intentQuestion:
 			return true, "Sure — send your question here and your professional will reply.", nil
-		}
-	}
-
-	if request.Status == RequestCompleted {
-		if score := parseStar(strings.ToLower(text)); score > 0 {
-			if err := s.SubmitRating(ctx, actor, request.ID, score, ""); err != nil {
-				return true, friendlyError(err), nil
-			}
-			return true, "Thank you for the rating. We hope to help you again.", nil
 		}
 	}
 
