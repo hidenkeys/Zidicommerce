@@ -36,7 +36,7 @@ function Login({ onAuthenticated }: { onAuthenticated: (user: User) => void }) {
   return (
     <div className="login">
       <form onSubmit={onSubmit}>
-        <p className="eyebrow">Lagos Home Services</p>
+        <p className="eyebrow">Zidi Field Service</p>
         <h1>Welcome back</h1>
         <p>Owner dashboard or provider portal — same sign-in.</p>
         <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
@@ -106,8 +106,9 @@ function Overview() {
 }
 
 const LAGOS_AREAS = [
-  "Lekki", "Ajah", "Victoria Island", "Ikoyi", "Yaba", "Surulere",
-  "Ikeja", "Maryland", "Gbagada", "Magodo", "Lagos Mainland", "Lagos Island",
+  "Agege", "Ajah", "Alausa", "Anthony", "Festac", "Gbagada", "Ikeja",
+  "Ikorodu", "Ikoyi", "Lagos Island", "Lagos Mainland", "Lekki", "Magodo",
+  "Maryland", "Ogba", "Oshodi", "Surulere", "Victoria Island", "Yaba",
 ];
 
 type ProviderForm = {
@@ -232,11 +233,25 @@ function Providers() {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
   const [pools, setPools] = useState<Array<Record<string, unknown>>>([]);
   const [editing, setEditing] = useState<ProviderForm | null>(null);
+  const [search, setSearch] = useState("");
+  const [poolFilter, setPoolFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const load = useCallback(() => {
     api.providers().then(setRows).catch(() => undefined);
     api.pools().then(setPools).catch(() => undefined);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  const filteredRows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return rows.filter((row) => {
+      const providerPools = Array.isArray(row.pools) ? row.pools as Array<{ id: string; name: string }> : [];
+      const searchable = [row.name, row.phone, row.area, ...providerPools.map((pool) => pool.name)].join(" ").toLowerCase();
+      return (!query || searchable.includes(query))
+        && (!poolFilter || providerPools.some((pool) => String(pool.id) === poolFilter))
+        && (!statusFilter || String(row.status) === statusFilter);
+    });
+  }, [poolFilter, rows, search, statusFilter]);
 
   function editRow(row: Record<string, unknown>) {
     setEditing({
@@ -267,8 +282,21 @@ function Providers() {
       ) : (
         <button className="primary" onClick={() => setEditing({ ...emptyProvider })}>Add a handyman</button>
       )}
+      <div className="filters" aria-label="Handyman filters">
+        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, phone, area or service" />
+        <select aria-label="Filter by service" value={poolFilter} onChange={(event) => setPoolFilter(event.target.value)}>
+          <option value="">All services</option>
+          {pools.map((pool) => <option key={String(pool.id)} value={String(pool.id)}>{String(pool.name)}</option>)}
+        </select>
+        <select aria-label="Filter by account status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+          <option value="">All account statuses</option>
+          <option value="active">Active</option>
+          <option value="inactive">Deactivated</option>
+        </select>
+      </div>
       <div className="list" style={{ marginTop: 16 }}>
-        {rows.map((row) => (
+        {filteredRows.length === 0 ? <div className="card muted">No handymen match these filters.</div> : null}
+        {filteredRows.map((row) => (
           <div className="card row" key={String(row.id)}>
             <div>
               <strong>{String(row.name)}{row.status === "inactive" ? " · deactivated" : ""}</strong>
@@ -296,8 +324,26 @@ function Services() {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
+  const [editing, setEditing] = useState<{ id: string; name: string; slug: string; status: string; displayOrder: string } | null>(null);
   const load = useCallback(() => { api.pools().then(setRows).catch(() => undefined); }, []);
   useEffect(() => { load(); }, [load]);
+
+  function saveEditing(event: FormEvent) {
+    event.preventDefault();
+    if (!editing?.name.trim()) return;
+    setError("");
+    api.savePool({
+      id: editing.id,
+      name: editing.name.trim(),
+      slug: editing.slug,
+      status: editing.status,
+      sort_order: Math.max(0, Number(editing.displayOrder || 1) - 1),
+    }).then(() => {
+      setEditing(null);
+      load();
+    }).catch((err) => setError(err instanceof Error ? err.message : "Could not save"));
+  }
+
   return (
     <div>
       <h1>Services</h1>
@@ -306,7 +352,7 @@ function Services() {
         event.preventDefault();
         setError("");
         if (!name.trim()) return;
-        api.savePool({ name: name.trim(), sort_order: rows.length + 1 })
+        api.savePool({ name: name.trim(), sort_order: rows.length, status: "active" })
           .then(() => { setName(""); load(); })
           .catch((err) => setError(err instanceof Error ? err.message : "Could not add"));
       }}>
@@ -315,17 +361,38 @@ function Services() {
       </form>
       {error ? <p className="error">{error}</p> : null}
       <div className="list" style={{ marginTop: 16 }}>
-        {rows.map((row) => (
-          <div className="card row" key={String(row.id)}>
-            <div>
-              <strong>{String(row.name)}</strong>
-              <div className="muted">Shown to customers as option {Number(row.sort_order) || "—"}</div>
+        {rows.map((row) => {
+          const isEditing = editing?.id === String(row.id);
+          return (
+            <div className="card" key={String(row.id)}>
+              {isEditing && editing ? (
+                <form className="row wrap" onSubmit={saveEditing}>
+                  <label>Service name<input value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} /></label>
+                  <label>Menu position<input type="number" min="1" value={editing.displayOrder} onChange={(event) => setEditing({ ...editing, displayOrder: event.target.value })} /></label>
+                  <button className="primary">Save</button>
+                  <button type="button" onClick={() => setEditing(null)}>Cancel</button>
+                </form>
+              ) : (
+                <div className="row wrap">
+                  <div>
+                    <strong>{String(row.name)}</strong>
+                    <div className="muted">Customer option {Number(row.sort_order) + 1} · {row.status === "inactive" ? "hidden" : "active"}</div>
+                  </div>
+                  <button onClick={() => setEditing({
+                    id: String(row.id), name: String(row.name), slug: String(row.slug),
+                    status: String(row.status || "active"), displayOrder: String(Number(row.sort_order) + 1),
+                  })}>Edit</button>
+                  <button onClick={() => api.savePool({
+                    id: row.id, name: row.name, slug: row.slug, sort_order: row.sort_order,
+                    status: row.status === "inactive" ? "active" : "inactive",
+                  }).then(load)}>
+                    {row.status === "inactive" ? "Activate" : "Deactivate"}
+                  </button>
+                </div>
+              )}
             </div>
-            <button onClick={() => api.savePool({ id: row.id, name: row.name, slug: row.slug, sort_order: row.sort_order, status: "inactive" }).then(load)}>
-              Deactivate
-            </button>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -333,12 +400,32 @@ function Services() {
 
 function Requests() {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   useEffect(() => { api.requests().then(setRows).catch(() => undefined); }, []);
+  const statuses = useMemo(() => [...new Set(rows.map((row) => String(row.status)))].sort(), [rows]);
+  const filteredRows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return rows.filter((row) => {
+      const pool = row.pool as { name?: string } | undefined;
+      const provider = row.assigned_provider as { name?: string } | undefined;
+      const searchable = [row.public_code, row.customer_name, row.customer_phone, row.area, pool?.name, provider?.name].join(" ").toLowerCase();
+      return (!query || searchable.includes(query)) && (!statusFilter || row.status === statusFilter);
+    });
+  }, [rows, search, statusFilter]);
   return (
     <div>
       <h1>Jobs</h1>
+      <div className="filters" aria-label="Job filters">
+        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search job, customer, phone, area or handyman" />
+        <select aria-label="Filter by job status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+          <option value="">All job statuses</option>
+          {statuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}
+        </select>
+      </div>
       <div className="list">
-        {rows.map((row) => (
+        {filteredRows.length === 0 ? <div className="card muted">No jobs match these filters.</div> : null}
+        {filteredRows.map((row) => (
           <Link className="card row" key={String(row.public_code)} to={`/owner/jobs/${row.id}`}>
             <div>
               <strong>{String(row.public_code)} · {(row.pool as { name?: string } | undefined)?.name || "Service"}</strong>
@@ -737,6 +824,34 @@ function SimpleList({ title, loader, line }: { title: string; loader: () => Prom
   );
 }
 
+function AuditLog() {
+  const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
+  useEffect(() => { api.audit().then(setRows).catch(() => undefined); }, []);
+  return (
+    <div>
+      <h1>Audit log</h1>
+      <p>Important business and system activity, newest first.</p>
+      <div className="list">
+        {rows.map((row, index) => {
+          const actorID = String(row.actor_user_id || "");
+          const actor = row.actor_email ? String(row.actor_email) : actorID ? `Team member · ${actorID.slice(0, 8)}` : "System";
+          const target = statusLabel(row.target_type || "record");
+          const created = row.created_at ? new Date(String(row.created_at)).toLocaleString() : "Time unavailable";
+          return (
+            <div className="card row wrap" key={String(row.id || index)}>
+              <div>
+                <strong>{statusLabel(row.action)}</strong>
+                <div className="muted">{target} · {actor}</div>
+              </div>
+              <time className="muted" dateTime={String(row.created_at || "")}>{created}</time>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const { user, ready, setUser } = useSession();
   const ownerLinks = useMemo(() => [
@@ -757,24 +872,31 @@ export default function App() {
     { to: "/provider/jobs", label: "Jobs" },
   ], []);
   if (!ready) return null;
+  const providerUser = user?.role === "service_provider";
+  const ownerPage = (content: ReactNode) => user && !providerUser
+    ? <Shell user={user} links={ownerLinks}>{content}</Shell>
+    : <Navigate to={user ? "/provider" : "/login"} />;
+  const providerPage = (content: ReactNode) => user && providerUser
+    ? <Shell user={user} links={providerLinks}>{content}</Shell>
+    : <Navigate to={user ? "/owner" : "/login"} />;
   return (
     <Routes>
       <Route path="/login" element={<Login onAuthenticated={setUser} />} />
-      <Route path="/owner" element={user ? <Shell user={user} links={ownerLinks}><Overview /></Shell> : <Navigate to="/login" />} />
-      <Route path="/owner/handymen" element={user ? <Shell user={user} links={ownerLinks}><Providers /></Shell> : <Navigate to="/login" />} />
-      <Route path="/owner/services" element={user ? <Shell user={user} links={ownerLinks}><Services /></Shell> : <Navigate to="/login" />} />
-      <Route path="/owner/jobs" element={user ? <Shell user={user} links={ownerLinks}><Requests /></Shell> : <Navigate to="/login" />} />
-      <Route path="/owner/jobs/:id" element={user ? <Shell user={user} links={ownerLinks}><JobDetail /></Shell> : <Navigate to="/login" />} />
-      <Route path="/owner/conversations" element={user ? <Shell user={user} links={ownerLinks}><Conversations /></Shell> : <Navigate to="/login" />} />
-      <Route path="/owner/quotes" element={user ? <Shell user={user} links={ownerLinks}><Quotes /></Shell> : <Navigate to="/login" />} />
-      <Route path="/owner/payments" element={user ? <Shell user={user} links={ownerLinks}><Payments /></Shell> : <Navigate to="/login" />} />
-      <Route path="/owner/customers" element={user ? <Shell user={user} links={ownerLinks}><SimpleList title="Customers" loader={api.customers} line={(row) => `${row.name || "Customer"} · ${row.phone || ""}`} /></Shell> : <Navigate to="/login" />} />
-      <Route path="/owner/audit" element={user ? <Shell user={user} links={ownerLinks}><SimpleList title="Audit log" loader={api.audit} line={(row) => `${String(row.action || "").replaceAll("_", " ")}`} /></Shell> : <Navigate to="/login" />} />
-      <Route path="/owner/settings" element={user ? <Shell user={user} links={ownerLinks}><SettingsPage /></Shell> : <Navigate to="/login" />} />
-      <Route path="/provider" element={user ? <Shell user={user} links={providerLinks}><ProviderHome /></Shell> : <Navigate to="/login" />} />
-      <Route path="/provider/inbox" element={user ? <Shell user={user} links={providerLinks}><ProviderInbox /></Shell> : <Navigate to="/login" />} />
-      <Route path="/provider/jobs" element={user ? <Shell user={user} links={providerLinks}><ProviderJobs /></Shell> : <Navigate to="/login" />} />
-      <Route path="/provider/jobs/:id" element={user ? <Shell user={user} links={providerLinks}><ProviderJob /></Shell> : <Navigate to="/login" />} />
+      <Route path="/owner" element={ownerPage(<Overview />)} />
+      <Route path="/owner/handymen" element={ownerPage(<Providers />)} />
+      <Route path="/owner/services" element={ownerPage(<Services />)} />
+      <Route path="/owner/jobs" element={ownerPage(<Requests />)} />
+      <Route path="/owner/jobs/:id" element={ownerPage(<JobDetail />)} />
+      <Route path="/owner/conversations" element={ownerPage(<Conversations />)} />
+      <Route path="/owner/quotes" element={ownerPage(<Quotes />)} />
+      <Route path="/owner/payments" element={ownerPage(<Payments />)} />
+      <Route path="/owner/customers" element={ownerPage(<SimpleList title="Customers" loader={api.customers} line={(row) => `${row.name || "Customer"} · ${row.phone || ""}`} />)} />
+      <Route path="/owner/audit" element={ownerPage(<AuditLog />)} />
+      <Route path="/owner/settings" element={ownerPage(<SettingsPage />)} />
+      <Route path="/provider" element={providerPage(<ProviderHome />)} />
+      <Route path="/provider/inbox" element={providerPage(<ProviderInbox />)} />
+      <Route path="/provider/jobs" element={providerPage(<ProviderJobs />)} />
+      <Route path="/provider/jobs/:id" element={providerPage(<ProviderJob />)} />
       <Route path="*" element={<Navigate to={getToken() ? (user?.role === "service_provider" ? "/provider" : "/owner") : "/login"} />} />
     </Routes>
   );
