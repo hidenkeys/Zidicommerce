@@ -13,10 +13,10 @@ function statusLabel(value?: unknown) {
   return String(value ?? "").replaceAll("_", " ");
 }
 
-function Login() {
+function Login({ onAuthenticated }: { onAuthenticated: (user: User) => void }) {
   const navigate = useNavigate();
   const [email, setEmail] = useState("owner@lagoshome.demo");
-  const [password, setPassword] = useState("HomeServices1!");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -27,6 +27,7 @@ function Login() {
       if (!token) throw new Error("No session token returned");
       setToken(token);
       const me = await api.me();
+      onAuthenticated(me);
       navigate(me.role === "service_provider" ? "/provider" : "/owner");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not sign in");
@@ -57,7 +58,7 @@ function useSession() {
     }
     api.me().then(setUser).catch(() => clearToken()).finally(() => setReady(true));
   }, []);
-  return { user, ready };
+  return { user, ready, setUser };
 }
 
 function Shell({ user, links, children }: { user: User; links: { to: string; label: string }[]; children: ReactNode }) {
@@ -736,7 +737,7 @@ function SimpleList({ title, loader, line }: { title: string; loader: () => Prom
 }
 
 export default function App() {
-  const { user, ready } = useSession();
+  const { user, ready, setUser } = useSession();
   const ownerLinks = useMemo(() => [
     { to: "/owner", label: "Overview" },
     { to: "/owner/handymen", label: "Handymen" },
@@ -757,7 +758,7 @@ export default function App() {
   if (!ready) return null;
   return (
     <Routes>
-      <Route path="/login" element={<Login />} />
+      <Route path="/login" element={<Login onAuthenticated={setUser} />} />
       <Route path="/owner" element={user ? <Shell user={user} links={ownerLinks}><Overview /></Shell> : <Navigate to="/login" />} />
       <Route path="/owner/handymen" element={user ? <Shell user={user} links={ownerLinks}><Providers /></Shell> : <Navigate to="/login" />} />
       <Route path="/owner/services" element={user ? <Shell user={user} links={ownerLinks}><Services /></Shell> : <Navigate to="/login" />} />
