@@ -733,7 +733,7 @@ const NEXT_STATUSES: Record<string, string[]> = {
   in_progress: ["completed"],
   quote_sent: ["in_progress"],
   quote_approved: ["in_progress"],
-  payment_confirmed: ["in_progress", "completed"],
+  payment_confirmed: ["in_progress"],
   completed: [],
   cancelled: [],
 };

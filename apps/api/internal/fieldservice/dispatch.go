@@ -371,7 +371,7 @@ var jobTransitions = map[string][]string{
 	RequestInProgress:       {RequestCompleted, RequestCancelled},
 	RequestQuoteSent:        {RequestInProgress, RequestCancelled},
 	RequestQuoteApproved:    {RequestInProgress, RequestCancelled},
-	RequestPaymentConfirmed: {RequestInProgress, RequestCompleted, RequestCancelled},
+	RequestPaymentConfirmed: {RequestInProgress, RequestCancelled},
 	RequestCompleted:        {},
 	RequestCancelled:        {},
 }

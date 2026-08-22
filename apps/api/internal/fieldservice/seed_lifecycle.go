@@ -279,6 +279,9 @@ func advanceSeedJobFromDispatch(ctx context.Context, db *gorm.DB, commerce *core
 	if _, err := commerce.VerifyPayment(ctx, actor, core.PaymentVerifyInput{Reference: quotePayment.Reference}); err != nil {
 		return err
 	}
+	if _, err := field.TransitionJob(ctx, providerActor, request.ID, RequestInProgress, "Payment confirmed; work resumed."); err != nil {
+		return err
+	}
 	if _, err := field.TransitionJob(ctx, providerActor, request.ID, RequestCompleted, "Work completed and tested with the customer."); err != nil {
 		return err
 	}

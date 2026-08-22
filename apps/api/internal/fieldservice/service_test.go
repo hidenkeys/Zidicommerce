@@ -153,6 +153,12 @@ func TestEndToEndServiceBooking(t *testing.T) {
 	if _, err := fx.commerce.VerifyPayment(ctx, fx.actor, core.PaymentVerifyInput{Reference: pay.Reference}); err != nil {
 		t.Fatal(err)
 	}
+	if code := statusCode(t, transitionErr(fx.field.TransitionJob(ctx, johnActor, request.ID, RequestCompleted, ""))); code != 400 {
+		t.Fatalf("expected 400 skipping in progress after payment, got %d", code)
+	}
+	if _, err := fx.field.TransitionJob(ctx, johnActor, request.ID, RequestInProgress, ""); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := fx.field.TransitionJob(ctx, johnActor, request.ID, RequestCompleted, ""); err != nil {
 		t.Fatal(err)
 	}
