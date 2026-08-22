@@ -163,9 +163,13 @@ API service:
 | `FIELD_SERVICE_DEMO_SEED` | `true` runs the seed once at startup |
 | `FIELD_SERVICE_DEMO_PASSWORD` | Password for the seeded owner and provider logins. **Always set this outside local development** — otherwise the built-in development default is used |
 | `FIELD_SERVICE_PORTAL_URL` | Provider portal link included in dispatch notifications |
+| `FIELD_SERVICE_CUSTOMER_EMAIL_DOMAIN` | Domain for the placeholder address built from a WhatsApp customer's phone number. Defaults to `customers.zidihq.com`. It must be a real domain — payment providers validate the address and reject reserved TLDs such as `.local` |
 
 The seed runs after migrations, is idempotent across redeploys, is scoped to its
-own organization, and never fails API startup. The password is never written to
+own organization, and never fails API startup. Its sample payment history is
+produced against the safe test provider so seeding never moves real money, even
+when the deployment is configured with a live payment provider; real customer
+traffic still uses whatever `PAYMENT_PROVIDER` specifies. The password is never written to
 the logs — only its source. Once the tenant exists you can set
 `FIELD_SERVICE_DEMO_SEED=false`; leaving it on is harmless but does work on
 every boot.

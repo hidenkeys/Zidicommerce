@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -46,13 +47,9 @@ func (s *Service) createPaymentOrder(ctx context.Context, actor auth.CurrentUser
 	if err != nil {
 		return core.Order{}, core.Payment{}, err
 	}
-	email := request.CustomerPhone + "@customers.zidicommerce.local"
-	if strings.Contains(request.CustomerPhone, "@") {
-		email = request.CustomerPhone
-	}
 	payment, err := s.commerce.InitializePayment(ctx, actor, core.PaymentInput{
 		OrderID:        order.ID,
-		Email:          email,
+		Email:          paymentEmail(request),
 		IdempotencyKey: "pay:" + order.ID.String(),
 	})
 	return order, payment, err
@@ -391,4 +388,37 @@ func (s *Service) ProviderEarnings(ctx context.Context, actor auth.CurrentUser) 
 		out[row.ProviderID.String()] = row.Total
 	}
 	return out, nil
+}
+
+// customerEmailDomain is the domain used to build a placeholder address for a
+// customer who reached us over WhatsApp and has no email of their own. It must
+// be a real, syntactically valid domain: payment providers validate the address
+// and reject reserved TLDs such as .local.
+func customerEmailDomain() string {
+	if value := strings.TrimSpace(os.Getenv("FIELD_SERVICE_CUSTOMER_EMAIL_DOMAIN")); value != "" {
+		return strings.ToLower(strings.TrimPrefix(value, "@"))
+	}
+	return "customers.zidihq.com"
+}
+
+// paymentEmail returns an address the payment provider will accept. A WhatsApp
+// sender id looks like "+2348031234567", and neither the leading "+" nor a
+// .local TLD survives provider-side email validation, so the number is reduced
+// to its alphanumerics and paired with a real domain.
+func paymentEmail(request Request) string {
+	raw := strings.TrimSpace(request.CustomerPhone)
+	if strings.Contains(raw, "@") {
+		return strings.ToLower(raw)
+	}
+	var local strings.Builder
+	for _, r := range strings.ToLower(raw) {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') {
+			local.WriteRune(r)
+		}
+	}
+	value := local.String()
+	if value == "" {
+		value = "customer-" + strings.ReplaceAll(request.ID.String(), "-", "")[:12]
+	}
+	return value + "@" + customerEmailDomain()
 }

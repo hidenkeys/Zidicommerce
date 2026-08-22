@@ -96,7 +96,14 @@ func main() {
 	// seed is idempotent, is scoped to its own organization, and never touches
 	// another tenant's data. A failure here must not stop the API from serving.
 	if cfg.FieldService.SeedDemo {
-		result, err := fieldservice.SeedDemo(ctx, db, commerceService, botService, fieldService, fieldservice.SeedOptions{
+		// The sample history the demo tenant ships with (paid booking fees,
+		// settled quotes) has to be produced without moving real money, so the
+		// seeder runs against its own commerce service backed by the safe test
+		// provider. Live traffic keeps using the configured provider.
+		seedCommerce := core.NewService(db, core.SafeTestProvider{})
+		seedField := fieldservice.NewService(db, seedCommerce, log)
+		seedCommerce.ConfigureAfterPaymentPaid(seedField.OnPaymentPaid)
+		result, err := fieldservice.SeedDemo(ctx, db, seedCommerce, botService, seedField, fieldservice.SeedOptions{
 			Password:          cfg.FieldService.DemoPassword,
 			ProviderPortalURL: cfg.FieldService.ProviderPortalURL,
 		})

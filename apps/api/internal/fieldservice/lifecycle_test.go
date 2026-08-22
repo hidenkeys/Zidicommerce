@@ -2,6 +2,7 @@ package fieldservice
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -539,5 +540,32 @@ func TestSeededCompletedJobsFeedTheOverview(t *testing.T) {
 	}
 	if len(earnings) == 0 {
 		t.Fatal("expected at least one provider to have earnings")
+	}
+}
+
+func TestPaymentEmailIsAcceptableToProviders(t *testing.T) {
+	cases := []struct {
+		phone string
+		want  string
+	}{
+		{"+2348031234567", "2348031234567@customers.zidihq.com"},
+		{"+234 803 123 4567", "2348031234567@customers.zidihq.com"},
+		{"0803-123-4567", "08031234567@customers.zidihq.com"},
+		{"amaka@example.com", "amaka@example.com"},
+		{"AMAKA@Example.COM", "amaka@example.com"},
+	}
+	for _, testCase := range cases {
+		got := paymentEmail(Request{CustomerPhone: testCase.phone})
+		if got != testCase.want {
+			t.Errorf("paymentEmail(%q) = %q, want %q", testCase.phone, got, testCase.want)
+		}
+		if strings.ContainsAny(got, "+ ") {
+			t.Errorf("paymentEmail(%q) = %q still contains a character providers reject", testCase.phone, got)
+		}
+	}
+	// A request with no contact detail at all still yields a valid address.
+	fallback := paymentEmail(Request{ID: uuid.New()})
+	if !strings.HasSuffix(fallback, "@customers.zidihq.com") || strings.HasPrefix(fallback, "@") {
+		t.Fatalf("fallback address is not usable: %q", fallback)
 	}
 }
