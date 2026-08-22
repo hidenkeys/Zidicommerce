@@ -611,7 +611,7 @@ function Conversations() {
   return (
     <div>
       <h1>Conversations</h1>
-      <p>Active customer ↔ handyman threads.</p>
+      <p>Customer and handyman conversation history.</p>
       <div className="list">
         {rows.map((row) => (
           <Link className="card row" key={String(row.id)} to={`/owner/jobs/${row.id}`}>

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiGet, apiPatch, apiPost } from "../api/client";
 import { Card, EmptyState, Flash, Page, StatusDot } from "../components/ui";
@@ -10,6 +10,7 @@ type BotModule = Row & { id: string; module_key: string; name: string; parameter
 type BotConfig = { version: BotVersion; modules: BotModule[] };
 type Channel = Row & { provider: string; display_name: string; display_number?: string; status: string };
 type RuntimeMessage = { from: "customer" | "bot" | "debug"; text: string };
+type FieldMessage = Row & { id: string; author_type: string; body: string };
 
 function enabled(module: BotModule) {
   return parseJSON<Record<string, unknown>>(module.metadata, {}).enabled !== false;
@@ -26,6 +27,7 @@ export function AssistantPage() {
   const [testSessionID, setTestSessionID] = useState("");
   const [testInput, setTestInput] = useState("");
   const [testMessages, setTestMessages] = useState<RuntimeMessage[]>([]);
+  const seenFieldMessages = useRef(new Set<string>());
   const [message, setMessage] = useState("");
   const [flash, setFlash] = useState("");
 
@@ -62,6 +64,34 @@ export function AssistantPage() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (!testSessionID) return;
+    let cancelled = false;
+    async function syncFieldMessages() {
+      try {
+        const response = await apiGet<FieldMessage[]>(`/field/test-sessions/${testSessionID}/messages`);
+        const fresh = response.data.filter((item) => item.author_type !== "customer" && !seenFieldMessages.current.has(item.id));
+        fresh.forEach((item) => seenFieldMessages.current.add(item.id));
+        if (!cancelled && fresh.length > 0) {
+          setTestMessages((items) => [
+            ...items,
+            ...fresh
+              .filter((item) => !items.some((existing) => existing.from === "bot" && existing.text === item.body))
+              .map((item) => ({ from: "bot" as const, text: item.author_type === "provider" ? `Handyman: ${item.body}` : item.body })),
+          ]);
+        }
+      } catch {
+        // The request is created part-way through the simulator flow.
+      }
+    }
+    void syncFieldMessages();
+    const timer = window.setInterval(() => void syncFieldMessages(), 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [testSessionID]);
 
   async function createAssistant(event: FormEvent) {
     event.preventDefault();
@@ -146,6 +176,7 @@ export function AssistantPage() {
       external_conversation_id: `admin-test-${Date.now()}`,
       sender: "2348000000000",
     });
+    seenFieldMessages.current.clear();
     setTestSessionID(String(response.data.id));
     setTestMessages([{ from: "debug", text: "Test started. This does not message real customers." }]);
   }

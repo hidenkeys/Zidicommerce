@@ -501,6 +501,43 @@ func TestHandoffPassesOrdinaryMessagesThroughToTheProvider(t *testing.T) {
 	}
 }
 
+func TestHandoffVerifiesApprovedQuotePaymentAndReplies(t *testing.T) {
+	fx := newFieldFixture(t)
+	ctx := context.Background()
+	request, providerActor, _ := bookedJob(t, fx)
+	quote, err := fx.field.CreateQuote(ctx, providerActor, request.ID, QuoteInput{LabourMinor: 2000000, MaterialsMinor: 1250000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := uuid.New()
+	if err := fx.db.Model(&Request{}).Where("id = ?", request.ID).Update("conversation_session_id", sessionID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.field.ApproveQuote(ctx, fx.actor, quote.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	handled, reply, err := fx.field.HandleHandoffInbound(ctx, fx.actor.OrganizationID, sessionID, "I have paid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled {
+		t.Fatalf("unexpected payment confirmation response: handled=%v reply=%q", handled, reply)
+	}
+	for _, expected := range []string{"Lagos Home Services", "Plumber", "John Adeyemi", quote.PublicCode, "Leaking kitchen pipe", "₦32,500", "Payment: Confirmed", "Job status: payment confirmed"} {
+		if !strings.Contains(reply, expected) {
+			t.Fatalf("payment confirmation %q does not contain %q", reply, expected)
+		}
+	}
+	current, err := fx.field.getQuote(ctx, fx.actor.OrganizationID, quote.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != QuotePaid {
+		t.Fatalf("quote status = %s, want %s", current.Status, QuotePaid)
+	}
+}
+
 func TestPublicCodesDoNotCollideWithExistingOnes(t *testing.T) {
 	fx := newFieldFixture(t)
 	ctx := context.Background()

@@ -29,6 +29,7 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Get("/field/requests/:id", h.getRequest)
 	router.Get("/field/requests/:id/matches", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.listMatches)
 	router.Get("/field/requests/:id/messages", h.listMessages)
+	router.Get("/field/test-sessions/:id/messages", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.listTestSessionMessages)
 	router.Post("/field/requests/:id/messages", h.postMessage)
 	router.Post("/field/requests/:id/status", h.transition)
 	router.Post("/field/requests/:id/quotes", h.createQuote)
@@ -146,6 +147,15 @@ func (h *Handler) listMessages(c *fiber.Ctx) error {
 		return err
 	}
 	data, err := h.service.ListMessages(c.UserContext(), mustUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) listTestSessionMessages(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.ListMessagesForSession(c.UserContext(), mustUser(c), id)
 	return respond(c, data, err)
 }
 
@@ -267,7 +277,7 @@ func (h *Handler) declineQuote(c *fiber.Ctx) error {
 }
 
 func (h *Handler) conversations(c *fiber.Ctx) error {
-	data, err := h.service.ListActiveConversations(c.UserContext(), mustUser(c))
+	data, err := h.service.ListConversations(c.UserContext(), mustUser(c))
 	return respond(c, data, err)
 }
 

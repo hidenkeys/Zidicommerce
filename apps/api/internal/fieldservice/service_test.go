@@ -424,6 +424,70 @@ func TestDispatchTimeoutAdvances(t *testing.T) {
 	}
 }
 
+func TestCreateRequestSynchronizesCustomerIdentity(t *testing.T) {
+	fx := newFieldFixture(t)
+	request, err := fx.field.CreateRequest(context.Background(), fx.actor, CreateRequestInput{
+		CustomerID: fx.customer.ID, PoolID: fx.plumber.ID, CustomerName: "Acceptance Customer", CustomerPhone: "+2347000000099",
+		Area: "Ikeja", Address: "10 Acceptance Close", Description: "Leaking sink",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.CustomerName != "Acceptance Customer" || request.CustomerPhone != "+2347000000099" {
+		t.Fatalf("request identity was not saved: %+v", request)
+	}
+	var customer core.Customer
+	if err := fx.db.Where("organization_id = ? AND id = ?", fx.actor.OrganizationID, fx.customer.ID).First(&customer).Error; err != nil {
+		t.Fatal(err)
+	}
+	if customer.Name != "Acceptance Customer" || customer.Phone != "+2347000000099" {
+		t.Fatalf("customer identity was not synchronized: %+v", customer)
+	}
+}
+
+func TestConversationHistoryIncludesCompletedRequestsAndIsTenantScoped(t *testing.T) {
+	fx := newFieldFixture(t)
+	ctx := context.Background()
+	sessionID := uuid.New()
+	request, err := fx.field.CreateRequest(ctx, fx.actor, CreateRequestInput{
+		CustomerID: fx.customer.ID, PoolID: fx.plumber.ID, CustomerName: "History Customer", CustomerPhone: "+2347000000088",
+		Area: "Ikeja", Description: "Completed repair", SessionID: &sessionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Model(&Request{}).Where("id = ?", request.ID).Update("status", RequestCompleted).Error; err != nil {
+		t.Fatal(err)
+	}
+	fx.field.saveMessage(ctx, fx.actor.OrganizationID, request.ID, "customer", nil, "Thank you")
+
+	otherOrg := uuid.New()
+	otherRequestID := uuid.New()
+	otherSessionID := uuid.New()
+	if err := fx.db.Create(&Request{ID: otherRequestID, OrganizationID: otherOrg, PublicCode: "REQ-OTHER", CustomerID: uuid.New(), PoolID: uuid.New(), Status: RequestCompleted, ConversationSessionID: &otherSessionID, Metadata: "{}"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Create(&Message{ID: uuid.New(), OrganizationID: otherOrg, RequestID: otherRequestID, AuthorType: "customer", Body: "private", Metadata: "{}"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	conversations, err := fx.field.ListConversations(ctx, fx.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conversations) != 1 || conversations[0].ID != request.ID || conversations[0].Status != RequestCompleted {
+		t.Fatalf("unexpected conversation history: %+v", conversations)
+	}
+	messages, err := fx.field.ListMessagesForSession(ctx, fx.actor, sessionID)
+	if err != nil || len(messages) != 1 || messages[0].Body != "Thank you" {
+		t.Fatalf("unexpected session messages: %+v, err=%v", messages, err)
+	}
+	otherMessages, err := fx.field.ListMessagesForSession(ctx, fx.actor, otherSessionID)
+	if err != nil || len(otherMessages) != 0 {
+		t.Fatalf("cross-tenant session messages leaked: %+v, err=%v", otherMessages, err)
+	}
+}
+
 func TestTenantIsolation(t *testing.T) {
 	fx := newFieldFixture(t)
 	otherOrg := uuid.New()

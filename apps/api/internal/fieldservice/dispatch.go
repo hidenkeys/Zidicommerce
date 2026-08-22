@@ -319,7 +319,9 @@ func (s *Service) TransitionJob(ctx context.Context, actor auth.CurrentUser, req
 	}
 	s.audit(ctx, actor, "service_request", requestID, "job_status_changed", fmt.Sprintf(`{"from":%q,"to":%q}`, request.Status, status))
 	if status == RequestCompleted {
-		_ = s.notify(ctx, actor.OrganizationID, request.CustomerPhone, fmt.Sprintf("Your service has been marked as completed.\n\nThank you for using %s.\n\nHow would you rate your experience? Reply with 1 to 5 stars.", s.companyName(ctx, actor.OrganizationID)))
+		completionMessage := fmt.Sprintf("Your service has been marked as completed.\n\nThank you for using %s.\n\nHow would you rate your experience? Reply with 1 to 5 stars.", s.companyName(ctx, actor.OrganizationID))
+		s.saveMessage(ctx, actor.OrganizationID, request.ID, "system", nil, completionMessage)
+		_ = s.notify(ctx, actor.OrganizationID, request.CustomerPhone, completionMessage)
 		_ = s.db.WithContext(ctx).Model(&Provider{}).Where("id = ?", provider.ID).Updates(map[string]any{"availability": AvailabilityAvailable, "current_job_status": "idle", "jobs_completed": gorm.Expr("jobs_completed + 1"), "updated_at": now}).Error
 		s.audit(ctx, actor, "service_request", requestID, "job_completed", "{}")
 	}

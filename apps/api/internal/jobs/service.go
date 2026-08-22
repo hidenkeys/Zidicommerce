@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type Handler func(context.Context, Job) error
@@ -194,18 +193,48 @@ func (s *Service) claimOne(ctx context.Context) (Job, bool, error) {
 		}
 		return job, true, nil
 	}
-	var job Job
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("status IN ? AND available_at <= ?", []string{StatusQueued, StatusRetryPending}, s.now()).Order("available_at ASC, created_at ASC").First(&job).Error; err != nil {
-			return err
+	for attempt := 0; attempt < 5; attempt++ {
+		var job Job
+		err := s.db.WithContext(ctx).
+			Where("status IN ? AND available_at <= ?", []string{StatusQueued, StatusRetryPending}, s.now()).
+			Order("available_at ASC, created_at ASC").First(&job).Error
+		if err == gorm.ErrRecordNotFound {
+			return Job{}, false, nil
+		}
+		if err != nil {
+			if isDatabaseContention(err) {
+				time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+				continue
+			}
+			return Job{}, false, err
 		}
 		now := s.now()
-		return tx.Model(&job).Updates(map[string]any{"status": StatusProcessing, "locked_at": &now, "locked_by": s.workerID, "started_at": &now, "updated_at": now}).Error
-	})
-	if err == gorm.ErrRecordNotFound {
-		return Job{}, false, nil
+		result := s.db.WithContext(ctx).Model(&Job{}).
+			Where("id = ? AND status IN ?", job.ID, []string{StatusQueued, StatusRetryPending}).
+			Updates(map[string]any{"status": StatusProcessing, "locked_at": &now, "locked_by": s.workerID, "started_at": &now, "updated_at": now})
+		if result.Error != nil {
+			if isDatabaseContention(result.Error) {
+				time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+				continue
+			}
+			return Job{}, false, result.Error
+		}
+		if result.RowsAffected == 0 {
+			continue
+		}
+		job.Status = StatusProcessing
+		job.LockedAt = &now
+		job.LockedBy = s.workerID
+		job.StartedAt = &now
+		job.UpdatedAt = now
+		return job, true, nil
 	}
-	return job, err == nil, err
+	return Job{}, false, nil
+}
+
+func isDatabaseContention(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") || strings.Contains(message, "database table is locked")
 }
 
 func (s *Service) process(ctx context.Context, job Job) error {

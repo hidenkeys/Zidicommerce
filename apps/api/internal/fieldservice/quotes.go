@@ -90,7 +90,10 @@ func (s *Service) CreateQuote(ctx context.Context, actor auth.CurrentUser, reque
 	}
 	_ = s.db.WithContext(ctx).Model(&Request{}).Where("id = ?", requestID).Updates(map[string]any{"status": RequestQuoteSent, "updated_at": s.now()}).Error
 	s.audit(ctx, actor, "service_request", requestID, "quote_created", fmt.Sprintf(`{"total_minor":%d}`, total))
-	_ = s.notify(ctx, actor.OrganizationID, request.CustomerPhone, fmt.Sprintf("%s has submitted a quote for your %s job.\n\nTotal: %s\n\nReply APPROVE & PAY, DECLINE, or ASK A QUESTION.", provider.Name, request.Pool.Name, formatMoney(total, quote.Currency)))
+	quoteMessage := fmt.Sprintf("%s submitted quote %s for your %s job.\nLabour: %s\nMaterials: %s\nTotal: %s\nReply APPROVE & PAY, DECLINE, or ASK A QUESTION.",
+		provider.Name, quote.PublicCode, request.Pool.Name, formatMoney(input.LabourMinor, quote.Currency), formatMoney(input.MaterialsMinor, quote.Currency), formatMoney(total, quote.Currency))
+	s.saveMessage(ctx, actor.OrganizationID, request.ID, "provider", &actor.ID, quoteMessage)
+	_ = s.notify(ctx, actor.OrganizationID, request.CustomerPhone, quoteMessage)
 	return s.getQuote(ctx, actor.OrganizationID, quote.ID)
 }
 
@@ -201,7 +204,9 @@ func (s *Service) confirmQuotePayment(ctx context.Context, actor auth.CurrentUse
 	_ = s.db.WithContext(ctx).Model(&Request{}).Where("id = ?", quote.RequestID).Updates(map[string]any{"status": RequestPaymentConfirmed, "updated_at": s.now()}).Error
 	s.audit(ctx, actor, "service_request", quote.RequestID, "payment_completed", "{}")
 	request, _ := s.getRequest(ctx, actor.OrganizationID, quote.RequestID)
-	_ = s.notify(ctx, actor.OrganizationID, request.CustomerPhone, "Payment confirmed. Your professional can now continue the job.")
+	confirmation := s.paymentConfirmationMessage(ctx, actor, request, quote)
+	s.saveMessage(ctx, actor.OrganizationID, request.ID, "system", nil, confirmation)
+	_ = s.notify(ctx, actor.OrganizationID, request.CustomerPhone, confirmation)
 	if request.AssignedProviderID != nil {
 		var provider Provider
 		if s.db.WithContext(ctx).Where("id = ?", *request.AssignedProviderID).First(&provider).Error == nil {

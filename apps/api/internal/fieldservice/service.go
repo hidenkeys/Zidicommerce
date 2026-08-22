@@ -383,6 +383,18 @@ func (s *Service) CreateRequest(ctx context.Context, actor auth.CurrentUser, inp
 			request.Longitude = &lng
 		}
 	}
+	customerUpdates := map[string]any{"updated_at": s.now()}
+	if request.CustomerName != "" {
+		customerUpdates["name"] = request.CustomerName
+	}
+	if request.CustomerPhone != "" {
+		customerUpdates["phone"] = request.CustomerPhone
+	}
+	if err := s.db.WithContext(ctx).Model(&core.Customer{}).
+		Where("organization_id = ? AND id = ?", actor.OrganizationID, input.CustomerID).
+		Updates(customerUpdates).Error; err != nil {
+		return Request{}, err
+	}
 	if err := s.db.WithContext(ctx).Create(&request).Error; err != nil {
 		return Request{}, err
 	}
@@ -566,7 +578,34 @@ func (s *Service) HandleHandoffInbound(ctx context.Context, organizationID, sess
 	s.saveMessage(ctx, organizationID, request.ID, "customer", nil, text)
 	intent := parseCustomerIntent(text)
 
-	if quote, quoteErr := s.latestQuote(ctx, request.ID); quoteErr == nil && quote.Status == QuoteSent {
+	if quote, quoteErr := s.latestQuote(ctx, request.ID); quoteErr == nil {
+		if isPaymentConfirmation(text) {
+			switch quote.Status {
+			case QuotePaid:
+				return true, s.paymentConfirmationMessage(ctx, actor, request, quote), nil
+			case QuoteApproved:
+				if quote.PaymentOrderID == nil {
+					return true, "I haven't confirmed that payment yet. Open the link, then reply I HAVE PAID.", nil
+				}
+				payments, err := s.commerce.ListPayments(ctx, actor)
+				if err != nil {
+					return true, friendlyError(err), nil
+				}
+				for _, payment := range payments {
+					if payment.OrderID != *quote.PaymentOrderID {
+						continue
+					}
+					if _, err := s.commerce.VerifyPayment(ctx, actor, core.PaymentVerifyInput{Reference: payment.Reference}); err != nil {
+						return true, "I haven't confirmed that payment yet. Open the link, then reply I HAVE PAID.", nil
+					}
+					return true, s.paymentConfirmationMessage(ctx, actor, request, quote), nil
+				}
+				return true, "I haven't confirmed that payment yet. Open the link, then reply I HAVE PAID.", nil
+			}
+		}
+		if quote.Status != QuoteSent {
+			return true, "", nil
+		}
 		switch intent {
 		case intentApprove:
 			payment, err := s.ApproveQuote(ctx, actor, quote.ID)
@@ -620,6 +659,32 @@ func parseCustomerIntent(text string) customerIntent {
 		return intentQuestion
 	}
 	return intentNone
+}
+
+func isPaymentConfirmation(text string) bool {
+	switch normalizeReply(text) {
+	case "i have paid", "ive paid", "paid", "payment made", "done":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) paymentConfirmationMessage(ctx context.Context, actor auth.CurrentUser, request Request, quote Quote) string {
+	if current, err := s.getRequest(ctx, actor.OrganizationID, request.ID); err == nil {
+		request = current
+	}
+	providerName := "Assigned professional"
+	if request.AssignedProvider != nil && strings.TrimSpace(request.AssignedProvider.Name) != "" {
+		providerName = request.AssignedProvider.Name
+	}
+	serviceName := request.Pool.Name
+	if serviceName == "" {
+		serviceName = "Home service"
+	}
+	return fmt.Sprintf("%s payment confirmation\nService: %s\nHandyman: %s\nQuote: %s\nWork: %s\nAmount: %s\nPayment: Confirmed\nJob status: %s",
+		s.companyName(ctx, actor.OrganizationID), serviceName, providerName, quote.PublicCode, request.Description,
+		formatMoney(quote.TotalMinor, quote.Currency), strings.ReplaceAll(request.Status, "_", " "))
 }
 
 // normalizeReply lowercases, drops punctuation and collapses whitespace so

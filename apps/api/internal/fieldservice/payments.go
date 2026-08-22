@@ -14,6 +14,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
+	"gorm.io/gorm"
 )
 
 func (s *Service) createPaymentOrder(ctx context.Context, actor auth.CurrentUser, request Request, amountMinor int64, currency, purpose string, relatedID uuid.UUID) (core.Order, core.Payment, error) {
@@ -171,15 +172,14 @@ func (s *Service) ListTransactions(ctx context.Context, actor auth.CurrentUser) 
 	return out, nil
 }
 
-func (s *Service) ListActiveConversations(ctx context.Context, actor auth.CurrentUser) ([]Request, error) {
+func (s *Service) ListConversations(ctx context.Context, actor auth.CurrentUser) ([]Request, error) {
 	if err := s.requireOwner(actor); err != nil {
 		return nil, err
 	}
 	var requests []Request
 	err := s.db.WithContext(ctx).
-		Where("organization_id = ? AND status IN ?", actor.OrganizationID, []string{
-			RequestAssigned, RequestOnTheWay, RequestArrived, RequestInProgress, RequestQuoteSent, RequestQuoteApproved, RequestPaymentConfirmed,
-		}).
+		Where("organization_id = ? AND conversation_session_id IS NOT NULL", actor.OrganizationID).
+		Where("EXISTS (?)", s.db.Model(&Message{}).Select("1").Where("service_messages.request_id = service_requests.id")).
 		Preload("Pool").Preload("AssignedProvider").
 		Order("updated_at DESC").
 		Find(&requests).Error
@@ -215,6 +215,21 @@ func (s *Service) ListMessages(ctx context.Context, actor auth.CurrentUser, requ
 	var messages []Message
 	err := s.db.WithContext(ctx).Where("organization_id = ? AND request_id = ?", actor.OrganizationID, requestID).Order("created_at ASC").Find(&messages).Error
 	return messages, err
+}
+
+func (s *Service) ListMessagesForSession(ctx context.Context, actor auth.CurrentUser, sessionID uuid.UUID) ([]Message, error) {
+	if err := s.requireOwner(actor); err != nil {
+		return nil, err
+	}
+	var request Request
+	err := s.db.WithContext(ctx).Where("organization_id = ? AND conversation_session_id = ?", actor.OrganizationID, sessionID).Order("created_at DESC").First(&request).Error
+	if err == gorm.ErrRecordNotFound {
+		return []Message{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.ListMessages(ctx, actor, request.ID)
 }
 
 func (s *Service) PostMessage(ctx context.Context, actor auth.CurrentUser, requestID uuid.UUID, body string) (Message, error) {
