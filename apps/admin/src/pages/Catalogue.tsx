@@ -1,9 +1,13 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiGet, apiPatch, apiPost } from "../api/client";
-import { Card, Drawer, EmptyState, FilterBar, Flash, FormGrid, Page, SearchField } from "../components/ui";
+import { useAuth } from "../auth";
+import { Card, Drawer, EmptyState, FilterBar, Flash, FormGrid, LoadingState, Page, SearchField } from "../components/ui";
 import { humanStatus, money, nairaToMinor, slugify, type Row } from "../lib/format";
+import { hasPermission } from "../lib/permissions";
 
 export function CataloguePage() {
+  const { user } = useAuth();
+  const canManageCatalogue = hasPermission(user.role, "catalogue.manage");
   const [categories, setCategories] = useState<Row[]>([]);
   const [products, setProducts] = useState<Row[]>([]);
   const [query, setQuery] = useState("");
@@ -11,6 +15,7 @@ export function CataloguePage() {
   const [message, setMessage] = useState("");
   const [flash, setFlash] = useState("");
   const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Row | null>(null);
   const [categoryForm, setCategoryForm] = useState({ name: "" });
   const [form, setForm] = useState({ name: "", description: "", category_id: "", price: "", image_url: "", available: true, variant: "Regular" });
@@ -23,6 +28,8 @@ export function CataloguePage() {
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load catalogue");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -98,9 +105,9 @@ export function CataloguePage() {
   return (
     <Page
       title="Catalogue"
-      description="What customers can order on WhatsApp."
+      description="The products and variants customers can order through your business."
       help="A product is what customers see. If it has sizes or options, those are variants."
-      actions={<button type="button" className="primary" onClick={startCreate}>Add product</button>}
+      actions={canManageCatalogue ? <button type="button" className="primary" onClick={startCreate}>Add product</button> : undefined}
     >
       <Flash message={message} />
       <Flash message={flash} tone="success" />
@@ -114,10 +121,10 @@ export function CataloguePage() {
       <div className="split">
         <Card>
           <h3>Categories</h3>
-          <form className="filter-bar" onSubmit={createCategory}>
+          {canManageCatalogue ? <form className="filter-bar" onSubmit={createCategory}>
             <input placeholder="New category name" value={categoryForm.name} onChange={(event) => setCategoryForm({ name: event.target.value })} />
             <button type="submit">Add</button>
-          </form>
+          </form> : null}
           {categories.length === 0 ? <p className="muted">Add a category such as Drinks or Meals.</p> : (
             <ul className="attention-links">
               {categories.map((category) => <li key={String(category.id)}>{String(category.name)}</li>)}
@@ -126,11 +133,11 @@ export function CataloguePage() {
         </Card>
         <Card>
           <h3>{filtered.length} product{filtered.length === 1 ? "" : "s"}</h3>
-          <p className="muted">Tap a product to edit name, price, image, and availability.</p>
+          <p className="muted">{canManageCatalogue ? "Select a product to edit its details, price, image, and availability." : "Product details and current prices are read-only for your role."}</p>
         </Card>
       </div>
-      {filtered.length === 0 ? (
-        <EmptyState title="No products yet" body="Add your first product so customers can order." action={<button type="button" className="primary" onClick={startCreate}>Add product</button>} />
+      {loading ? <LoadingState label="Loading catalogue" /> : filtered.length === 0 ? (
+        <EmptyState title="No products yet" body="Products will appear here after an administrator or store manager adds them." action={canManageCatalogue ? <button type="button" className="primary" onClick={startCreate}>Add product</button> : undefined} />
       ) : (
         <div className="product-grid">
           {filtered.map((product) => {
@@ -139,8 +146,8 @@ export function CataloguePage() {
             const price = variants[0]?.price_minor;
             const categoryName = categories.find((entry) => entry.id === product.category_id)?.name;
             return (
-              <button className="product-card" type="button" key={String(product.id)} onClick={() => startEdit(product)}>
-                <div className="product-image">{images[0]?.url ? <img src={String(images[0].url)} alt="" /> : <span>No photo</span>}</div>
+              <button className="product-card" type="button" key={String(product.id)} disabled={!canManageCatalogue} onClick={() => canManageCatalogue && startEdit(product)}>
+                <div className="product-image">{images[0]?.url ? <img src={String(images[0].url)} alt={String(product.name)} /> : <span>No photo</span>}</div>
                 <h3>{String(product.name)}</h3>
                 <p>{String(categoryName || "Uncategorised")}</p>
                 <p className="price">{price ? money(price, String(variants[0]?.currency ?? "NGN")) : "No price"}</p>
@@ -171,7 +178,7 @@ export function CataloguePage() {
           {editing ? <p className="help-text full">Change prices in Options below. Customers see published catalogue immediately; the assistant uses these products when they order.</p> : null}
           <div className="full"><button type="submit">{editing ? "Save product" : "Create product"}</button></div>
         </FormGrid>
-        {editing ? (
+        {editing && canManageCatalogue ? (
           <VariantEditor product={editing} onSaved={async () => { setFlash("Option saved."); await load(); }} />
         ) : null}
       </Drawer>

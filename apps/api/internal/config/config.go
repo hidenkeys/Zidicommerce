@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -22,6 +23,8 @@ type Config struct {
 	Payment       PaymentConfig
 	Email         EmailConfig
 	FieldService  FieldServiceConfig
+	AI            AIConfig
+	Channels      ChannelConfig
 }
 
 // FieldServiceConfig controls the optional field-service pilot tenant. Seeding
@@ -61,6 +64,35 @@ type PaymentConfig struct {
 	Provider            string
 	PaystackSecret      string
 	SecretEncryptionKey string
+}
+
+type AIConfig struct {
+	Provider              string
+	Model                 string
+	OllamaBaseURL         string
+	OllamaChatModel       string
+	GroqAPIKey            string
+	GroqBaseURL           string
+	GroqModel             string
+	MaxToolCalls          int
+	EmbeddingsEnabled     bool
+	VectorSearchEnabled   bool
+	EmbeddingProvider     string
+	EmbeddingModel        string
+	EmbeddingDimensions   int
+	VectorSearchThreshold float64
+}
+
+type ChannelConfig struct {
+	SecretEncryptionKey          string
+	WhatsAppGraphBaseURL         string
+	WhatsAppWebhookPublicBaseURL string
+	WhatsAppSignatureBypass      bool
+	MetaAppID                    string
+	MetaAppSecret                string
+	MetaEmbeddedConfigurationID  string
+	MetaGraphAPIVersion          string
+	MetaWebhookVerifyToken       string
 }
 
 type EmailConfig struct {
@@ -113,6 +145,32 @@ func Load() (Config, error) {
 			AdoptVerifyToken:   strings.TrimSpace(os.Getenv("WHATSAPP_ADOPT_VERIFY_TOKEN")),
 			AdoptBotID:         strings.TrimSpace(os.Getenv("WHATSAPP_ADOPT_BOT_ID")),
 		},
+		AI: AIConfig{
+			Provider:              getenv("AI_PROVIDER", "ollama"),
+			Model:                 strings.TrimSpace(os.Getenv("AI_MODEL")),
+			OllamaBaseURL:         strings.TrimRight(getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"), "/"),
+			OllamaChatModel:       getenv("OLLAMA_CHAT_MODEL", "llama3.2:3b"),
+			GroqAPIKey:            strings.TrimSpace(os.Getenv("GROQ_API_KEY")),
+			GroqBaseURL:           strings.TrimRight(getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"), "/"),
+			GroqModel:             getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
+			EmbeddingsEnabled:     boolEnv("AI_EMBEDDINGS_ENABLED", false),
+			VectorSearchEnabled:   boolEnv("AI_VECTOR_SEARCH_ENABLED", false),
+			EmbeddingProvider:     getenv("AI_EMBEDDING_PROVIDER", "disabled"),
+			EmbeddingModel:        getenv("AI_EMBEDDING_MODEL", "text-embedding-3-small"),
+			EmbeddingDimensions:   intEnv("AI_EMBEDDING_DIMENSIONS", 1536),
+			VectorSearchThreshold: floatEnv("AI_VECTOR_SEARCH_THRESHOLD", 0.72),
+		},
+		Channels: ChannelConfig{
+			SecretEncryptionKey:          strings.TrimSpace(os.Getenv("CHANNEL_SECRET_ENCRYPTION_KEY")),
+			WhatsAppGraphBaseURL:         strings.TrimRight(getenv("WHATSAPP_GRAPH_BASE_URL", "https://graph.facebook.com"), "/"),
+			WhatsAppWebhookPublicBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("WHATSAPP_WEBHOOK_PUBLIC_BASE_URL")), "/"),
+			WhatsAppSignatureBypass:      boolEnv("WHATSAPP_SIGNATURE_BYPASS", false),
+			MetaAppID:                    strings.TrimSpace(os.Getenv("META_APP_ID")),
+			MetaAppSecret:                strings.TrimSpace(os.Getenv("META_APP_SECRET")),
+			MetaEmbeddedConfigurationID:  strings.TrimSpace(os.Getenv("META_EMBEDDED_SIGNUP_CONFIGURATION_ID")),
+			MetaGraphAPIVersion:          strings.TrimSpace(os.Getenv("META_GRAPH_API_VERSION")),
+			MetaWebhookVerifyToken:       strings.TrimSpace(os.Getenv("META_WEBHOOK_VERIFY_TOKEN")),
+		},
 		Email: EmailConfig{
 			Mode:       getenv("EMAIL_MODE", "log"),
 			SMTPHost:   os.Getenv("SMTP_HOST"),
@@ -131,6 +189,29 @@ func Load() (Config, error) {
 		return Config{}, errors.New("JWT_TTL_MINUTES must be a positive integer")
 	}
 	cfg.JWT.TTLMinutes = ttl
+	maxToolCalls, err := strconv.Atoi(getenv("AI_MAX_TOOL_CALLS", "4"))
+	if err != nil || maxToolCalls <= 0 {
+		return Config{}, errors.New("AI_MAX_TOOL_CALLS must be a positive integer")
+	}
+	cfg.AI.MaxToolCalls = maxToolCalls
+	if cfg.AI.EmbeddingDimensions <= 0 {
+		return Config{}, errors.New("AI_EMBEDDING_DIMENSIONS must be a positive integer")
+	}
+	if cfg.AI.VectorSearchThreshold <= 0 || cfg.AI.VectorSearchThreshold > 1 {
+		return Config{}, errors.New("AI_VECTOR_SEARCH_THRESHOLD must be between 0 and 1")
+	}
+	if strings.EqualFold(cfg.AppEnv, "production") && cfg.Channels.WhatsAppSignatureBypass {
+		return Config{}, errors.New("WHATSAPP_SIGNATURE_BYPASS cannot be enabled in production")
+	}
+	if baseURL := cfg.Channels.WhatsAppWebhookPublicBaseURL; baseURL != "" {
+		parsed, parseErr := url.Parse(baseURL)
+		if parseErr != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return Config{}, errors.New("WHATSAPP_WEBHOOK_PUBLIC_BASE_URL must be an absolute HTTP or HTTPS origin without a path")
+		}
+		if strings.EqualFold(cfg.AppEnv, "production") && parsed.Scheme != "https" {
+			return Config{}, errors.New("WHATSAPP_WEBHOOK_PUBLIC_BASE_URL must use HTTPS in production")
+		}
+	}
 
 	if cfg.JWT.Secret == "" {
 		return Config{}, errors.New("JWT_SECRET is required")
@@ -212,4 +293,36 @@ func firstEnv(keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func boolEnv(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return strings.EqualFold(value, "true") || value == "1" || strings.EqualFold(value, "yes")
+}
+
+func intEnv(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func floatEnv(key string, fallback float64) float64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

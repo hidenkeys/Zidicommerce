@@ -2,6 +2,8 @@ package bot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -14,18 +16,29 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/jobs"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 type Service struct {
-	db  *gorm.DB
-	now func() time.Time
+	db                *gorm.DB
+	jobs              *jobs.Service
+	embeddingsEnabled bool
+	now               func() time.Time
 }
 
 func NewService(db *gorm.DB) *Service {
 	return &Service{db: db, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func (s *Service) ConfigureJobs(jobService *jobs.Service) {
+	s.jobs = jobService
+}
+
+func (s *Service) ConfigureKnowledgeEmbeddings(enabled bool) {
+	s.embeddingsEnabled = enabled
 }
 
 func (s *Service) ListBots(ctx context.Context, actor auth.CurrentUser) ([]Bot, error) {
@@ -100,6 +113,9 @@ func (s *Service) CreateSelfServiceBot(ctx context.Context, actor auth.CurrentUs
 	var version BotVersion
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&botRecord).Error; err != nil {
+			return err
+		}
+		if err := EnsureDefaultCommerceWorkflowConfigurationTx(tx, actor.OrganizationID, actor.ID, name, welcome, true, requirePayment, true); err != nil {
 			return err
 		}
 		version = BotVersion{ID: uuid.New(), OrganizationID: actor.OrganizationID, BotID: botRecord.ID, VersionNumber: 1, Status: VersionStatusDraft, StartStepKey: "start", ValidationErrors: "[]", Metadata: `{"template":"commerce_support"}`, CreatedByUserID: &actor.ID}
@@ -778,7 +794,7 @@ func (s *Service) ValidateVersion(ctx context.Context, actor auth.CurrentUser, v
 }
 
 func (s *Service) PublishVersion(ctx context.Context, actor auth.CurrentUser, versionID uuid.UUID) (PublishedSnapshot, error) {
-	if !canManageBots(actor.Role) {
+	if !actor.Role.HasPermission(authz.PermissionBotPublish) {
 		return PublishedSnapshot{}, httperror.Forbidden("You cannot publish bots")
 	}
 	version, err := s.GetVersion(ctx, actor, versionID)
@@ -844,6 +860,133 @@ func (s *Service) ListFAQs(ctx context.Context, actor auth.CurrentUser) ([]FAQ, 
 	var faqs []FAQ
 	err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("updated_at DESC").Find(&faqs).Error
 	return faqs, err
+}
+
+func (s *Service) ListKnowledgeEntries(ctx context.Context, actor auth.CurrentUser, filter KnowledgeEntryFilter) ([]KnowledgeEntry, error) {
+	if !canViewKnowledge(actor.Role) {
+		return nil, httperror.Forbidden("You cannot view merchant knowledge")
+	}
+	query := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID)
+	if status := strings.ToLower(strings.TrimSpace(filter.Status)); status != "" {
+		if !validKnowledgeStatus(status) {
+			return nil, httperror.BadRequest("Knowledge status is not valid")
+		}
+		query = query.Where("status = ?", status)
+	}
+	if kind := strings.ToLower(strings.TrimSpace(filter.Kind)); kind != "" {
+		if !validKnowledgeKind(kind) {
+			return nil, httperror.BadRequest("Knowledge kind is not valid")
+		}
+		query = query.Where("kind = ?", kind)
+	}
+	if category := strings.ToLower(strings.TrimSpace(filter.Category)); category != "" {
+		query = query.Where("category = ?", category)
+	}
+	if search := normalizeSearchText(filter.Search); search != "" {
+		pattern := "%" + search + "%"
+		query = query.Where(
+			"LOWER(title) LIKE ? OR LOWER(question) LIKE ? OR LOWER(answer) LIKE ? OR LOWER(CAST(keywords AS TEXT)) LIKE ?",
+			pattern,
+			pattern,
+			pattern,
+			pattern,
+		)
+	}
+	var entries []KnowledgeEntry
+	err := query.Order("updated_at DESC").Find(&entries).Error
+	return entries, err
+}
+
+func (s *Service) GetKnowledgeEntry(ctx context.Context, actor auth.CurrentUser, entryID uuid.UUID) (KnowledgeEntry, error) {
+	if !canViewKnowledge(actor.Role) {
+		return KnowledgeEntry{}, httperror.Forbidden("You cannot view merchant knowledge")
+	}
+	var entry KnowledgeEntry
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, entryID).First(&entry).Error; err != nil {
+		return KnowledgeEntry{}, mapNotFound(err, "Knowledge entry not found")
+	}
+	return entry, nil
+}
+
+func (s *Service) CreateKnowledgeEntry(ctx context.Context, actor auth.CurrentUser, input KnowledgeEntryInput) (KnowledgeEntry, error) {
+	if !canManageKnowledge(actor.Role) {
+		return KnowledgeEntry{}, httperror.Forbidden("You cannot manage merchant knowledge")
+	}
+	entry, err := knowledgeEntryFromInput(actor.OrganizationID, input, true)
+	if err != nil {
+		return KnowledgeEntry{}, err
+	}
+	s.applyKnowledgeEmbeddingLifecycle(&entry)
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&entry).Error; err != nil {
+			return err
+		}
+		if err := s.enqueueKnowledgeEmbeddingTx(ctx, tx, actor.OrganizationID, entry); err != nil {
+			return err
+		}
+		return auditTx(tx, actor.OrganizationID, actor.ID, "merchant_knowledge_entry", entry.ID, "knowledge_entry_created", knowledgeAuditMetadata(entry))
+	})
+	return entry, err
+}
+
+func (s *Service) UpdateKnowledgeEntry(ctx context.Context, actor auth.CurrentUser, entryID uuid.UUID, input KnowledgeEntryInput) (KnowledgeEntry, error) {
+	if !canManageKnowledge(actor.Role) {
+		return KnowledgeEntry{}, httperror.Forbidden("You cannot manage merchant knowledge")
+	}
+	var entry KnowledgeEntry
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, entryID).First(&entry).Error; err != nil {
+		return KnowledgeEntry{}, mapNotFound(err, "Knowledge entry not found")
+	}
+	updates, err := knowledgeEntryUpdates(input)
+	if err != nil {
+		return KnowledgeEntry{}, err
+	}
+	if len(updates) == 0 {
+		return entry, nil
+	}
+	applyKnowledgeEmbeddingUpdates(s.embeddingsEnabled, entry, updates)
+	updates["updated_at"] = s.now()
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&entry).Updates(updates).Error; err != nil {
+			return err
+		}
+		updated := entry
+		applyKnowledgeEntryMap(&updated, updates)
+		if err := s.enqueueKnowledgeEmbeddingTx(ctx, tx, actor.OrganizationID, updated); err != nil {
+			return err
+		}
+		return auditTx(tx, actor.OrganizationID, actor.ID, "merchant_knowledge_entry", entry.ID, "knowledge_entry_updated", jsonValue(map[string]any{"fields": sortedMapKeys(updates)}))
+	})
+	if err != nil {
+		return KnowledgeEntry{}, err
+	}
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, entryID).First(&entry).Error; err != nil {
+		return KnowledgeEntry{}, err
+	}
+	return entry, nil
+}
+
+func (s *Service) ArchiveKnowledgeEntry(ctx context.Context, actor auth.CurrentUser, entryID uuid.UUID) (KnowledgeEntry, error) {
+	if !canManageKnowledge(actor.Role) {
+		return KnowledgeEntry{}, httperror.Forbidden("You cannot manage merchant knowledge")
+	}
+	var entry KnowledgeEntry
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, entryID).First(&entry).Error; err != nil {
+		return KnowledgeEntry{}, mapNotFound(err, "Knowledge entry not found")
+	}
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&entry).Updates(map[string]any{"status": "archived", "embedding_status": KnowledgeEmbeddingStatusDisabled, "embedding": nil, "embedding_error": "", "updated_at": s.now()}).Error; err != nil {
+			return err
+		}
+		return auditTx(tx, actor.OrganizationID, actor.ID, "merchant_knowledge_entry", entry.ID, "knowledge_entry_archived", knowledgeAuditMetadata(entry))
+	})
+	if err != nil {
+		return KnowledgeEntry{}, err
+	}
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, entryID).First(&entry).Error; err != nil {
+		return KnowledgeEntry{}, err
+	}
+	return entry, nil
 }
 
 func (s *Service) CreateFAQ(ctx context.Context, actor auth.CurrentUser, input FAQInput) (FAQ, error) {
@@ -938,14 +1081,29 @@ func (s *Service) GetShareLink(ctx context.Context, actor auth.CurrentUser, botI
 		return ShareLink{Available: false, Reason: "Publish a bot version first."}, nil
 	}
 	var channel core.Channel
-	err = s.db.WithContext(ctx).Where("organization_id = ? AND provider = ? AND status = ?", actor.OrganizationID, "whatsapp", core.StatusActive).Order("updated_at DESC").First(&channel).Error
+	err = s.db.WithContext(ctx).Where("organization_id = ? AND provider = ? AND status IN ?", actor.OrganizationID, "whatsapp", []string{core.StatusActive, "connected", "healthy", "degraded", "requires_attention"}).Order("updated_at DESC").First(&channel).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return ShareLink{Available: false, Reason: "Connect an active WhatsApp channel first."}, nil
 		}
 		return ShareLink{}, err
 	}
-	number := strings.TrimPrefix(strings.ReplaceAll(channel.DisplayNumber, " ", ""), "+")
+	displayNumber := strings.TrimSpace(channel.DisplayNumber)
+	if displayNumber == "" {
+		var configuration struct {
+			DisplayPhoneNumber string
+		}
+		if configErr := s.db.WithContext(ctx).
+			Table("channel_whatsapp_configs").
+			Select("display_phone_number").
+			Where("organization_id = ? AND channel_connection_id = ?", actor.OrganizationID, channel.ID).
+			Take(&configuration).Error; configErr == nil {
+			displayNumber = strings.TrimSpace(configuration.DisplayPhoneNumber)
+		} else if configErr != gorm.ErrRecordNotFound {
+			return ShareLink{}, configErr
+		}
+	}
+	number := strings.TrimPrefix(strings.ReplaceAll(displayNumber, " ", ""), "+")
 	if number == "" {
 		return ShareLink{Available: false, Reason: "Add a WhatsApp display number to the active channel."}, nil
 	}
@@ -967,26 +1125,45 @@ func (s *Service) GetSetupStatus(ctx context.Context, actor auth.CurrentUser) (B
 		return total
 	}
 	orgID := actor.OrganizationID
+	var org organization.Organization
+	organizationReady := s.db.WithContext(ctx).Where("id = ?", orgID).First(&org).Error == nil &&
+		strings.TrimSpace(org.Name) != "" && strings.TrimSpace(org.Country) != "" &&
+		strings.TrimSpace(org.Currency) != "" && strings.TrimSpace(org.Timezone) != ""
+	knowledgeReady := count(&FAQ{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0 ||
+		count(&KnowledgeEntry{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0
 	items := []ChecklistItem{
-		{Key: "database", Label: "Database", Complete: true, Description: "The API can query the tenant database."},
-		{Key: "stores", Label: "Stores", Complete: count(&core.Store{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0, Description: "At least one active store is available."},
-		{Key: "catalogue", Label: "Catalogue", Complete: count(&core.Product{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0 && count(&core.Variant{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0, Description: "Products and sellable variants exist."},
-		{Key: "inventory", Label: "Inventory", Complete: count(&core.InventoryLevel{}, "organization_id = ? AND on_hand > reserved", orgID) > 0, Description: "At least one item has available stock."},
-		{Key: "whatsapp", Label: "WhatsApp", Complete: count(&core.Channel{}, "organization_id = ? AND provider = ? AND status = ? AND phone_number_id <> ''", orgID, "whatsapp", core.StatusActive) > 0, Description: "An active WhatsApp channel with provider identifiers is connected."},
-		{Key: "payments", Label: "Payments", Complete: count(&core.PaymentConfiguration{}, "organization_id = ? AND provider = ? AND enabled = ? AND status = ?", orgID, "paystack", true, core.StatusActive) > 0, Description: "A Paystack configuration is enabled."},
-		{Key: "bot", Label: "Bot", Complete: count(&Bot{}, "organization_id = ? AND published_version_id IS NOT NULL AND status = ?", orgID, BotStatusActive) > 0, Description: "A customer bot has a published version."},
-		{Key: "faqs", Label: "FAQs", Complete: count(&FAQ{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0, Description: "At least one FAQ answer is configured."},
-		{Key: "worker", Label: "Worker", Complete: count(&core.CommerceNotification{}, "organization_id = ? AND status IN ?", orgID, []string{"queued", "retry_pending", "failed"}) == 0, Description: "No stuck commerce notifications are waiting for the outbound worker."},
-		{Key: "outbound", Label: "Outbound", Complete: count(&runtimeOutboundModel{}, "organization_id = ? AND status IN ?", orgID, []string{"queued", "retry_pending", "failed"}) == 0, Description: "No stuck channel outbound messages are waiting for retry."},
-		{Key: "support", Label: "Support", Complete: count(&runtimeSupportHandoffModel{}, "organization_id = ? AND status IN ?", orgID, []string{"open", "assigned"}) == 0, Description: "No unresolved human handoffs are currently pending."},
+		{Key: "organization", Label: "Business profile", Complete: organizationReady, Required: true, Group: "business", Description: "Add the business name, country, currency, and timezone used by orders and receipts."},
+		{Key: "stores", Label: "Store", Complete: count(&core.Store{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0, Required: true, Group: "business", Description: "Add at least one active location where orders can be prepared or collected."},
+		{Key: "catalogue", Label: "Catalogue", Complete: count(&core.Product{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0 && count(&core.Variant{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0, Required: true, Group: "selling", Description: "Add an active product with a sellable option and current price."},
+		{Key: "inventory", Label: "Inventory", Complete: count(&core.InventoryLevel{}, "organization_id = ? AND on_hand > reserved", orgID) > 0, Required: true, Group: "selling", Description: "Set available stock for at least one product at a store."},
+		{Key: "payments", Label: "Payments", Complete: count(&core.PaymentConfiguration{}, "organization_id = ? AND enabled = ? AND status = ?", orgID, true, core.StatusActive) > 0, Required: true, Group: "selling", Description: "Enable and test a payment method before accepting paid orders."},
+		{Key: "faqs", Label: "Business knowledge", Complete: knowledgeReady, Required: true, Group: "customer_service", Description: "Publish at least one active policy, FAQ, or business-information entry."},
+		{Key: "bot", Label: "Assistant", Complete: count(&Bot{}, "organization_id = ? AND published_version_id IS NOT NULL AND status = ?", orgID, BotStatusActive) > 0, Required: true, Group: "customer_service", Description: "Publish the assistant after reviewing its capabilities and test conversation."},
+		{Key: "team", Label: "Team", Complete: count(&organization.OrganizationMembership{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 1, Group: "operations", Description: "Optional: invite staff and assign stores so daily work reaches the right people."},
+		{Key: "whatsapp", Label: "Customer channel", Complete: count(&core.Channel{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0, Group: "channels", Description: "Optional for this phase: external channel connections will plug into this readiness step later."},
+		{Key: "database", Label: "Data service", Complete: true, Group: "system", Description: "The organization data service is available."},
+		{Key: "worker", Label: "Notifications", Complete: count(&core.CommerceNotification{}, "organization_id = ? AND status IN ?", orgID, []string{"queued", "retry_pending", "failed"}) == 0, Group: "operations", Description: "No commerce notifications currently require an operator retry."},
+		{Key: "outbound", Label: "Outbound messages", Complete: count(&runtimeOutboundModel{}, "organization_id = ? AND status IN ?", orgID, []string{"queued", "retry_pending", "failed"}) == 0, Group: "operations", Description: "No customer messages are currently waiting for an operator retry."},
+		{Key: "support", Label: "Human support", Complete: count(&runtimeSupportHandoffModel{}, "organization_id = ? AND status IN ?", orgID, []string{"open", "assigned"}) == 0, Group: "operations", Description: "No unresolved human handoffs are currently pending."},
 	}
-	done := 0
+	done, requiredDone, required := summarizeSetupStatus(items)
+	return BotSetupStatus{OrganizationID: orgID, Items: items, CompleteCount: done, TotalCount: len(items), RequiredCompleteCount: requiredDone, RequiredCount: required, Ready: required > 0 && requiredDone == required}, nil
+}
+
+func summarizeSetupStatus(items []ChecklistItem) (complete, requiredComplete, required int) {
 	for _, item := range items {
 		if item.Complete {
-			done++
+			complete++
+		}
+		if !item.Required {
+			continue
+		}
+		required++
+		if item.Complete {
+			requiredComplete++
 		}
 	}
-	return BotSetupStatus{OrganizationID: orgID, Items: items, CompleteCount: done, TotalCount: len(items), Ready: done == len(items)}, nil
+	return complete, requiredComplete, required
 }
 
 type runtimeOutboundModel struct{}
@@ -1328,11 +1505,19 @@ func stepGraphEdges(step Step, modules map[uuid.UUID]VersionModule) []string {
 }
 
 func canManageBots(role authz.Role) bool {
-	return role == authz.PlatformAdmin || role == authz.MerchantAdmin
+	return role.HasPermission(authz.PermissionBotManage)
 }
 
 func canViewBots(role authz.Role) bool {
-	return role == authz.PlatformAdmin || role == authz.MerchantAdmin || role == authz.StoreManager || role == authz.SupportAgent || role == authz.Viewer
+	return role.HasPermission(authz.PermissionBotView) || role.HasPermission(authz.PermissionKnowledgeView)
+}
+
+func canManageKnowledge(role authz.Role) bool {
+	return role.HasPermission(authz.PermissionKnowledgeManage)
+}
+
+func canViewKnowledge(role authz.Role) bool {
+	return role.HasPermission(authz.PermissionKnowledgeView)
 }
 
 func findModule(key string) ModuleSpec {
@@ -1589,6 +1774,267 @@ func cleanKeywords(values []string) []string {
 	}
 	sort.Strings(keywords)
 	return keywords
+}
+
+func knowledgeEntryFromInput(organizationID uuid.UUID, input KnowledgeEntryInput, requireAnswer bool) (KnowledgeEntry, error) {
+	kind := strings.ToLower(strings.TrimSpace(input.Kind))
+	if kind == "" {
+		kind = KnowledgeKindFAQ
+	}
+	if !validKnowledgeKind(kind) {
+		return KnowledgeEntry{}, httperror.BadRequest("Knowledge kind is not valid")
+	}
+	status := strings.ToLower(strings.TrimSpace(input.Status))
+	if status == "" {
+		status = core.StatusActive
+	}
+	if !validKnowledgeStatus(status) {
+		return KnowledgeEntry{}, httperror.BadRequest("Knowledge status is not valid")
+	}
+	category := normalizeKnowledgeCategory(input.Category)
+	title := strings.TrimSpace(input.Title)
+	question := strings.TrimSpace(input.Question)
+	answer := strings.TrimSpace(input.Answer)
+	if title == "" {
+		title = question
+	}
+	if kind == KnowledgeKindFAQ && question == "" {
+		question = title
+	}
+	if title == "" {
+		return KnowledgeEntry{}, httperror.BadRequest("Knowledge title is required")
+	}
+	if requireAnswer && answer == "" {
+		return KnowledgeEntry{}, httperror.BadRequest("Knowledge answer is required")
+	}
+	sourceType := strings.ToLower(strings.TrimSpace(input.SourceType))
+	if sourceType == "" {
+		sourceType = "manual"
+	}
+	return KnowledgeEntry{
+		ID:              uuid.New(),
+		OrganizationID:  organizationID,
+		Kind:            kind,
+		Category:        category,
+		Title:           title,
+		Question:        question,
+		Answer:          answer,
+		Keywords:        jsonValue(cleanKeywords(input.Keywords)),
+		SourceType:      sourceType,
+		Status:          status,
+		Metadata:        jsonObject(input.Metadata),
+		EmbeddingStatus: KnowledgeEmbeddingStatusDisabled,
+	}, nil
+}
+
+func knowledgeEntryUpdates(input KnowledgeEntryInput) (map[string]any, error) {
+	updates := map[string]any{}
+	if strings.TrimSpace(input.Kind) != "" {
+		kind := strings.ToLower(strings.TrimSpace(input.Kind))
+		if !validKnowledgeKind(kind) {
+			return nil, httperror.BadRequest("Knowledge kind is not valid")
+		}
+		updates["kind"] = kind
+	}
+	if strings.TrimSpace(input.Category) != "" {
+		updates["category"] = normalizeKnowledgeCategory(input.Category)
+	}
+	if strings.TrimSpace(input.Title) != "" {
+		updates["title"] = strings.TrimSpace(input.Title)
+	}
+	if strings.TrimSpace(input.Question) != "" {
+		updates["question"] = strings.TrimSpace(input.Question)
+	}
+	if strings.TrimSpace(input.Answer) != "" {
+		updates["answer"] = strings.TrimSpace(input.Answer)
+	}
+	if input.Keywords != nil {
+		updates["keywords"] = jsonValue(cleanKeywords(input.Keywords))
+	}
+	if strings.TrimSpace(input.SourceType) != "" {
+		updates["source_type"] = strings.ToLower(strings.TrimSpace(input.SourceType))
+	}
+	if strings.TrimSpace(input.Status) != "" {
+		status := strings.ToLower(strings.TrimSpace(input.Status))
+		if !validKnowledgeStatus(status) {
+			return nil, httperror.BadRequest("Knowledge status is not valid")
+		}
+		updates["status"] = status
+	}
+	if input.Metadata != "" {
+		updates["metadata"] = jsonObject(input.Metadata)
+	}
+	return updates, nil
+}
+
+func normalizeKnowledgeCategory(value string) string {
+	category := normalizeSearchText(value)
+	if category == "" {
+		return "general"
+	}
+	return strings.ReplaceAll(category, " ", "_")
+}
+
+func validKnowledgeKind(kind string) bool {
+	switch kind {
+	case KnowledgeKindFAQ, KnowledgeKindPolicy, KnowledgeKindBusinessInfo, KnowledgeKindDelivery, KnowledgeKindReturns, KnowledgeKindWarranty, KnowledgeKindLocation, KnowledgeKindPaymentInfo:
+		return true
+	default:
+		return false
+	}
+}
+
+func validKnowledgeStatus(status string) bool {
+	return status == core.StatusActive || status == "draft" || status == "archived"
+}
+
+func knowledgeAuditMetadata(entry KnowledgeEntry) string {
+	return jsonValue(map[string]any{"kind": entry.Kind, "category": entry.Category, "status": entry.Status})
+}
+
+func (s *Service) applyKnowledgeEmbeddingLifecycle(entry *KnowledgeEntry) {
+	entry.EmbeddingContentHash = KnowledgeEmbeddingHash(*entry)
+	entry.EmbeddingError = ""
+	entry.EmbeddedAt = nil
+	entry.Embedding = nil
+	if s.embeddingsEnabled && entry.Status == core.StatusActive {
+		entry.EmbeddingStatus = KnowledgeEmbeddingStatusPending
+		return
+	}
+	entry.EmbeddingStatus = KnowledgeEmbeddingStatusDisabled
+}
+
+func applyKnowledgeEmbeddingUpdates(enabled bool, existing KnowledgeEntry, updates map[string]any) {
+	status := existing.Status
+	if raw, ok := updates["status"].(string); ok {
+		status = raw
+	}
+	embeddingRelevant := false
+	for _, key := range []string{"kind", "category", "title", "question", "answer", "keywords", "status"} {
+		if _, ok := updates[key]; ok {
+			embeddingRelevant = true
+			break
+		}
+	}
+	if !embeddingRelevant {
+		return
+	}
+	if enabled && status == core.StatusActive {
+		updated := existing
+		applyKnowledgeEntryMap(&updated, updates)
+		updates["embedding_status"] = KnowledgeEmbeddingStatusPending
+		updates["embedding_content_hash"] = KnowledgeEmbeddingHash(updated)
+		updates["embedding_error"] = ""
+		updates["embedded_at"] = nil
+		updates["embedding"] = nil
+		return
+	}
+	updates["embedding_status"] = KnowledgeEmbeddingStatusDisabled
+	updates["embedding_error"] = ""
+	updates["embedded_at"] = nil
+	updates["embedding"] = nil
+}
+
+func applyKnowledgeEntryMap(entry *KnowledgeEntry, updates map[string]any) {
+	if value, ok := updates["kind"].(string); ok {
+		entry.Kind = value
+	}
+	if value, ok := updates["category"].(string); ok {
+		entry.Category = value
+	}
+	if value, ok := updates["title"].(string); ok {
+		entry.Title = value
+	}
+	if value, ok := updates["question"].(string); ok {
+		entry.Question = value
+	}
+	if value, ok := updates["answer"].(string); ok {
+		entry.Answer = value
+	}
+	if value, ok := updates["keywords"].(string); ok {
+		entry.Keywords = value
+	}
+	if value, ok := updates["source_type"].(string); ok {
+		entry.SourceType = value
+	}
+	if value, ok := updates["status"].(string); ok {
+		entry.Status = value
+	}
+	if value, ok := updates["metadata"].(string); ok {
+		entry.Metadata = value
+	}
+	if value, ok := updates["embedding_status"].(string); ok {
+		entry.EmbeddingStatus = value
+	}
+	if value, ok := updates["embedding_content_hash"].(string); ok {
+		entry.EmbeddingContentHash = value
+	}
+}
+
+func (s *Service) enqueueKnowledgeEmbeddingTx(ctx context.Context, tx *gorm.DB, organizationID uuid.UUID, entry KnowledgeEntry) error {
+	if !s.embeddingsEnabled || s.jobs == nil || entry.Status != core.StatusActive || entry.EmbeddingStatus != KnowledgeEmbeddingStatusPending {
+		return nil
+	}
+	hash := firstNonEmptyString(entry.EmbeddingContentHash, KnowledgeEmbeddingHash(entry))
+	var existing jobs.Job
+	err := tx.WithContext(ctx).Where("job_type = ? AND idempotency_key = ?", jobs.JobTypeKnowledgeEmbedding, "knowledge-embedding:"+entry.ID.String()+":"+hash).First(&existing).Error
+	if err == nil {
+		return nil
+	}
+	if err != gorm.ErrRecordNotFound {
+		return err
+	}
+	now := s.now()
+	job := jobs.Job{
+		ID:             uuid.New(),
+		OrganizationID: &organizationID,
+		JobType:        jobs.JobTypeKnowledgeEmbedding,
+		Status:         jobs.StatusQueued,
+		Payload:        jsonValue(map[string]any{"knowledge_entry_id": entry.ID.String()}),
+		IdempotencyKey: "knowledge-embedding:" + entry.ID.String() + ":" + hash,
+		CorrelationID:  entry.ID.String(),
+		MaxAttempts:    3,
+		AvailableAt:    now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	return tx.WithContext(ctx).Create(&job).Error
+}
+
+func KnowledgeEmbeddingSourceText(entry KnowledgeEntry) string {
+	parts := []string{entry.Kind, entry.Category, entry.Title, entry.Question, entry.Answer}
+	for _, keyword := range parseKeywords(entry.Keywords) {
+		parts = append(parts, keyword)
+	}
+	return strings.Join(compactStrings(parts), "\n")
+}
+
+func KnowledgeEmbeddingHash(entry KnowledgeEntry) string {
+	sum := sha256.Sum256([]byte(KnowledgeEmbeddingSourceText(entry)))
+	return hex.EncodeToString(sum[:])
+}
+
+func compactStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func sortedMapKeys(values map[string]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		if key == "updated_at" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func scoreFAQ(query string, faq FAQ) (float64, string) {

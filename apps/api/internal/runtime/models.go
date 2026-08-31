@@ -13,8 +13,18 @@ const (
 	SessionExpired   = "expired"
 	SessionCancelled = "cancelled"
 
+	ConversationOpen           = "open"
+	ConversationAIHandling     = "ai_handling"
+	ConversationHumanRequested = "human_requested"
+	ConversationHumanAssigned  = "human_assigned"
+	ConversationPending        = "pending"
+	ConversationWaiting        = "waiting"
+	ConversationResolved       = "resolved"
+	ConversationReopened       = "reopened"
+
 	DirectionInbound  = "inbound"
 	DirectionOutbound = "outbound"
+	DirectionInternal = "internal"
 
 	MessageText            = "text"
 	MessageButtons         = "buttons"
@@ -28,12 +38,24 @@ const (
 	EventQuestionPresented     = "question_presented"
 	EventAnswerReceived        = "answer_received"
 	EventActionStarted         = "action_started"
+	EventActionRequested       = "action_requested"
+	EventActionAuthorized      = "action_authorized"
+	EventActionDenied          = "action_denied"
 	EventActionCompleted       = "action_completed"
 	EventActionFailed          = "action_failed"
 	EventModuleStarted         = "module_started"
 	EventModuleCompleted       = "module_completed"
 	EventConversationCompleted = "conversation_completed"
 	EventHandoffStarted        = "handoff_started"
+	EventHandoffClaimed        = "handoff_claimed"
+	EventHandoffAssigned       = "handoff_assigned"
+	EventHandoffReleased       = "handoff_released"
+	EventHandoffResolved       = "handoff_resolved"
+	EventHandoffReopened       = "handoff_reopened"
+	EventConversationRead      = "conversation_read"
+	EventConversationUnread    = "conversation_unread"
+	EventCommerceOrderLinked   = "commerce_order_linked"
+	EventCommercePaymentPaid   = "commerce_payment_confirmed"
 	EventRuntimeError          = "runtime_error"
 
 	OutboundQueued            = "queued"
@@ -54,20 +76,42 @@ type ConversationSession struct {
 	BotVersionID           uuid.UUID  `gorm:"type:uuid;index" json:"bot_version_id"`
 	ChannelID              uuid.UUID  `gorm:"type:uuid;index;uniqueIndex:idx_runtime_session_external" json:"channel_id"`
 	CustomerID             *uuid.UUID `gorm:"type:uuid" json:"customer_id,omitempty"`
+	StoreID                *uuid.UUID `gorm:"type:uuid;index" json:"store_id,omitempty"`
 	ExternalConversationID string     `gorm:"uniqueIndex:idx_runtime_session_external" json:"external_conversation_id"`
 	CurrentStepKey         string     `json:"current_step_key"`
 	ExpectedInput          string     `json:"expected_input"`
 	Status                 string     `json:"status"`
+	ConversationStatus     string     `json:"conversation_status"`
+	AssignedUserID         *uuid.UUID `gorm:"type:uuid;index" json:"assigned_user_id,omitempty"`
+	Priority               string     `json:"priority"`
+	HandoffState           string     `json:"handoff_state"`
+	UnreadCount            int        `json:"unread_count"`
+	LastMessageBody        string     `json:"last_message_body"`
+	LastMessageDirection   string     `json:"last_message_direction"`
 	Variables              string     `json:"variables"`
 	SystemContext          string     `json:"system_context"`
 	LockVersion            int        `json:"lock_version"`
 	LastMessageAt          *time.Time `json:"last_message_at,omitempty"`
+	LastReadAt             *time.Time `json:"last_read_at,omitempty"`
+	HumanOwnedAt           *time.Time `json:"human_owned_at,omitempty"`
+	HumanReleasedAt        *time.Time `json:"human_released_at,omitempty"`
+	ResolvedAt             *time.Time `json:"resolved_at,omitempty"`
 	ExpiresAt              *time.Time `json:"expires_at,omitempty"`
 	CreatedAt              time.Time  `json:"created_at"`
 	UpdatedAt              time.Time  `json:"updated_at"`
 }
 
 func (ConversationSession) TableName() string { return "conversation_sessions" }
+
+func (s ConversationSession) AIShouldPause() bool {
+	return s.Status == SessionHandoff && (s.ConversationStatus == ConversationHumanRequested || s.ConversationStatus == ConversationHumanAssigned || s.HandoffState == "open" || s.HandoffState == "assigned" || s.HandoffState == "reopened" || s.AssignedUserID != nil || s.HumanOwnedAt != nil)
+}
+
+func ActiveHandoffStatuses() []string {
+	statuses := make([]string, len(activeHandoffStatuses))
+	copy(statuses, activeHandoffStatuses)
+	return statuses
+}
 
 type ConversationMessage struct {
 	ID                uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
@@ -152,8 +196,10 @@ type SupportHandoff struct {
 	AssignedUserID *uuid.UUID `gorm:"type:uuid" json:"assigned_user_id,omitempty"`
 	Status         string     `json:"status"`
 	Reason         string     `json:"reason"`
+	Priority       string     `json:"priority"`
 	Metadata       string     `json:"metadata"`
 	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
+	ReleasedAt     *time.Time `json:"released_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }

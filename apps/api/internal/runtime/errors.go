@@ -10,6 +10,7 @@ const (
 	ErrInvalidStep               = "INVALID_STEP"
 	ErrInvalidVariable           = "INVALID_VARIABLE"
 	ErrActionNotFound            = "ACTION_NOT_FOUND"
+	ErrActionDenied              = "ACTION_DENIED"
 	ErrActionFailed              = "ACTION_FAILED"
 	ErrIntegrationNotConfigured  = "INTEGRATION_NOT_CONFIGURED"
 	ErrSessionConflict           = "SESSION_CONFLICT"

@@ -84,7 +84,19 @@ type SupportHandoffResolveInput struct {
 }
 
 type SupportHandoffClaimInput struct {
-	Note string `json:"note"`
+	Note     string `json:"note"`
+	Priority string `json:"priority"`
+}
+
+type SupportHandoffAssignInput struct {
+	UserID uuid.UUID `json:"user_id"`
+	Note   string    `json:"note"`
+	Reason string    `json:"reason"`
+}
+
+type SupportHandoffReleaseInput struct {
+	Reason    string `json:"reason"`
+	ResumeBot bool   `json:"resume_bot"`
 }
 
 type SupportHandoffNoteInput struct {
@@ -96,6 +108,27 @@ type ConversationReplyInput struct {
 	Text string `json:"text"`
 }
 
+type ConversationStatusInput struct {
+	Status string `json:"status"`
+	Reason string `json:"reason"`
+}
+
+type ConversationAssignInput struct {
+	UserID uuid.UUID `json:"user_id"`
+	Reason string    `json:"reason"`
+}
+
+type ConversationReadInput struct {
+	Unread bool `json:"unread"`
+}
+
+type ConversationFilter struct {
+	Status   string
+	Assigned string
+	Unread   bool
+	Search   string
+}
+
 type ConversationSummary struct {
 	ID                     uuid.UUID  `json:"id"`
 	OrganizationID         uuid.UUID  `json:"organization_id"`
@@ -103,16 +136,34 @@ type ConversationSummary struct {
 	BotVersionID           uuid.UUID  `json:"bot_version_id"`
 	ChannelID              uuid.UUID  `json:"channel_id"`
 	CustomerID             *uuid.UUID `json:"customer_id,omitempty"`
+	StoreID                *uuid.UUID `json:"store_id,omitempty"`
 	CustomerName           string     `json:"customer_name"`
 	CustomerPhone          string     `json:"customer_phone"`
+	StoreName              string     `json:"store_name"`
 	ExternalConversationID string     `json:"external_conversation_id"`
 	CurrentStepKey         string     `json:"current_step_key"`
 	ExpectedInput          string     `json:"expected_input"`
 	Status                 string     `json:"status"`
+	ConversationStatus     string     `json:"conversation_status"`
+	AssignedUserID         *uuid.UUID `json:"assigned_user_id,omitempty"`
+	AssignedUserName       string     `json:"assigned_user_name"`
+	Priority               string     `json:"priority"`
+	HandoffState           string     `json:"handoff_state"`
+	UnreadCount            int        `json:"unread_count"`
 	CurrentModule          string     `json:"current_module"`
 	LastMessage            string     `json:"last_message"`
 	LastMessageDirection   string     `json:"last_message_direction"`
 	HandoffStatus          string     `json:"handoff_status"`
+	HandoffID              *uuid.UUID `json:"handoff_id,omitempty"`
+	OrderID                *uuid.UUID `json:"order_id,omitempty"`
+	OrderNumber            string     `json:"order_number"`
+	OrderStatus            string     `json:"order_status"`
+	PaymentStatus          string     `json:"payment_status"`
+	FulfilmentStatus       string     `json:"fulfilment_status"`
+	FulfilmentType         string     `json:"fulfilment_type"`
+	LastMessageAt          *time.Time `json:"last_message_at,omitempty"`
+	LastReadAt             *time.Time `json:"last_read_at,omitempty"`
+	ResolvedAt             *time.Time `json:"resolved_at,omitempty"`
 	UpdatedAt              time.Time  `json:"updated_at"`
 	CreatedAt              time.Time  `json:"created_at"`
 }

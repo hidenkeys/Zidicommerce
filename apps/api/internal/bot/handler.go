@@ -1,6 +1,8 @@
 package bot
 
 import (
+	"strings"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
@@ -20,6 +22,22 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Get("/bot-actions", h.systemActions)
 	router.Get("/bot-question-types", h.questionTypes)
 	router.Get("/bot-setup/status", h.setupStatus)
+	router.Get("/bot-workflow", h.getCommerceWorkflowConfiguration)
+	router.Put("/bot-workflow", h.updateCommerceWorkflowConfiguration)
+	router.Get("/knowledge-entries", h.listKnowledgeEntries)
+	router.Post("/knowledge-entries", h.createKnowledgeEntry)
+	router.Get("/knowledge-entries/:id", h.getKnowledgeEntry)
+	router.Patch("/knowledge-entries/:id", h.updateKnowledgeEntry)
+	router.Delete("/knowledge-entries/:id", h.archiveKnowledgeEntry)
+	router.Get("/document-sources", h.listDocumentSources)
+	router.Post("/document-sources", h.createDocumentSource)
+	router.Get("/document-sources/:id", h.getDocumentSource)
+	router.Patch("/document-sources/:id", h.updateDocumentSource)
+	router.Delete("/document-sources/:id", h.archiveDocumentSource)
+	router.Get("/document-sources/:id/chunks", h.listDocumentChunks)
+	router.Patch("/document-chunks/:id", h.updateDocumentChunk)
+	router.Post("/document-chunks/:id/approve", h.approveDocumentChunk)
+	router.Delete("/document-chunks/:id", h.archiveDocumentChunk)
 	router.Get("/bot-faqs", h.listFAQs)
 	router.Post("/bot-faqs", h.createFAQ)
 	router.Patch("/bot-faqs/:id", h.updateFAQ)
@@ -138,6 +156,20 @@ func (h *Handler) shareLink(c *fiber.Ctx) error {
 
 func (h *Handler) setupStatus(c *fiber.Ctx) error {
 	data, err := h.service.GetSetupStatus(c.UserContext(), currentUser(c))
+	return respond(c, data, err)
+}
+
+func (h *Handler) getCommerceWorkflowConfiguration(c *fiber.Ctx) error {
+	data, err := h.service.GetCommerceWorkflowConfiguration(c.UserContext(), currentUser(c))
+	return respond(c, data, err)
+}
+
+func (h *Handler) updateCommerceWorkflowConfiguration(c *fiber.Ctx) error {
+	var input CommerceWorkflowConfigurationInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.UpdateCommerceWorkflowConfiguration(c.UserContext(), currentUser(c), input)
 	return respond(c, data, err)
 }
 
@@ -437,6 +469,152 @@ func (h *Handler) updateFAQ(c *fiber.Ctx) error {
 	return respond(c, data, err)
 }
 
+func (h *Handler) listKnowledgeEntries(c *fiber.Ctx) error {
+	filter := KnowledgeEntryFilter{
+		Kind:     c.Query("kind"),
+		Category: c.Query("category"),
+		Status:   c.Query("status"),
+		Search:   c.Query("search"),
+	}
+	data, err := h.service.ListKnowledgeEntries(c.UserContext(), currentUser(c), filter)
+	return respond(c, data, err)
+}
+
+func (h *Handler) getKnowledgeEntry(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.GetKnowledgeEntry(c.UserContext(), currentUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) createKnowledgeEntry(c *fiber.Ctx) error {
+	var input KnowledgeEntryInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.CreateKnowledgeEntry(c.UserContext(), currentUser(c), input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) updateKnowledgeEntry(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input KnowledgeEntryInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.UpdateKnowledgeEntry(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) archiveKnowledgeEntry(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.ArchiveKnowledgeEntry(c.UserContext(), currentUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) listDocumentSources(c *fiber.Ctx) error {
+	filter := DocumentSourceFilter{
+		SourceType: c.Query("source_type"),
+		Status:     c.Query("status"),
+		Search:     c.Query("search"),
+	}
+	data, err := h.service.ListDocumentSources(c.UserContext(), currentUser(c), filter)
+	return respond(c, data, err)
+}
+
+func (h *Handler) getDocumentSource(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.GetDocumentSource(c.UserContext(), currentUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) createDocumentSource(c *fiber.Ctx) error {
+	var input DocumentSourceInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.CreateDocumentSource(c.UserContext(), currentUser(c), input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) updateDocumentSource(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input DocumentSourceInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.UpdateDocumentSource(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) archiveDocumentSource(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	options := DocumentSourceArchiveOptions{ArchiveLinkedKnowledge: boolQuery(c.Query("archive_linked_knowledge"))}
+	data, err := h.service.ArchiveDocumentSource(c.UserContext(), currentUser(c), id, options)
+	return respond(c, data, err)
+}
+
+func (h *Handler) listDocumentChunks(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.ListDocumentChunks(c.UserContext(), currentUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) updateDocumentChunk(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input DocumentChunkInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.UpdateDocumentChunk(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) approveDocumentChunk(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input DocumentChunkApprovalInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.ApproveDocumentChunk(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) archiveDocumentChunk(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.ArchiveDocumentChunk(c.UserContext(), currentUser(c), id)
+	return respond(c, data, err)
+}
+
 func (h *Handler) matchFAQ(c *fiber.Ctx) error {
 	var input struct {
 		Query string `json:"query"`
@@ -461,6 +639,11 @@ func bind(c *fiber.Ctx, target any) error {
 		return httperror.BadRequest("Invalid JSON payload")
 	}
 	return nil
+}
+
+func boolQuery(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return value == "true" || value == "1" || value == "yes"
 }
 
 func paramID(c *fiber.Ctx, name string) (uuid.UUID, error) {

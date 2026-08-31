@@ -43,7 +43,7 @@ func classifyCommand(text string) lifecycleCommand {
 		return commandRestart
 	case "menu", "main menu":
 		return commandMenu
-	case "cancel", "stop", "quit", "end":
+	case "cancel", "cancel order", "cancel request", "stop", "stop order", "quit", "end", "end order":
 		return commandCancel
 	case "back", "go back", "previous":
 		return commandBack
@@ -59,6 +59,15 @@ func classifyCommand(text string) lifecycleCommand {
 
 func isHardResetText(text string) bool {
 	return classifyCommand(text) == commandRestart
+}
+
+func isCommerceCancelText(text string) bool {
+	switch normalizeCommand(text) {
+	case "cancel order", "cancel request", "stop order", "end order":
+		return true
+	default:
+		return false
+	}
 }
 
 func isResetText(text string) bool {

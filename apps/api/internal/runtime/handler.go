@@ -24,9 +24,20 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Get("/runtime/conversations/:id", h.getConversation)
 	router.Get("/runtime/conversations/:id/messages", h.listConversationMessages)
 	router.Post("/runtime/conversations/:id/reply", h.replyToConversation)
+	router.Post("/runtime/conversations/:id/notes", h.addConversationNote)
+	router.Post("/runtime/conversations/:id/read", h.markConversationRead)
+	router.Post("/runtime/conversations/:id/unread", h.markConversationUnread)
+	router.Patch("/runtime/conversations/:id/status", h.updateConversationStatus)
+	router.Post("/runtime/conversations/:id/assign", h.assignConversation)
+	router.Post("/runtime/conversations/:id/unassign", h.unassignConversation)
+	router.Post("/runtime/conversations/:id/resolve", h.resolveConversation)
+	router.Post("/runtime/conversations/:id/reopen", h.reopenConversation)
+	router.Post("/runtime/conversations/:id/handoff", h.requestSupportHandoff)
 	router.Get("/runtime/support-handoffs", h.listSupportHandoffs)
 	router.Get("/runtime/support-tickets", h.listSupportTickets)
 	router.Post("/runtime/support-handoffs/:id/claim", h.claimSupportHandoff)
+	router.Post("/runtime/support-handoffs/:id/assign", h.assignSupportHandoff)
+	router.Post("/runtime/support-handoffs/:id/release", h.releaseSupportHandoff)
 	router.Post("/runtime/support-handoffs/:id/resolve", h.resolveSupportHandoff)
 	router.Post("/runtime/support-handoffs/:id/reopen", h.reopenSupportHandoff)
 	router.Get("/runtime/support-handoffs/:id/notes", h.listSupportHandoffNotes)
@@ -57,7 +68,13 @@ func (h *Handler) testMessage(c *fiber.Ctx) error {
 }
 
 func (h *Handler) listConversations(c *fiber.Ctx) error {
-	data, err := h.service.ListConversations(c.UserContext(), currentUser(c))
+	filter := ConversationFilter{
+		Status:   c.Query("status"),
+		Assigned: c.Query("assigned"),
+		Unread:   c.Query("unread") == "true",
+		Search:   c.Query("search"),
+	}
+	data, err := h.service.ListConversations(c.UserContext(), currentUser(c), filter)
 	return respond(c, data, err)
 }
 
@@ -66,7 +83,7 @@ func (h *Handler) getConversation(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	data, err := h.service.GetConversation(c.UserContext(), currentUser(c), id)
+	data, err := h.service.GetConversationDetail(c.UserContext(), currentUser(c), id)
 	return respond(c, data, err)
 }
 
@@ -92,6 +109,127 @@ func (h *Handler) replyToConversation(c *fiber.Ctx) error {
 	return respond(c, data, err)
 }
 
+func (h *Handler) addConversationNote(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	handoff, err := h.service.activeHandoffForSession(c.UserContext(), currentUser(c), id)
+	if err != nil {
+		return err
+	}
+	var input SupportHandoffNoteInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.AddSupportHandoffNote(c.UserContext(), currentUser(c), handoff.ID, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) markConversationRead(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.MarkConversationRead(c.UserContext(), currentUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) markConversationUnread(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.MarkConversationUnread(c.UserContext(), currentUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) updateConversationStatus(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input ConversationStatusInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.UpdateConversationStatus(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) assignConversation(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input ConversationAssignInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.AssignConversation(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) unassignConversation(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input SupportHandoffReleaseInput
+	if len(c.BodyRaw()) > 0 {
+		if err := bind(c, &input); err != nil {
+			return err
+		}
+	}
+	data, err := h.service.UnassignConversation(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) resolveConversation(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input SupportHandoffResolveInput
+	if len(c.BodyRaw()) > 0 {
+		if err := bind(c, &input); err != nil {
+			return err
+		}
+	}
+	data, err := h.service.ResolveConversation(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) reopenConversation(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input ConversationStatusInput
+	if len(c.BodyRaw()) > 0 {
+		if err := bind(c, &input); err != nil {
+			return err
+		}
+	}
+	data, err := h.service.ReopenConversation(c.UserContext(), currentUser(c), id, input.Reason)
+	return respond(c, data, err)
+}
+
+func (h *Handler) requestSupportHandoff(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input ConversationStatusInput
+	if len(c.BodyRaw()) > 0 {
+		if err := bind(c, &input); err != nil {
+			return err
+		}
+	}
+	data, err := h.service.RequestSupportHandoff(c.UserContext(), currentUser(c), id, input.Reason)
+	return respond(c, data, err)
+}
+
 func (h *Handler) listSupportHandoffs(c *fiber.Ctx) error {
 	data, err := h.service.ListSupportHandoffs(c.UserContext(), currentUser(c), c.Query("status"))
 	return respond(c, data, err)
@@ -114,6 +252,34 @@ func (h *Handler) claimSupportHandoff(c *fiber.Ctx) error {
 		}
 	}
 	data, err := h.service.ClaimSupportHandoff(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) assignSupportHandoff(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input SupportHandoffAssignInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.service.AssignSupportHandoff(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) releaseSupportHandoff(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input SupportHandoffReleaseInput
+	if len(c.BodyRaw()) > 0 {
+		if err := bind(c, &input); err != nil {
+			return err
+		}
+	}
+	data, err := h.service.ReleaseSupportHandoff(c.UserContext(), currentUser(c), id, input)
 	return respond(c, data, err)
 }
 

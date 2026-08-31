@@ -10,6 +10,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/jobs"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -20,6 +21,14 @@ type botFixture struct {
 	service *Service
 	actor   auth.CurrentUser
 }
+
+type testWhatsAppConfiguration struct {
+	OrganizationID     uuid.UUID `gorm:"type:uuid;index"`
+	ConnectionID       uuid.UUID `gorm:"column:channel_connection_id;type:uuid;index"`
+	DisplayPhoneNumber string
+}
+
+func (testWhatsAppConfiguration) TableName() string { return "channel_whatsapp_configs" }
 
 func newBotFixture(t *testing.T) botFixture {
 	t.Helper()
@@ -40,6 +49,7 @@ func newBotFixture(t *testing.T) botFixture {
 		&core.PaymentConfiguration{},
 		&core.PaymentProviderSecret{},
 		&Bot{},
+		&CommerceWorkflowConfiguration{},
 		&BotVersion{},
 		&VersionModule{},
 		&Variable{},
@@ -50,6 +60,10 @@ func newBotFixture(t *testing.T) botFixture {
 		&Step{},
 		&PublishedSnapshot{},
 		&FAQ{},
+		&KnowledgeEntry{},
+		&DocumentSource{},
+		&DocumentChunk{},
+		&jobs.Job{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +91,107 @@ func TestCreateBotCreatesDraftVersionAndStaysTenantScoped(t *testing.T) {
 	otherActor := auth.CurrentUser{ID: uuid.New(), OrganizationID: uuid.New(), Role: authz.MerchantAdmin}
 	if _, err := fx.service.GetBot(context.Background(), otherActor, bot.ID); err == nil {
 		t.Fatal("expected cross-tenant bot lookup to fail")
+	}
+}
+
+func TestSummarizeSetupStatusOnlyBlocksOnRequiredItems(t *testing.T) {
+	items := []ChecklistItem{
+		{Key: "business", Complete: true, Required: true},
+		{Key: "catalogue", Complete: false, Required: true},
+		{Key: "channel", Complete: false, Required: false},
+		{Key: "team", Complete: true, Required: false},
+	}
+	complete, requiredComplete, required := summarizeSetupStatus(items)
+	if complete != 2 || requiredComplete != 1 || required != 2 {
+		t.Fatalf("unexpected readiness summary: complete=%d required_complete=%d required=%d", complete, requiredComplete, required)
+	}
+}
+
+func TestSetupStatusIsTenantScopedAndRecognizesStructuredKnowledge(t *testing.T) {
+	fx := newBotFixture(t)
+	otherOrgID := uuid.New()
+	if err := fx.db.Create(&organization.Organization{ID: otherOrgID, Name: "Other Merchant", Slug: "other", Currency: "NGN", Timezone: "Africa/Lagos", Country: "NG", Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Create(&core.Store{ID: uuid.New(), OrganizationID: otherOrgID, Name: "Other Store", Code: "OTHER", Status: core.StatusActive}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Create(&KnowledgeEntry{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Kind: "policy", Category: "returns", Title: "Returns", Answer: "Returns are accepted within seven days.", Status: core.StatusActive}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := fx.service.GetSetupStatus(context.Background(), fx.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := make(map[string]ChecklistItem, len(status.Items))
+	for _, item := range status.Items {
+		items[item.Key] = item
+	}
+	if items["stores"].Complete {
+		t.Fatal("another tenant's store must not satisfy readiness")
+	}
+	if !items["faqs"].Complete {
+		t.Fatal("active structured knowledge should satisfy business knowledge readiness")
+	}
+	if items["organization"].Complete {
+		t.Fatal("an incomplete business profile should not be marked ready")
+	}
+	if items["whatsapp"].Required || status.RequiredCount == 0 {
+		t.Fatal("customer channel should be non-blocking")
+	}
+
+	staff := auth.CurrentUser{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Role: authz.StoreStaff}
+	if _, err := fx.service.GetSetupStatus(context.Background(), staff); err == nil {
+		t.Fatal("store staff should not receive organization setup details")
+	}
+}
+
+func TestPhaseGCommerceWorkflowConfigurationIsTenantScopedPermissionedAndAudited(t *testing.T) {
+	fx := newBotFixture(t)
+	ordering := true
+	payment := false
+	handoff := true
+	updated, err := fx.service.UpdateCommerceWorkflowConfiguration(context.Background(), fx.actor, CommerceWorkflowConfigurationInput{
+		BotDisplayName:           "Operations assistant",
+		Greeting:                 "Welcome to the store.",
+		Tone:                     "concise",
+		OrderingEnabled:          &ordering,
+		PaymentEnabled:           &payment,
+		HumanHandoffEnabled:      &handoff,
+		StoreSelectionStrategy:   StoreSelectionFirstAvailable,
+		EnabledActions:           []string{"get_stores", "create_order", "handoff_to_agent"},
+		SupportedFulfilmentModes: []string{"pickup", "merchant_rider"},
+		PostPaymentSteps:         []string{"notify_customer", "merchant_prepares", "enable_tracking"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.OrganizationID != fx.actor.OrganizationID || updated.PaymentEnabled || updated.StoreSelectionStrategy != StoreSelectionFirstAvailable {
+		t.Fatalf("unexpected workflow configuration: %+v", updated)
+	}
+	if !updated.AllowsAction("create_order") || updated.AllowsAction("initialize_payment") || updated.AllowsFulfilmentMode("customer_rider") {
+		t.Fatalf("workflow enforcement does not match saved configuration: %+v", updated)
+	}
+
+	storeStaff := auth.CurrentUser{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Role: authz.StoreStaff}
+	if _, err := fx.service.UpdateCommerceWorkflowConfiguration(context.Background(), storeStaff, CommerceWorkflowConfigurationInput{}); err == nil {
+		t.Fatal("expected store staff workflow update to be denied")
+	}
+	other := auth.CurrentUser{ID: uuid.New(), OrganizationID: uuid.New(), Role: authz.MerchantAdmin}
+	otherView, err := fx.service.GetCommerceWorkflowConfiguration(context.Background(), other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherView.OrganizationID != other.OrganizationID || otherView.BotDisplayName == updated.BotDisplayName {
+		t.Fatalf("expected another tenant to receive only its own default, got %+v", otherView)
+	}
+	var auditCount int64
+	if err := fx.db.Model(&organization.AuditLog{}).Where("organization_id = ? AND action = ?", fx.actor.OrganizationID, "commerce_workflow_configuration_updated").Count(&auditCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("expected one workflow audit record, got %d", auditCount)
 	}
 }
 
@@ -327,7 +442,168 @@ func TestFAQMatchingIsDeterministicAndTenantScoped(t *testing.T) {
 	}
 }
 
-func TestShareLinkRequiresPublishedBotAndActiveWhatsAppChannel(t *testing.T) {
+func TestKnowledgeEntriesCRUDIsTenantScopedAndAudited(t *testing.T) {
+	fx := newBotFixture(t)
+	entry, err := fx.service.CreateKnowledgeEntry(context.Background(), fx.actor, KnowledgeEntryInput{
+		Kind:     KnowledgeKindReturns,
+		Category: "Returns",
+		Title:    "Returns policy",
+		Question: "Can I return an item?",
+		Answer:   "Returns are accepted within 7 days with a receipt.",
+		Keywords: []string{"refunds", "returns"},
+		Status:   "active",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.OrganizationID != fx.actor.OrganizationID || entry.Kind != KnowledgeKindReturns || entry.Category != "returns" {
+		t.Fatalf("unexpected entry: %+v", entry)
+	}
+	entries, err := fx.service.ListKnowledgeEntries(context.Background(), fx.actor, KnowledgeEntryFilter{Kind: KnowledgeKindReturns, Search: "receipt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].ID != entry.ID {
+		t.Fatalf("expected filtered entry, got %+v", entries)
+	}
+	otherActor := auth.CurrentUser{ID: uuid.New(), OrganizationID: uuid.New(), Role: authz.MerchantAdmin}
+	if _, err := fx.service.GetKnowledgeEntry(context.Background(), otherActor, entry.ID); err == nil {
+		t.Fatal("expected cross-tenant knowledge lookup to fail")
+	}
+	updated, err := fx.service.UpdateKnowledgeEntry(context.Background(), fx.actor, entry.ID, KnowledgeEntryInput{Answer: "Returns are accepted within 14 days with a receipt.", Status: "draft"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Answer != "Returns are accepted within 14 days with a receipt." || updated.Status != "draft" {
+		t.Fatalf("unexpected update: %+v", updated)
+	}
+	archived, err := fx.service.ArchiveKnowledgeEntry(context.Background(), fx.actor, entry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.Status != "archived" {
+		t.Fatalf("expected archived status, got %+v", archived)
+	}
+	var logs []organization.AuditLog
+	if err := fx.db.Where("organization_id = ? AND target_type = ?", fx.actor.OrganizationID, "merchant_knowledge_entry").Find(&logs).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 3 {
+		t.Fatalf("expected create/update/archive audit logs, got %d", len(logs))
+	}
+}
+
+func TestKnowledgeEntriesPermissions(t *testing.T) {
+	fx := newBotFixture(t)
+	viewer := auth.CurrentUser{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Role: authz.Viewer}
+	if _, err := fx.service.ListKnowledgeEntries(context.Background(), viewer, KnowledgeEntryFilter{}); err != nil {
+		t.Fatalf("viewer should read knowledge: %v", err)
+	}
+	if _, err := fx.service.CreateKnowledgeEntry(context.Background(), viewer, KnowledgeEntryInput{Kind: KnowledgeKindFAQ, Title: "FAQ", Answer: "Answer"}); err == nil {
+		t.Fatal("expected viewer create knowledge to be forbidden")
+	}
+	support := auth.CurrentUser{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Role: authz.SupportAgent}
+	if _, err := fx.service.ListKnowledgeEntries(context.Background(), support, KnowledgeEntryFilter{}); err != nil {
+		t.Fatalf("support agent should read knowledge: %v", err)
+	}
+	if _, err := fx.service.CreateKnowledgeEntry(context.Background(), support, KnowledgeEntryInput{Kind: KnowledgeKindFAQ, Title: "FAQ", Answer: "Answer"}); err == nil {
+		t.Fatal("expected support create knowledge to be forbidden")
+	}
+}
+
+func TestKnowledgeEntriesActiveFilteringSupportsAIRetrieval(t *testing.T) {
+	fx := newBotFixture(t)
+	active, err := fx.service.CreateKnowledgeEntry(context.Background(), fx.actor, KnowledgeEntryInput{Kind: KnowledgeKindWarranty, Title: "Warranty", Question: "Warranty policy?", Answer: "Warranty lasts 30 days.", Keywords: []string{"warranty"}, Status: "active"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.CreateKnowledgeEntry(context.Background(), fx.actor, KnowledgeEntryInput{Kind: KnowledgeKindWarranty, Title: "Old warranty", Question: "Old warranty policy?", Answer: "This draft should not ground answers.", Keywords: []string{"warranty"}, Status: "draft"}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := fx.service.ListKnowledgeEntries(context.Background(), fx.actor, KnowledgeEntryFilter{Status: "active"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].ID != active.ID {
+		t.Fatalf("expected only active entry, got %+v", entries)
+	}
+}
+
+func TestKnowledgeEmbeddingLifecycleIsOptInAndActiveOnly(t *testing.T) {
+	fx := newBotFixture(t)
+	jobService := jobs.NewService(fx.db, nil)
+	fx.service.ConfigureJobs(jobService)
+
+	disabled, err := fx.service.CreateKnowledgeEntry(context.Background(), fx.actor, KnowledgeEntryInput{
+		Kind:     KnowledgeKindWarranty,
+		Category: "warranty",
+		Title:    "Disabled warranty",
+		Question: "What is your warranty?",
+		Answer:   "Warranty lasts 30 days.",
+		Status:   core.StatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.EmbeddingStatus != KnowledgeEmbeddingStatusDisabled {
+		t.Fatalf("expected disabled embedding status before opt-in, got %+v", disabled)
+	}
+	assertEmbeddingJobCount(t, fx, disabled.ID, 0)
+
+	fx.service.ConfigureKnowledgeEmbeddings(true)
+	active, err := fx.service.CreateKnowledgeEntry(context.Background(), fx.actor, KnowledgeEntryInput{
+		Kind:     KnowledgeKindReturns,
+		Category: "returns",
+		Title:    "Returns",
+		Question: "Can I return an order?",
+		Answer:   "Returns are accepted within 7 days with receipt proof.",
+		Keywords: []string{"returns", "receipt"},
+		Status:   core.StatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.EmbeddingStatus != KnowledgeEmbeddingStatusPending || active.EmbeddingContentHash == "" || active.Embedding != nil {
+		t.Fatalf("expected active knowledge to be pending embedding, got %+v", active)
+	}
+	assertEmbeddingJobCount(t, fx, active.ID, 1)
+
+	draft, err := fx.service.CreateKnowledgeEntry(context.Background(), fx.actor, KnowledgeEntryInput{
+		Kind:   KnowledgeKindPolicy,
+		Title:  "Draft policy",
+		Answer: "Draft policy should not be embedded.",
+		Status: "draft",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.EmbeddingStatus != KnowledgeEmbeddingStatusDisabled {
+		t.Fatalf("expected draft knowledge to keep embeddings disabled, got %+v", draft)
+	}
+	assertEmbeddingJobCount(t, fx, draft.ID, 0)
+
+	updated, err := fx.service.UpdateKnowledgeEntry(context.Background(), fx.actor, active.ID, KnowledgeEntryInput{
+		Answer: "Returns are accepted within 14 days with receipt proof.",
+		Status: core.StatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.EmbeddingStatus != KnowledgeEmbeddingStatusPending || updated.EmbeddingContentHash == active.EmbeddingContentHash {
+		t.Fatalf("expected content update to mark embedding stale, before=%s after=%+v", active.EmbeddingContentHash, updated)
+	}
+	assertEmbeddingJobCount(t, fx, updated.ID, 2)
+
+	archived, err := fx.service.ArchiveKnowledgeEntry(context.Background(), fx.actor, updated.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.EmbeddingStatus != KnowledgeEmbeddingStatusDisabled || archived.Embedding != nil {
+		t.Fatalf("expected archive to disable embedding, got %+v", archived)
+	}
+}
+
+func TestShareLinkRequiresPublishedBotAndUsableWhatsAppChannel(t *testing.T) {
 	fx := newBotFixture(t)
 	bot, version := createBotWithVersion(t, fx)
 	link, err := fx.service.GetShareLink(context.Background(), fx.actor, bot.ID)
@@ -343,8 +619,14 @@ func TestShareLinkRequiresPublishedBotAndActiveWhatsAppChannel(t *testing.T) {
 	if _, err := fx.service.PublishVersion(context.Background(), fx.actor, version.ID); err != nil {
 		t.Fatal(err)
 	}
-	channel := core.Channel{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Provider: "whatsapp", DisplayName: "WhatsApp", PhoneNumberID: "phone-id", DisplayNumber: "+2348012345678", Status: core.StatusActive, Config: "{}", SecretConfig: `{"token":"hidden"}`}
+	channel := core.Channel{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Provider: "whatsapp", DisplayName: "WhatsApp", PhoneNumberID: "phone-id", Status: "healthy", Config: "{}", SecretConfig: `{"token":"hidden"}`}
 	if err := fx.db.Create(&channel).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.AutoMigrate(&testWhatsAppConfiguration{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Create(&testWhatsAppConfiguration{OrganizationID: fx.actor.OrganizationID, ConnectionID: channel.ID, DisplayPhoneNumber: "+2348012345678"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	link, err = fx.service.GetShareLink(context.Background(), fx.actor, bot.ID)
@@ -353,6 +635,19 @@ func TestShareLinkRequiresPublishedBotAndActiveWhatsAppChannel(t *testing.T) {
 	}
 	if !link.Available || link.URL == "" || link.DisplayNumber != "2348012345678" {
 		t.Fatalf("expected available wa.me link, got %+v", link)
+	}
+}
+
+func assertEmbeddingJobCount(t *testing.T, fx botFixture, entryID uuid.UUID, want int64) {
+	t.Helper()
+	var count int64
+	if err := fx.db.Model(&jobs.Job{}).
+		Where("job_type = ? AND correlation_id = ?", jobs.JobTypeKnowledgeEmbedding, entryID.String()).
+		Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != want {
+		t.Fatalf("expected %d embedding jobs for %s, got %d", want, entryID, count)
 	}
 }
 

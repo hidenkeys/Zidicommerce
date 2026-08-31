@@ -1,7 +1,9 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiGet, apiPatch, apiPost, apiPut } from "../api/client";
-import { Badge, Card, EmptyState, Flash, FormGrid, Page } from "../components/ui";
+import { useAuth } from "../auth";
+import { Badge, Card, ConfirmButton, EmptyState, Flash, FormGrid, LoadingState, Page, SectionHeader } from "../components/ui";
 import { humanStatus, roleLabel, type Row } from "../lib/format";
+import { hasPermission } from "../lib/permissions";
 
 type Member = Row & { id: string; role?: string; status?: string; user?: Row };
 type Store = Row & { id: string; name?: string };
@@ -16,6 +18,14 @@ type Invitation = Row & {
 };
 
 const roles = ["merchant_admin", "store_manager", "store_staff", "support_agent", "viewer"];
+
+const roleDescriptions: Record<string, string> = {
+  merchant_admin: "Full access to the organization, configuration, people, and every store.",
+  store_manager: "Runs assigned stores, including orders, catalogue, inventory, and store staff.",
+  store_staff: "Handles day-to-day orders and inventory for assigned stores.",
+  support_agent: "Works with customers and conversations without changing business setup.",
+  viewer: "Can review permitted business information without making changes.",
+};
 
 function memberName(member: Member) {
   const user = member.user ?? {};
@@ -40,6 +50,10 @@ function emailStatusLabel(invitation: Invitation) {
 }
 
 export function TeamPage() {
+  const { user } = useAuth();
+  const canInviteStaff = hasPermission(user.role, "staff.invite");
+  const canUpdateStaff = hasPermission(user.role, "staff.update");
+  const canRemoveStaff = hasPermission(user.role, "staff.remove");
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
@@ -50,6 +64,7 @@ export function TeamPage() {
   const [message, setMessage] = useState("");
   const [flash, setFlash] = useState("");
   const [sending, setSending] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function load() {
     try {
@@ -64,6 +79,8 @@ export function TeamPage() {
       setSelectedMember((current) => current || memberResponse.data[0]?.id || "");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load team");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -132,7 +149,7 @@ export function TeamPage() {
     <Page title="People" description="Invite staff and decide which stores they can work in." help="Owners see everything. Managers and staff only see stores you assign.">
       <Flash message={message} />
       <Flash message={flash} tone="success" />
-      <FormGrid onSubmit={submit} title="Invite someone">
+      {canInviteStaff ? <FormGrid onSubmit={submit} title="Invite someone">
         <label>First name<input value={invite.first_name} onChange={(event) => setInvite({ ...invite, first_name: event.target.value })} required /></label>
         <label>Last name<input value={invite.last_name} onChange={(event) => setInvite({ ...invite, last_name: event.target.value })} /></label>
         <label>Email<input type="email" value={invite.email} onChange={(event) => setInvite({ ...invite, email: event.target.value })} required /></label>
@@ -140,6 +157,7 @@ export function TeamPage() {
           <select value={invite.role} onChange={(event) => setInvite({ ...invite, role: event.target.value })}>
             {roles.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
           </select>
+          <span className="field-help">{roleDescriptions[invite.role]}</span>
         </label>
         <div className="full">
           <p className="help-text">Store access (for managers and staff)</p>
@@ -151,10 +169,10 @@ export function TeamPage() {
           ))}
         </div>
         <div className="full"><button type="submit" disabled={sending}>{sending ? "Sending..." : "Send invitation"}</button></div>
-      </FormGrid>
+      </FormGrid> : <p className="read-only-note">Team membership and roles are read-only for your account.</p>}
       <Card>
-        <h3>Pending invitations</h3>
-        {pendingInvites.length === 0 ? (
+        <SectionHeader title="Pending invitations" description="Invitations expire after seven days and can be sent again." />
+        {loading ? <LoadingState label="Loading invitations" /> : pendingInvites.length === 0 ? (
           <EmptyState title="No pending invitations" body="Invited people appear here until they accept." />
         ) : (
           <div className="table-wrap" style={{ border: 0, margin: 0 }}>
@@ -178,7 +196,7 @@ export function TeamPage() {
                       {invitation.email_status === "failed" && invitation.email_error ? <p className="muted">{invitation.email_error}</p> : null}
                     </td>
                     <td>{expiryCopy(invitation.expires_at)}</td>
-                    <td><button type="button" onClick={() => void resend(invitation)}>Resend invitation</button></td>
+                    <td>{canInviteStaff ? <button type="button" onClick={() => void resend(invitation)}>Resend invitation</button> : null}</td>
                   </tr>
                 ))}
               </tbody>
@@ -187,7 +205,8 @@ export function TeamPage() {
         )}
       </Card>
       <Card>
-        {members.length === 0 ? (
+        <SectionHeader title="Team members" description="Roles control what each person can see and change." />
+        {loading ? <LoadingState label="Loading team" /> : members.length === 0 ? (
           <EmptyState title="No team members" body="Invite the people who take orders or handle support." />
         ) : (
           <div className="table-wrap" style={{ border: 0, margin: 0 }}>
@@ -207,17 +226,17 @@ export function TeamPage() {
                     <td>{memberName(member)}</td>
                     <td>{String(member.user?.email ?? "")}</td>
                     <td>
-                      <select value={String(member.role ?? "viewer")} onChange={(event) => void updateMember(member.id, { role: event.target.value })}>
+                      {canUpdateStaff ? <select value={String(member.role ?? "viewer")} onChange={(event) => void updateMember(member.id, { role: event.target.value })}>
                         {roles.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
-                      </select>
+                      </select> : roleLabel(String(member.role ?? "viewer"))}
                     </td>
                     <td><Badge tone={member.status === "active" ? "success" : "warning"}>{humanStatus(member.status)}</Badge></td>
                     <td>
-                      {member.status === "disabled" ? (
+                      {canRemoveStaff ? member.status === "disabled" ? (
                         <button type="button" onClick={() => void updateMember(member.id, { status: "active" })}>Reactivate</button>
                       ) : (
-                        <button type="button" className="danger" onClick={() => window.confirm("Deactivate this person?") && void updateMember(member.id, { status: "disabled" })}>Deactivate</button>
-                      )}
+                        <ConfirmButton label="Deactivate" confirm={`${memberName(member)} will lose access until reactivated.`} onConfirm={() => void updateMember(member.id, { status: "disabled" })} tone="danger" />
+                      ) : null}
                     </td>
                   </tr>
                 ))}
@@ -227,16 +246,18 @@ export function TeamPage() {
         )}
       </Card>
       <Card>
-        <h3>Store access</h3>
-        <p className="muted">Select a person above, then choose the stores they can work in.</p>
-        {stores.map((store) => (
-          <label key={store.id}>
-            <input type="checkbox" checked={assigned.includes(store.id)} onChange={() => setAssigned(toggle(assigned, store.id))} />
-            {store.name}
-          </label>
-        ))}
+        <SectionHeader title="Store access" description="Choose the locations this person can work in. Organization administrators retain access to every store." />
+        {selectedMember ? <p><strong>{memberName(members.find((member) => member.id === selectedMember) ?? { id: "" })}</strong> · {roleLabel(String(members.find((member) => member.id === selectedMember)?.role ?? "viewer"))}</p> : null}
+        <div className="store-access-grid">
+          {stores.map((store) => (
+            <label key={store.id} className="selection-row">
+              <input type="checkbox" disabled={!canUpdateStaff} checked={assigned.includes(store.id)} onChange={() => setAssigned(toggle(assigned, store.id))} />
+              <span><strong>{store.name}</strong><small>{assigned.includes(store.id) ? "Access granted" : "No access"}</small></span>
+            </label>
+          ))}
+        </div>
         <div className="page-actions" style={{ marginTop: 12 }}>
-          <button type="button" className="primary" onClick={() => void saveAccess()}>Save access</button>
+          {canUpdateStaff ? <button type="button" className="primary" onClick={() => void saveAccess()}>Save access</button> : null}
         </div>
       </Card>
     </Page>

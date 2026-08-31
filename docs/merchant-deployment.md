@@ -77,14 +77,14 @@ Minimal import shape:
       "phone_number_id": "META_PHONE_NUMBER_ID",
       "display_number": "+234...",
       "status": "active",
-      "config": "{\"verify_token\":\"shared-token\",\"bot_id\":\"published-bot-id\"}",
-      "secret_config": "{\"app_secret\":\"meta-app-secret\",\"access_token\":\"meta-access-token\"}"
+      "config": "{\"bot_id\":\"published-bot-id\"}",
+      "secret_config": "{}"
     }
   ]
 }
 ```
 
-Do not put real secrets in sample files or source control. Channel secrets are accepted by the API but are not returned in API responses.
+Do not put real secrets in import files or source control. The normal merchant path is Organization -> Channels -> Connect with Meta. Manual encrypted values or server-side secret references are reserved for legacy/operator recovery.
 
 For Bing Chun, keep the real catalogue and pricing in import/configuration data such as `merchant-config/bingchun/*.json`. Do not add Bing Chun conditionals to backend/runtime code.
 
@@ -98,15 +98,18 @@ https://api.example.com/v1/runtime/webhooks/whatsapp
 
 The runtime verifies `X-Hub-Signature-256`, resolves the organization from `phone_number_id`, resolves or creates the customer from the WhatsApp sender phone number, runs the published bot snapshot, persists outbound delivery records, then sends replies through the WhatsApp Cloud API adapter.
 
-Required channel configuration:
+Required Zidi environment configuration for Embedded Signup:
 
-- `provider`: `whatsapp`
-- `phone_number_id`: Meta phone number ID
-- `config.verify_token`: webhook verification token
-- `config.bot_id`: bot to run for the channel
-- `secret_config.app_secret`: Meta app secret
-- `secret_config.access_token`: WhatsApp Cloud API token
-- optional `config.graph_version`: defaults to `v20.0`
+- `META_APP_ID`
+- `META_APP_SECRET`
+- `META_EMBEDDED_SIGNUP_CONFIGURATION_ID`
+- an explicit `META_GRAPH_API_VERSION`
+- `META_WEBHOOK_VERIFY_TOKEN`
+- `CHANNEL_SECRET_ENCRYPTION_KEY`
+- a public HTTPS `WHATSAPP_WEBHOOK_PUBLIC_BASE_URL`
+- a published bot attached to the resulting channel connection
+
+Meta still requires an appropriately configured app, Embedded Signup configuration, business assets, permissions/App Review where applicable, and webhook subscription. The Phase K sender no longer reads `channels.secret_config` directly. Embedded Signup stores the exchanged access token as a write-only encrypted `dbenc://` credential and uses server-side references for the shared app secret and verify token. Existing legacy values can be migrated explicitly from the Channels page and retained for recovery. See [Meta WhatsApp Connection](meta-whatsapp-connection.md) and [Meta/WhatsApp Production Adapter](whatsapp-adapter.md).
 
 ## Bot Configuration
 

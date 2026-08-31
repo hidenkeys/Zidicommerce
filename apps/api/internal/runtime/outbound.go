@@ -20,7 +20,7 @@ import (
 )
 
 type ChannelSender interface {
-	Send(ctx context.Context, channel core.Channel, recipient string, message OutboundMessage, payload map[string]any) (ProviderSendResult, error)
+	Send(ctx context.Context, channel core.Channel, recipient string, message OutboundMessage, payload map[string]any, idempotencyKey string) (ProviderSendResult, error)
 }
 
 type ProviderSendResult struct {
@@ -211,15 +211,19 @@ func (s *Service) SendOutboundNow(ctx context.Context, deliveryID uuid.UUID, att
 	if err := json.Unmarshal([]byte(defaultObject(delivery.Payload)), &payload); err != nil {
 		return jobs.PermanentError{Err: err}
 	}
-	message := OutboundMessage{Type: delivery.MessageType}
+	message := outboundMessageFromPayload(delivery.MessageType, payload)
 	sendCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	providerResult, err := sender.Send(sendCtx, channel, delivery.Recipient, message, payload)
+	providerResult, err := sender.Send(sendCtx, channel, delivery.Recipient, message, payload, delivery.IdempotencyKey)
 	cancel()
 	now := s.now()
 	if err != nil {
 		nextAttempt := now.Add(outboundBackoff(attempt))
 		status := OutboundRetryPending
-		if maxAttempts > 0 && attempt >= maxAttempts {
+		permanent := false
+		if policyError, ok := err.(interface{ Permanent() bool }); ok {
+			permanent = policyError.Permanent()
+		}
+		if permanent || maxAttempts > 0 && attempt >= maxAttempts {
 			status = OutboundFailedPermanently
 		}
 		updateErr := s.db.WithContext(ctx).Model(&delivery).Updates(map[string]any{"status": status, "error_message": publicSendError(err), "attempts": attempt, "next_attempt_at": &nextAttempt, "updated_at": now}).Error
@@ -227,6 +231,9 @@ func (s *Service) SendOutboundNow(ctx context.Context, deliveryID uuid.UUID, att
 			return updateErr
 		}
 		s.log.Warn("runtime outbound send failed", "organization_id", channel.OrganizationID, "channel_id", channel.ID, "provider", channel.Provider, "delivery_id", delivery.ID, "error", publicSendError(err))
+		if permanent {
+			return jobs.PermanentError{Err: err}
+		}
 		return err
 	}
 	now = s.now()
@@ -328,15 +335,21 @@ func (s *Service) ListOutboundMessages(ctx context.Context, organizationID uuid.
 	return rows, err
 }
 
-func (s *Service) channelPayload(channel core.Channel, recipient string, message OutboundMessage) map[string]any {
-	if strings.EqualFold(channel.Provider, "whatsapp") {
-		payload := s.TranslateWhatsAppOutbound(message)
-		payload["messaging_product"] = "whatsapp"
-		payload["recipient_type"] = "individual"
-		payload["to"] = recipient
-		return payload
-	}
+func (s *Service) channelPayload(_ core.Channel, recipient string, message OutboundMessage) map[string]any {
 	return map[string]any{"to": recipient, "type": message.Type, "text": message.Text, "options": message.Options, "media_url": message.MediaURL}
+}
+
+func outboundMessageFromPayload(messageType string, payload map[string]any) OutboundMessage {
+	message := OutboundMessage{Type: messageType}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return message
+	}
+	_ = json.Unmarshal(body, &message)
+	if strings.TrimSpace(message.Type) == "" {
+		message.Type = messageType
+	}
+	return message
 }
 
 type WhatsAppCloudSender struct {
@@ -356,7 +369,7 @@ func NewWhatsAppCloudSender(graphBaseURL string, logger *slog.Logger) *WhatsAppC
 	return &WhatsAppCloudSender{graphBaseURL: graphBaseURL, client: &http.Client{Timeout: 12 * time.Second}, log: logger}
 }
 
-func (s *WhatsAppCloudSender) Send(ctx context.Context, channel core.Channel, recipient string, _ OutboundMessage, payload map[string]any) (ProviderSendResult, error) {
+func (s *WhatsAppCloudSender) Send(ctx context.Context, channel core.Channel, recipient string, message OutboundMessage, _ map[string]any, _ string) (ProviderSendResult, error) {
 	secrets := parseJSONMap(channel.SecretConfig)
 	config := parseJSONMap(channel.Config)
 	token := strings.TrimSpace(stringValue(secrets["access_token"]))
@@ -371,6 +384,10 @@ func (s *WhatsAppCloudSender) Send(ctx context.Context, channel core.Channel, re
 	if graphVersion == "" {
 		graphVersion = "v20.0"
 	}
+	payload := translateWhatsAppOutbound(message)
+	payload["messaging_product"] = "whatsapp"
+	payload["recipient_type"] = "individual"
+	payload["to"] = recipient
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return ProviderSendResult{}, err
@@ -428,7 +445,7 @@ type MockChannelSender struct {
 	Sent      []map[string]any
 }
 
-func (m *MockChannelSender) Send(ctx context.Context, _ core.Channel, recipient string, _ OutboundMessage, payload map[string]any) (ProviderSendResult, error) {
+func (m *MockChannelSender) Send(ctx context.Context, _ core.Channel, recipient string, _ OutboundMessage, payload map[string]any, idempotencyKey string) (ProviderSendResult, error) {
 	if m.Delay > 0 {
 		select {
 		case <-ctx.Done():
@@ -438,7 +455,7 @@ func (m *MockChannelSender) Send(ctx context.Context, _ core.Channel, recipient 
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.Sent = append(m.Sent, map[string]any{"recipient": recipient, "payload": payload})
+	m.Sent = append(m.Sent, map[string]any{"recipient": recipient, "payload": payload, "idempotency_key": idempotencyKey})
 	index := len(m.Sent) - 1
 	if index < len(m.Errors) && m.Errors[index] != nil {
 		return ProviderSendResult{}, m.Errors[index]

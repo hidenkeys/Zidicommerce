@@ -14,6 +14,13 @@ type HandoffInboundHandler func(ctx context.Context, organizationID, sessionID u
 
 type LifecycleCancelHandler func(ctx context.Context, runtimeContext RuntimeContext) (handled bool, message string, err error)
 
+type AIInboundResponse struct {
+	Reply     string
+	Variables string
+}
+
+type AIInboundHandler func(ctx context.Context, session ConversationSession, text string) (AIInboundResponse, error)
+
 func (s *Service) RegisterAction(key string, handler ActionHandler) {
 	if s.actions == nil {
 		s.actions = NewActionRegistry(s.db, s.commerce)
@@ -23,6 +30,10 @@ func (s *Service) RegisterAction(key string, handler ActionHandler) {
 
 func (s *Service) ConfigureHandoffInbound(handler HandoffInboundHandler) {
 	s.handoffInbound = handler
+}
+
+func (s *Service) ConfigureAIInbound(handler AIInboundHandler) {
+	s.aiInbound = handler
 }
 
 func (s *Service) SendText(ctx context.Context, organizationID uuid.UUID, recipient, text string) error {
@@ -35,9 +46,9 @@ func (s *Service) SendText(ctx context.Context, organizationID uuid.UUID, recipi
 	// on the test channel (a demo, a pilot before Meta approval) still records
 	// what would have been sent instead of dropping it silently.
 	var channel core.Channel
-	err := s.db.WithContext(ctx).Where("organization_id = ? AND provider = ? AND status = ?", organizationID, "whatsapp", core.StatusActive).Order("updated_at DESC").First(&channel).Error
+	err := s.db.WithContext(ctx).Where("organization_id = ? AND provider = ? AND status IN ?", organizationID, "whatsapp", runtimeUsableChannelStatuses).Order("updated_at DESC").First(&channel).Error
 	if err != nil {
-		if err := s.db.WithContext(ctx).Where("organization_id = ? AND status = ?", organizationID, core.StatusActive).Order("updated_at DESC").First(&channel).Error; err != nil {
+		if err := s.db.WithContext(ctx).Where("organization_id = ? AND status IN ?", organizationID, runtimeUsableChannelStatuses).Order("updated_at DESC").First(&channel).Error; err != nil {
 			s.log.Info("skipping outbound text; no active channel", "organization_id", organizationID)
 			return nil
 		}
@@ -57,7 +68,7 @@ func (s *Service) AssignHandoff(ctx context.Context, organizationID, sessionID, 
 	metadata := fmt.Sprintf(`{"request_id":%q}`, requestID)
 	var existing SupportHandoff
 	err := s.db.WithContext(ctx).
-		Where("organization_id = ? AND session_id = ? AND status IN ?", organizationID, sessionID, []string{"open", "assigned"}).
+		Where("organization_id = ? AND session_id = ? AND status IN ?", organizationID, sessionID, activeHandoffStatuses).
 		First(&existing).Error
 	switch {
 	case err == nil:
@@ -68,7 +79,7 @@ func (s *Service) AssignHandoff(ctx context.Context, organizationID, sessionID, 
 		if err := s.db.WithContext(ctx).Model(&SupportHandoff{}).Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
 			return uuid.Nil, err
 		}
-		if err := s.db.WithContext(ctx).Model(&ConversationSession{}).Where("organization_id = ? AND id = ?", organizationID, sessionID).Updates(map[string]any{"status": SessionHandoff, "updated_at": now}).Error; err != nil {
+		if err := s.db.WithContext(ctx).Model(&ConversationSession{}).Where("organization_id = ? AND id = ?", organizationID, sessionID).Updates(map[string]any{"status": SessionHandoff, "conversation_status": ConversationHumanAssigned, "assigned_user_id": optionalUUID(assignedUserID), "handoff_state": "assigned", "human_owned_at": &now, "updated_at": now}).Error; err != nil {
 			return uuid.Nil, err
 		}
 		return existing.ID, nil
@@ -83,12 +94,13 @@ func (s *Service) AssignHandoff(ctx context.Context, organizationID, sessionID, 
 		AssignedUserID: optionalUUID(assignedUserID),
 		Status:         "assigned",
 		Reason:         "service_assignment",
+		Priority:       "normal",
 		Metadata:       metadata,
 	}
 	if err := s.db.WithContext(ctx).Create(&handoff).Error; err != nil {
 		return uuid.Nil, err
 	}
-	if err := s.db.WithContext(ctx).Model(&ConversationSession{}).Where("organization_id = ? AND id = ?", organizationID, sessionID).Updates(map[string]any{"status": SessionHandoff, "updated_at": now}).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(&ConversationSession{}).Where("organization_id = ? AND id = ?", organizationID, sessionID).Updates(map[string]any{"status": SessionHandoff, "conversation_status": ConversationHumanAssigned, "assigned_user_id": optionalUUID(assignedUserID), "handoff_state": "assigned", "human_owned_at": &now, "updated_at": now}).Error; err != nil {
 		return uuid.Nil, err
 	}
 	return handoff.ID, nil

@@ -9,10 +9,11 @@
     "preview": "vite preview --host 0.0.0.0 --port 3000"
   },
   "dependencies": {
+    "@zidicommerce/shared": "*",
+    "lucide-react": "^1.35.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^7.0.2",
-    "@zidicommerce/shared": "*"
+    "react-router-dom": "^7.0.2"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",

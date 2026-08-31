@@ -26,8 +26,49 @@ const (
 	StepHandoff   = "handoff"
 	StepEnd       = "end"
 
+	WorkflowStatusActive   = "active"
+	WorkflowStatusInactive = "inactive"
+
+	StoreSelectionCustomerChoice = "customer_choice"
+	StoreSelectionSingleStore    = "single_store"
+	StoreSelectionFirstAvailable = "first_available"
+	StoreSelectionNearest        = "nearest"
+	StoreSelectionMerchantRule   = "merchant_rule"
+
 	ModuleSourceSystem       = "system"
 	ModuleSourceOrganization = "organization"
+
+	KnowledgeKindFAQ          = "faq"
+	KnowledgeKindPolicy       = "policy"
+	KnowledgeKindBusinessInfo = "business_info"
+	KnowledgeKindDelivery     = "delivery"
+	KnowledgeKindReturns      = "returns"
+	KnowledgeKindWarranty     = "warranty"
+	KnowledgeKindLocation     = "location"
+	KnowledgeKindPaymentInfo  = "payment_info"
+
+	KnowledgeEmbeddingStatusDisabled = "disabled"
+	KnowledgeEmbeddingStatusPending  = "pending"
+	KnowledgeEmbeddingStatusReady    = "ready"
+	KnowledgeEmbeddingStatusFailed   = "failed"
+
+	DocumentSourceUpload     = "upload"
+	DocumentSourceURL        = "url"
+	DocumentSourcePastedText = "pasted_text"
+	DocumentSourceManual     = "manual"
+
+	DocumentStatusDraft          = "draft"
+	DocumentStatusProcessing     = "processing"
+	DocumentStatusExtracted      = "extracted"
+	DocumentStatusReviewRequired = "review_required"
+	DocumentStatusActive         = "active"
+	DocumentStatusArchived       = "archived"
+	DocumentStatusFailed         = "failed"
+
+	DocumentChunkStatusDraft          = "draft"
+	DocumentChunkStatusReviewRequired = "review_required"
+	DocumentChunkStatusApproved       = "approved"
+	DocumentChunkStatusArchived       = "archived"
 )
 
 type Bot struct {
@@ -192,6 +233,31 @@ type Step struct {
 
 func (Step) TableName() string { return "bot_steps" }
 
+type CommerceWorkflowConfiguration struct {
+	ID                       uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID           uuid.UUID  `gorm:"type:uuid;uniqueIndex" json:"organization_id"`
+	Status                   string     `json:"status"`
+	BotDisplayName           string     `json:"bot_display_name"`
+	Greeting                 string     `json:"greeting"`
+	Tone                     string     `json:"tone"`
+	OrderingEnabled          bool       `json:"ordering_enabled"`
+	PaymentEnabled           bool       `json:"payment_enabled"`
+	HumanHandoffEnabled      bool       `json:"human_handoff_enabled"`
+	StoreSelectionStrategy   string     `json:"store_selection_strategy"`
+	EnabledActions           string     `json:"enabled_actions"`
+	SupportedFulfilmentModes string     `json:"supported_fulfilment_modes"`
+	PostPaymentSteps         string     `json:"post_payment_steps"`
+	Metadata                 string     `json:"metadata"`
+	CreatedByUserID          *uuid.UUID `gorm:"type:uuid" json:"created_by_user_id,omitempty"`
+	UpdatedByUserID          *uuid.UUID `gorm:"type:uuid" json:"updated_by_user_id,omitempty"`
+	CreatedAt                time.Time  `json:"created_at"`
+	UpdatedAt                time.Time  `json:"updated_at"`
+}
+
+func (CommerceWorkflowConfiguration) TableName() string {
+	return "commerce_workflow_configurations"
+}
+
 type PublishedSnapshot struct {
 	ID             uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
 	OrganizationID uuid.UUID `gorm:"type:uuid;index" json:"organization_id"`
@@ -217,3 +283,68 @@ type FAQ struct {
 }
 
 func (FAQ) TableName() string { return "bot_faqs" }
+
+type KnowledgeEntry struct {
+	ID                   uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID       uuid.UUID  `gorm:"type:uuid;index:idx_merchant_knowledge_org_status_kind" json:"organization_id"`
+	Kind                 string     `gorm:"index:idx_merchant_knowledge_org_status_kind" json:"kind"`
+	Category             string     `gorm:"index:idx_merchant_knowledge_org_status_kind" json:"category"`
+	Title                string     `json:"title"`
+	Question             string     `json:"question"`
+	Answer               string     `json:"answer"`
+	Keywords             string     `json:"keywords"`
+	SourceType           string     `json:"source_type"`
+	Status               string     `gorm:"index:idx_merchant_knowledge_org_status_kind" json:"status"`
+	Metadata             string     `json:"metadata"`
+	Embedding            *string    `gorm:"type:vector(1536)" json:"-"`
+	EmbeddingStatus      string     `json:"embedding_status"`
+	EmbeddingModel       string     `json:"embedding_model"`
+	EmbeddingContentHash string     `json:"embedding_content_hash"`
+	EmbeddingError       string     `json:"embedding_error"`
+	EmbeddedAt           *time.Time `json:"embedded_at,omitempty"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+}
+
+func (KnowledgeEntry) TableName() string { return "merchant_knowledge_entries" }
+
+type DocumentSource struct {
+	ID                         uuid.UUID       `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID             uuid.UUID       `gorm:"type:uuid;index:idx_document_sources_org_status_type" json:"organization_id"`
+	Title                      string          `json:"title"`
+	SourceType                 string          `gorm:"index:idx_document_sources_org_status_type" json:"source_type"`
+	Status                     string          `gorm:"index:idx_document_sources_org_status_type" json:"status"`
+	OriginalFilename           string          `json:"original_filename"`
+	SourceURL                  string          `json:"source_url"`
+	SourceLabel                string          `json:"source_label"`
+	MimeType                   string          `json:"mime_type"`
+	StorageKey                 string          `json:"storage_key"`
+	RawText                    string          `json:"raw_text,omitempty"`
+	ErrorMessage               string          `json:"error_message"`
+	CreatedBy                  *uuid.UUID      `gorm:"type:uuid" json:"created_by,omitempty"`
+	Metadata                   string          `json:"metadata"`
+	Chunks                     []DocumentChunk `gorm:"foreignKey:DocumentSourceID" json:"chunks,omitempty"`
+	LinkedKnowledgeCount       int             `gorm:"-" json:"linked_knowledge_count"`
+	ActiveLinkedKnowledgeCount int             `gorm:"-" json:"active_linked_knowledge_count"`
+	CreatedAt                  time.Time       `json:"created_at"`
+	UpdatedAt                  time.Time       `json:"updated_at"`
+}
+
+func (DocumentSource) TableName() string { return "merchant_document_sources" }
+
+type DocumentChunk struct {
+	ID               uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID   uuid.UUID  `gorm:"type:uuid;index:idx_document_chunks_org_source_status;uniqueIndex:idx_document_chunk_position" json:"organization_id"`
+	DocumentSourceID uuid.UUID  `gorm:"type:uuid;index:idx_document_chunks_org_source_status;uniqueIndex:idx_document_chunk_position" json:"document_source_id"`
+	KnowledgeEntryID *uuid.UUID `gorm:"type:uuid" json:"knowledge_entry_id,omitempty"`
+	ChunkIndex       int        `gorm:"uniqueIndex:idx_document_chunk_position" json:"chunk_index"`
+	Title            string     `json:"title"`
+	Heading          string     `json:"heading"`
+	Content          string     `json:"content"`
+	Status           string     `gorm:"index:idx_document_chunks_org_source_status" json:"status"`
+	Metadata         string     `json:"metadata"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+func (DocumentChunk) TableName() string { return "merchant_document_chunks" }

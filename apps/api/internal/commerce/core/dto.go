@@ -232,6 +232,7 @@ type OrderInput struct {
 	Metadata           string           `json:"metadata"`
 	FulfilmentMetadata string           `json:"fulfilment_metadata"`
 	IdempotencyKey     string           `json:"idempotency_key"`
+	Source             string           `json:"source"`
 	Items              []OrderItemInput `json:"items"`
 }
 
@@ -254,10 +255,27 @@ type OrderFilter struct {
 	Status  string
 }
 
+type OrderOperationalAction struct {
+	Key          string `json:"key"`
+	Label        string `json:"label"`
+	ResourceType string `json:"resource_type"`
+	TargetStatus string `json:"target_status"`
+}
+
+type OrderOperationsView struct {
+	Order          Order                    `json:"order"`
+	Payment        *Payment                 `json:"payment,omitempty"`
+	Fulfilment     *Fulfilment              `json:"fulfilment,omitempty"`
+	Events         []CommerceEvent          `json:"events"`
+	ConversationID *uuid.UUID               `json:"conversation_id,omitempty"`
+	NextActions    []OrderOperationalAction `json:"next_actions"`
+}
+
 type TransitionInput struct {
 	Status         string `json:"status"`
 	Reason         string `json:"reason"`
 	IdempotencyKey string `json:"idempotency_key"`
+	Source         string `json:"source"`
 }
 
 type PaymentInput struct {
@@ -266,10 +284,12 @@ type PaymentInput struct {
 	Email          string    `json:"email"`
 	CallbackURL    string    `json:"callback_url"`
 	IdempotencyKey string    `json:"idempotency_key"`
+	Source         string    `json:"source"`
 }
 
 type PaymentVerifyInput struct {
 	Reference string `json:"reference"`
+	Source    string `json:"source"`
 }
 
 type PaymentConfigurationInput struct {
@@ -296,6 +316,8 @@ type FulfilmentInput struct {
 	RecipientPhone  string `json:"recipient_phone"`
 	DeliveryAddress string `json:"delivery_address"`
 	Metadata        string `json:"metadata"`
+	IdempotencyKey  string `json:"idempotency_key"`
+	Source          string `json:"source"`
 }
 
 type ChannelInput struct {

@@ -7,11 +7,12 @@ import (
 )
 
 const (
-	JobTypeChannelOutbound      = "channel.outbound.send"
-	JobTypeNotificationDelivery = "notification.deliver"
-	JobTypePaymentReconcile     = "payment.reconcile"
-	JobTypeMerchantImport       = "merchant.import"
+	JobTypeChannelOutbound        = "channel.outbound.send"
+	JobTypeNotificationDelivery   = "notification.deliver"
+	JobTypePaymentReconcile       = "payment.reconcile"
+	JobTypeMerchantImport         = "merchant.import"
 	JobTypeServiceDispatchTimeout = "fieldservice.dispatch.timeout"
+	JobTypeKnowledgeEmbedding     = "knowledge.embedding.refresh"
 
 	StatusQueued            = "queued"
 	StatusProcessing        = "processing"

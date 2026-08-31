@@ -4,11 +4,16 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/ai"
+	aiprovider "github.com/hidenkeys/zidicommerce/apps/api/internal/ai/provider"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/channelplatform"
+	whatsappadapter "github.com/hidenkeys/zidicommerce/apps/api/internal/channelplatform/whatsapp"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/config"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/database"
@@ -54,6 +59,30 @@ func main() {
 		provider = core.NewPaystackProvider(cfg.Payment.PaystackSecret)
 	}
 	commerceService := core.NewService(db, provider)
+	channelService := channelplatform.NewService(db)
+	channelSecretKey, err := channelplatform.DecodeChannelSecretKey(cfg.Channels.SecretEncryptionKey)
+	if err != nil {
+		log.Error("invalid channel secret encryption key", "error", err)
+		os.Exit(1)
+	}
+	var channelSecretStore *channelplatform.EncryptedSecretStore
+	if len(channelSecretKey) > 0 {
+		channelSecretStore, err = channelplatform.NewEncryptedSecretStore(db, channelSecretKey, "v1")
+		if err != nil {
+			log.Error("failed to configure channel secret store", "error", err)
+			os.Exit(1)
+		}
+	}
+	channelSecretResolver := channelplatform.NewDatabaseSecretResolver(db, channelSecretStore)
+	whatsAppService := whatsappadapter.NewService(db, channelService, channelSecretResolver, channelSecretStore)
+	whatsAppService.ConfigureWebhookPublicBaseURL(cfg.Channels.WhatsAppWebhookPublicBaseURL)
+	whatsAppService.ConfigureEmbeddedSignup(whatsappadapter.EmbeddedSignupConfig{
+		AppID: cfg.Channels.MetaAppID, AppSecret: cfg.Channels.MetaAppSecret,
+		ConfigurationID:    cfg.Channels.MetaEmbeddedConfigurationID,
+		GraphAPIVersion:    cfg.Channels.MetaGraphAPIVersion,
+		WebhookVerifyToken: cfg.Channels.MetaWebhookVerifyToken,
+	}, whatsappadapter.NewMetaGraphClient(cfg.Channels.WhatsAppGraphBaseURL, cfg.Channels.MetaAppID, cfg.Channels.MetaAppSecret, cfg.Channels.MetaGraphAPIVersion, nil))
+	whatsAppAdapter := whatsappadapter.NewAdapter(whatsAppService, channelService, cfg.Channels.WhatsAppGraphBaseURL, nil, cfg.Channels.WhatsAppSignatureBypass)
 	commerceService.ConfigurePaymentWebhooks(cfg.Payment.PaystackSecret)
 	if key, err := core.DecodePaymentSecretKey(cfg.Payment.SecretEncryptionKey); err != nil {
 		log.Error("invalid payment secret encryption key", "error", err)
@@ -76,9 +105,43 @@ func main() {
 	log.Info("email sender ready", "mode", cfg.Email.Mode, "host", cfg.Email.SMTPHost, "from", cfg.Email.From)
 	commerceService.ConfigureNotifications(mailer, cfg.Email.AppBaseURL, log)
 	botService := bot.NewService(db)
+	botService.ConfigureJobs(jobService)
 	runtimeService := runtimeengine.NewService(db, commerceService, log)
 	runtimeService.ConfigureJobs(jobService)
-	runtimeService.RegisterChannelSender("whatsapp", runtimeengine.NewWhatsAppCloudSender("", log))
+	runtimeService.RegisterChannelSender("whatsapp", runtimeengine.NewAdapterChannelSender(whatsAppAdapter))
+	aiModel := cfg.AI.Model
+	if aiModel == "" {
+		aiModel = cfg.AI.OllamaChatModel
+	}
+	aiProvider := aiprovider.ChatProvider(aiprovider.NewOllamaChatProvider(cfg.AI.OllamaBaseURL, aiModel))
+	if strings.EqualFold(strings.TrimSpace(cfg.AI.Provider), "groq") {
+		groqModel := cfg.AI.Model
+		if groqModel == "" {
+			groqModel = cfg.AI.GroqModel
+		}
+		aiProvider = aiprovider.NewGroqChatProvider(cfg.AI.GroqAPIKey, cfg.AI.GroqBaseURL, groqModel)
+	}
+	aiService := ai.NewService(db, commerceService, aiProvider, cfg.AI.MaxToolCalls)
+	var embeddingProvider ai.EmbeddingProvider
+	embeddingsEnabled := cfg.AI.EmbeddingsEnabled
+	switch strings.ToLower(strings.TrimSpace(cfg.AI.EmbeddingProvider)) {
+	case "local_hash":
+		embeddingProvider = ai.NewHashEmbeddingProvider(cfg.AI.EmbeddingModel, cfg.AI.EmbeddingDimensions)
+	default:
+		embeddingsEnabled = false
+	}
+	botService.ConfigureKnowledgeEmbeddings(embeddingsEnabled)
+	aiService.ConfigureEmbeddings(embeddingProvider, ai.EmbeddingOptions{
+		Enabled:               embeddingsEnabled,
+		VectorSearchEnabled:   embeddingsEnabled && cfg.AI.VectorSearchEnabled,
+		Model:                 cfg.AI.EmbeddingModel,
+		Dimensions:            cfg.AI.EmbeddingDimensions,
+		VectorSearchThreshold: cfg.AI.VectorSearchThreshold,
+	})
+	runtimeService.ConfigureAIInbound(func(ctx context.Context, session runtimeengine.ConversationSession, text string) (runtimeengine.AIInboundResponse, error) {
+		reply, variables, err := aiService.RuntimeReply(ctx, session, text)
+		return runtimeengine.AIInboundResponse{Reply: reply, Variables: variables}, err
+	})
 	fieldService := fieldservice.NewService(db, commerceService, log)
 	fieldService.ConfigureJobs(jobService)
 	fieldService.ConfigureDispatcher(runtimeService)
@@ -87,9 +150,13 @@ func main() {
 		return fieldService.HandleHandoffInbound(ctx, organizationID, sessionID, text)
 	})
 	commerceService.ConfigureAfterPaymentPaid(fieldService.OnPaymentPaid)
+	commerceService.ConfigureAfterPaymentPaid(runtimeService.OnPaymentPaid)
 	jobService.Register(jobs.JobTypeChannelOutbound, runtimeService.ProcessOutboundJob)
 	jobService.Register(jobs.JobTypeNotificationDelivery, runtimeService.ProcessNotificationJob)
 	jobService.Register(jobs.JobTypeServiceDispatchTimeout, fieldService.ProcessDispatchTimeout)
+	if embeddingsEnabled {
+		jobService.Register(jobs.JobTypeKnowledgeEmbedding, aiService.ProcessKnowledgeEmbeddingJob)
+	}
 	jobService.Start(ctx, 2*time.Second, 25)
 
 	// The field-service pilot tenant is seeded only when explicitly enabled. The
@@ -158,9 +225,12 @@ func main() {
 		AuthService:  auth.NewService(userRepo, tokenManager),
 		OrgHandler:   organization.NewHandler(orgRepo),
 		Commerce:     core.NewHandler(commerceService, tokenManager),
+		Channels:     channelplatform.NewHandler(channelService),
+		WhatsApp:     whatsappadapter.NewHandler(whatsAppService, channelService, whatsAppAdapter, runtimeService),
 		Bot:          bot.NewHandler(botService),
 		Runtime:      runtimeengine.NewHandler(runtimeService),
 		Field:        fieldservice.NewHandler(fieldService),
+		AI:           ai.NewHandler(aiService),
 	})
 
 	// Adopting a WhatsApp number is opt-in and idempotent. It exists because a

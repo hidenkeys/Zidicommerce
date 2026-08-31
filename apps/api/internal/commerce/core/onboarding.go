@@ -83,8 +83,8 @@ func (s *Service) OnboardOrganization(ctx context.Context, actor auth.CurrentUse
 }
 
 func (s *Service) UpdateOnboardingState(ctx context.Context, actor auth.CurrentUser, state string) (organization.Organization, error) {
-	if !actor.Role.CanManageOrganization() {
-		return organization.Organization{}, httperror.Forbidden("You cannot update onboarding progress")
+	if err := s.authorize(ctx, actor, authz.PermissionOrganizationUpdate, "organization", &actor.OrganizationID); err != nil {
+		return organization.Organization{}, err
 	}
 	org, err := s.GetOrganization(ctx, actor, actor.OrganizationID)
 	if err != nil {
@@ -100,8 +100,8 @@ func (s *Service) UpdateOnboardingState(ctx context.Context, actor auth.CurrentU
 }
 
 func (s *Service) ListMembers(ctx context.Context, actor auth.CurrentUser) ([]organization.OrganizationMembership, error) {
-	if !canViewTeam(actor.Role) {
-		return nil, httperror.Forbidden("You cannot view team members")
+	if err := s.authorize(ctx, actor, authz.PermissionStaffView, "member", nil); err != nil {
+		return nil, err
 	}
 	var members []organization.OrganizationMembership
 	err := s.db.WithContext(ctx).
@@ -113,8 +113,8 @@ func (s *Service) ListMembers(ctx context.Context, actor auth.CurrentUser) ([]or
 }
 
 func (s *Service) InviteMember(ctx context.Context, actor auth.CurrentUser, input InviteInput) (organization.OrganizationInvitation, string, error) {
-	if !actor.Role.CanManageOrganization() {
-		return organization.OrganizationInvitation{}, "", httperror.Forbidden("You cannot invite team members")
+	if err := s.authorize(ctx, actor, authz.PermissionStaffInvite, "invitation", nil); err != nil {
+		return organization.OrganizationInvitation{}, "", err
 	}
 	input.normalize()
 	role := authz.Role(input.Role)
@@ -198,8 +198,8 @@ func (s *Service) InviteMember(ctx context.Context, actor auth.CurrentUser, inpu
 }
 
 func (s *Service) ResendInvitation(ctx context.Context, actor auth.CurrentUser, invitationID uuid.UUID) (organization.OrganizationInvitation, error) {
-	if !actor.Role.CanManageOrganization() {
-		return organization.OrganizationInvitation{}, httperror.Forbidden("You cannot invite team members")
+	if err := s.authorize(ctx, actor, authz.PermissionStaffInvite, "invitation", &invitationID); err != nil {
+		return organization.OrganizationInvitation{}, err
 	}
 	var invitation organization.OrganizationInvitation
 	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, invitationID).First(&invitation).Error; err != nil {
@@ -359,8 +359,8 @@ func (s *Service) AcceptInvitation(ctx context.Context, input AcceptInvitationIn
 }
 
 func (s *Service) UpdateMember(ctx context.Context, actor auth.CurrentUser, memberID uuid.UUID, input MemberUpdateInput) (organization.OrganizationMembership, error) {
-	if !actor.Role.CanManageOrganization() {
-		return organization.OrganizationMembership{}, httperror.Forbidden("You cannot update members")
+	if err := s.authorize(ctx, actor, authz.PermissionStaffUpdate, "member", &memberID); err != nil {
+		return organization.OrganizationMembership{}, err
 	}
 	var membership organization.OrganizationMembership
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -418,8 +418,8 @@ func (s *Service) UpdateMember(ctx context.Context, actor auth.CurrentUser, memb
 }
 
 func (s *Service) AssignMemberStores(ctx context.Context, actor auth.CurrentUser, memberID uuid.UUID, storeIDs []uuid.UUID) ([]StoreUserAssignment, error) {
-	if !actor.Role.CanManageOrganization() && actor.Role != authz.StoreManager {
-		return nil, httperror.Forbidden("You cannot assign store access")
+	if err := s.authorize(ctx, actor, authz.PermissionStaffUpdate, "member", &memberID); err != nil {
+		return nil, err
 	}
 	var membership organization.OrganizationMembership
 	err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, memberID).First(&membership).Error
@@ -439,6 +439,9 @@ func (s *Service) AssignMemberStores(ctx context.Context, actor auth.CurrentUser
 }
 
 func (s *Service) ListMemberStores(ctx context.Context, actor auth.CurrentUser, memberID uuid.UUID) ([]StoreUserAssignment, error) {
+	if err := s.authorize(ctx, actor, authz.PermissionStaffView, "member", &memberID); err != nil {
+		return nil, err
+	}
 	var membership organization.OrganizationMembership
 	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, memberID).First(&membership).Error; err != nil {
 		return nil, mapNotFound(err, "Member not found")
@@ -476,8 +479,8 @@ func (s *Service) applyInvitationStoresTx(tx *gorm.DB, invitation organization.O
 }
 
 func (s *Service) ListAuditLogs(ctx context.Context, actor auth.CurrentUser) ([]organization.AuditLog, error) {
-	if !actor.Role.CanManageOrganization() && actor.Role != authz.Viewer {
-		return nil, httperror.Forbidden("You cannot view audit logs")
+	if err := s.authorize(ctx, actor, authz.PermissionAuditView, "audit_log", nil); err != nil {
+		return nil, err
 	}
 	var logs []organization.AuditLog
 	err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("created_at DESC").Limit(200).Find(&logs).Error
@@ -658,10 +661,6 @@ func recipientDomain(address string) string {
 		return "unknown"
 	}
 	return strings.ToLower(address[at+1:])
-}
-
-func canViewTeam(role authz.Role) bool {
-	return role == authz.PlatformAdmin || role == authz.MerchantAdmin || role == authz.StoreManager || role == authz.Viewer
 }
 
 func isAssignableMerchantRole(role authz.Role) bool {

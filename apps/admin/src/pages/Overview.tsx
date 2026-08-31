@@ -1,18 +1,26 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiGet } from "../api/client";
-import { Card, EmptyState, Flash, LoadingState, Metric, Page, SetupItem, StatusDot } from "../components/ui";
+import { useAuth } from "../auth";
+import { Badge, Card, EmptyState, Flash, LoadingState, Metric, Page, SectionHeader, SetupItem, StatusDot } from "../components/ui";
 import { humanStatus, isToday, money, relativeTime, setupHref, type Row } from "../lib/format";
+import { hasPermission, isOrganizationAdmin } from "../lib/permissions";
+import { merchantReadinessItems, type SetupStatus } from "../lib/readiness";
+import { isUsableChannelStatus } from "../lib/channels";
 
 type Organization = Row & { name?: string; currency?: string; metadata?: string };
 type Channel = Row & { provider: string; display_name: string; display_number?: string; status: string };
-type SetupStatus = { complete_count: number; total_count: number; ready: boolean; items: { key: string; label: string; complete: boolean; description: string }[] };
 type PaymentConfiguration = Row & { provider: string; display_name: string; status: string; enabled: boolean };
 type Bot = Row & { name: string; status: string; published_version_id?: string };
 
-const merchantSetupKeys = ["stores", "catalogue", "inventory", "whatsapp", "payments", "bot", "faqs"];
-
 export function OverviewPage() {
+  const { user } = useAuth();
+  const canSeeInventory = hasPermission(user.role, "inventory.view");
+  const canSeeChannels = hasPermission(user.role, "channels.view");
+  const canSeePayments = hasPermission(user.role, "payments.view");
+  const canSeeBot = hasPermission(user.role, "bot.view");
+  const canManageBot = hasPermission(user.role, "bot.manage");
+  const canManageSetup = isOrganizationAdmin(user.role);
   const [org, setOrg] = useState<Organization | null>(null);
   const [orders, setOrders] = useState<Row[]>([]);
   const [conversations, setConversations] = useState<Row[]>([]);
@@ -27,6 +35,16 @@ export function OverviewPage() {
 
   useEffect(() => {
     async function load() {
+      let partialFailure = false;
+      async function safeGet<T>(enabled: boolean, path: string, fallback: T): Promise<T> {
+        if (!enabled) return fallback;
+        try {
+          return (await apiGet<T>(path)).data;
+        } catch {
+          partialFailure = true;
+          return fallback;
+        }
+      }
       try {
         const orgResponse = await apiGet<Organization>("/organizations/current");
         setOrg(orgResponse.data);
@@ -34,33 +52,35 @@ export function OverviewPage() {
         const fieldService = metadata.includes("field_service") || metadata.includes("handyman");
         if (fieldService) {
           const [fieldResponse, channelResponse, paymentResponse, botResponse] = await Promise.all([
-            apiGet<Row>("/field/overview"),
-            apiGet<Channel[]>("/channels"),
-            apiGet<PaymentConfiguration[]>("/payment-configurations").catch(() => ({ data: [] as PaymentConfiguration[] })),
-            apiGet<Bot[]>("/bots").catch(() => ({ data: [] as Bot[] })),
+            safeGet(true, "/field/overview", {} as Row),
+            safeGet(canSeeChannels, "/channels", [] as Channel[]),
+            safeGet(canSeePayments, "/payment-configurations", [] as PaymentConfiguration[]),
+            safeGet(canSeeBot, "/bots", [] as Bot[]),
           ]);
-          setFieldOverview(fieldResponse.data);
-          setChannels(channelResponse.data);
-          setPayments(paymentResponse.data);
-          setBots(botResponse.data);
+          setFieldOverview(fieldResponse);
+          setChannels(channelResponse);
+          setPayments(paymentResponse);
+          setBots(botResponse);
+          if (partialFailure) setMessage("Some overview information is temporarily unavailable. The available sections are current.");
           return;
         }
         const [orderResponse, conversationResponse, inventoryResponse, setupResponse, channelResponse, paymentResponse, botResponse] = await Promise.all([
-          apiGet<Row[]>("/orders"),
-          apiGet<Row[]>("/runtime/conversations"),
-          apiGet<Row[]>("/inventory"),
-          apiGet<SetupStatus>("/bot-setup/status"),
-          apiGet<Channel[]>("/channels"),
-          apiGet<PaymentConfiguration[]>("/payment-configurations").catch(() => ({ data: [] as PaymentConfiguration[] })),
-          apiGet<Bot[]>("/bots").catch(() => ({ data: [] as Bot[] })),
+          safeGet(hasPermission(user.role, "orders.view"), "/orders", [] as Row[]),
+          safeGet(hasPermission(user.role, "conversations.view"), "/runtime/conversations", [] as Row[]),
+          safeGet(canSeeInventory, "/inventory", [] as Row[]),
+          safeGet(canManageSetup, "/bot-setup/status", null as SetupStatus | null),
+          safeGet(canSeeChannels, "/channels", [] as Channel[]),
+          safeGet(canSeePayments, "/payment-configurations", [] as PaymentConfiguration[]),
+          safeGet(canSeeBot, "/bots", [] as Bot[]),
         ]);
-        setOrders(orderResponse.data);
-        setConversations(conversationResponse.data);
-        setInventory(inventoryResponse.data);
-        setSetupStatus(setupResponse.data);
-        setChannels(channelResponse.data);
-        setPayments(paymentResponse.data);
-        setBots(botResponse.data);
+        setOrders(orderResponse);
+        setConversations(conversationResponse);
+        setInventory(inventoryResponse);
+        setSetupStatus(setupResponse);
+        setChannels(channelResponse);
+        setPayments(paymentResponse);
+        setBots(botResponse);
+        if (partialFailure) setMessage("Some overview information is temporarily unavailable. The available sections are current.");
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Could not load overview");
       } finally {
@@ -68,7 +88,7 @@ export function OverviewPage() {
       }
     }
     void load();
-  }, []);
+  }, [user.role]);
 
   const todayOrders = orders.filter((order) => isToday(order.created_at));
   const todayRevenue = todayOrders
@@ -76,14 +96,28 @@ export function OverviewPage() {
     .reduce((sum, order) => sum + Number(order.total_minor ?? 0), 0);
   const awaitingPrep = orders.filter((order) => ["paid", "processing"].includes(String(order.status))).length;
   const awaitingFulfilment = orders.filter((order) => ["ready", "out_for_delivery"].includes(String(order.status))).length;
-  const waitingConversations = conversations.filter((conversation) => conversation.handoff_status === "open" || conversation.handoff_status === "assigned" || conversation.status === "handoff").length;
+  const awaitingPayment = orders.filter((order) => order.status === "awaiting_payment").length;
+  const waitingConversations = conversations.filter((conversation) => ["human_requested", "human_assigned"].includes(String(conversation.conversation_status)) || conversation.handoff_status === "open" || conversation.handoff_status === "assigned" || conversation.status === "handoff").length;
+  const unreadConversations = conversations.reduce((sum, conversation) => sum + Number(conversation.unread_count ?? 0), 0);
   const lowStock = inventory.filter((row) => Number(row.on_hand ?? 0) - Number(row.reserved ?? 0) <= Number(row.reorder_threshold ?? 0));
-  const whatsapp = channels.find((channel) => channel.provider === "whatsapp");
-  const paystack = payments.find((row) => row.provider === "paystack");
+  const customerChannel = channels.find((channel) => isUsableChannelStatus(channel.status)) ?? channels[0];
+  const paymentConfiguration = payments.find((row) => row.enabled && row.status === "active") ?? payments[0];
   const bot = bots.find((row) => row.published_version_id) ?? bots[0];
   const currency = String(org?.currency ?? todayOrders[0]?.currency ?? "NGN");
-  const merchantItems = (setupStatus?.items ?? []).filter((item) => merchantSetupKeys.includes(item.key));
-  const setupDone = merchantItems.filter((item) => item.complete).length;
+  const merchantItems = merchantReadinessItems(setupStatus);
+  const requiredItems = merchantItems.filter((item) => item.required);
+  const setupDone = requiredItems.filter((item) => item.complete).length;
+  const attentionClear = awaitingPayment === 0 && awaitingPrep === 0 && awaitingFulfilment === 0 && waitingConversations === 0 && lowStock.length === 0
+    && (!canSeeChannels || isUsableChannelStatus(customerChannel?.status))
+    && (!canSeePayments || Boolean(paymentConfiguration?.enabled && paymentConfiguration.status === "active"))
+    && (!canManageBot || Boolean(bot?.published_version_id));
+  const description = user.role === "store_staff"
+    ? "Assigned-store orders, fulfilment, stock, and customer conversations."
+    : user.role === "support_agent"
+      ? "Customers and conversations that need support, with linked order context."
+      : user.role === "viewer"
+        ? "A read-only view of current business operations."
+        : "What needs attention now, followed by today's business activity.";
   const fieldPortalURL = String(import.meta.env.VITE_FIELD_PORTAL_URL ?? "").replace(/\/$/, "");
 
   if (loading) {
@@ -116,9 +150,9 @@ export function OverviewPage() {
             <h3>Customer assistant</h3>
             <p><StatusDot live={Boolean(bot?.published_version_id) && bot?.status === "active"} label={bot?.published_version_id ? "Live" : "Not published"} /></p>
             <p><strong>{bot?.name || "No assistant yet"}</strong></p>
-            <p className="muted">{whatsapp?.status === "active" ? `WhatsApp ${whatsapp.display_number || "connected"}` : "WhatsApp not connected"}</p>
-            <p className="muted">{paystack?.enabled ? "Payments connected" : "Using platform payment settings"}</p>
-            <div className="page-actions"><Link to="/assistant">Open assistant</Link><Link to="/settings/whatsapp">WhatsApp</Link><Link to="/settings/payments">Payments</Link></div>
+            <p className="muted">{isUsableChannelStatus(customerChannel?.status) ? `Customer channel ${customerChannel?.display_number || "connected"}` : "Customer channel not connected"}</p>
+            <p className="muted">{paymentConfiguration?.enabled ? "Payments connected" : "Using platform payment settings"}</p>
+            <div className="page-actions"><Link to="/assistant">Open assistant</Link><Link to="/settings/whatsapp">Channels</Link><Link to="/settings/payments">Payments</Link></div>
           </Card>
         </div>
       </Page>
@@ -128,92 +162,82 @@ export function OverviewPage() {
   return (
     <Page
       title={org?.name ? `${org.name}` : "Overview"}
-      description="What needs attention, and how the business is doing today."
+      description={description}
     >
       <Flash message={message} />
+      <section className="attention-queue" aria-labelledby="attention-title">
+        <div>
+          <span className="section-kicker">Priority</span>
+          <h2 id="attention-title">Needs attention</h2>
+          <p>Work that may be blocking a customer or store.</p>
+        </div>
+        {attentionClear ? (
+          <div className="attention-clear"><StatusDot live label="All caught up" /><span>New orders and conversations will appear here.</span></div>
+        ) : (
+          <ul className="attention-links">
+            {awaitingPrep > 0 ? <li><Badge tone="warning">Orders</Badge><Link to="/orders">{awaitingPrep} paid order{awaitingPrep === 1 ? "" : "s"} waiting to be prepared</Link></li> : null}
+            {awaitingFulfilment > 0 ? <li><Badge tone="info">Fulfilment</Badge><Link to="/orders">{awaitingFulfilment} order{awaitingFulfilment === 1 ? "" : "s"} ready or in transit</Link></li> : null}
+            {awaitingPayment > 0 ? <li><Badge tone="neutral">Payment</Badge><Link to="/orders">{awaitingPayment} order{awaitingPayment === 1 ? " is" : "s are"} waiting for verified payment</Link></li> : null}
+            {waitingConversations > 0 ? <li><Badge tone="danger">Customers</Badge><Link to="/conversations">{waitingConversations} conversation{waitingConversations === 1 ? "" : "s"} waiting for a person</Link></li> : null}
+            {canSeeInventory && lowStock.length > 0 ? <li><Badge tone="warning">Stock</Badge><Link to="/inventory">{lowStock.length} product{lowStock.length === 1 ? "" : "s"} low or out of stock</Link></li> : null}
+            {canSeeChannels && !isUsableChannelStatus(customerChannel?.status) ? <li><Badge tone="neutral">Channel</Badge><Link to="/settings/whatsapp">Customer messaging is not connected</Link></li> : null}
+            {canSeePayments && !(paymentConfiguration?.enabled && paymentConfiguration.status === "active") ? <li><Badge tone="neutral">Payments</Badge><Link to="/settings/payments">Payment collection is not ready</Link></li> : null}
+            {canManageBot && !bot?.published_version_id ? <li><Badge tone="neutral">Assistant</Badge><Link to="/assistant">Review and publish the customer assistant</Link></li> : null}
+            {canManageSetup && setupStatus && !setupStatus.ready ? <li><Badge tone="warning">Setup</Badge><Link to="/setup">Complete required business readiness steps</Link></li> : null}
+          </ul>
+        )}
+      </section>
+
+      <SectionHeader title="Today" description="Live totals from orders, payments, fulfilment, and conversations." />
       <div className="metrics">
-        <Metric label="Orders today" value={todayOrders.length} to="/orders" hint={todayOrders.length === 0 ? "No orders yet" : undefined} />
-        <Metric label="Revenue today" value={money(todayRevenue, currency)} to="/orders" />
-        <Metric label="Need preparing" value={awaitingPrep} to="/orders" hint={awaitingPrep ? "Paid orders waiting" : "None waiting"} />
-        <Metric label="Out for fulfilment" value={awaitingFulfilment} to="/orders" />
+        <Metric label="Orders" value={todayOrders.length} to="/orders" hint={todayOrders.length === 0 ? "No orders yet" : "Created today"} />
+        <Metric label="Confirmed revenue" value={money(todayRevenue, currency)} to="/orders" hint="Excludes unpaid and cancelled" />
+        <Metric label="Pending fulfilment" value={awaitingPrep + awaitingFulfilment} to="/orders" hint="Paid through in transit" />
+        <Metric label="Unread messages" value={unreadConversations} to="/conversations" hint={waitingConversations ? `${waitingConversations} need a person` : "Inbox is covered"} />
       </div>
 
-      <div className="split">
-        <Card>
-          <h3>Needs attention</h3>
-          {awaitingPrep === 0 && waitingConversations === 0 && lowStock.length === 0 && whatsapp?.status === "active" && paystack?.enabled ? (
-            <p className="muted">You are caught up. New orders and chats will appear here.</p>
+      <div className="overview-operations">
+        <Card className="recent-orders-panel">
+          <div className="panel-heading"><div><h3>Recent orders</h3><p>Latest activity across permitted stores.</p></div><Link to="/orders">View all orders</Link></div>
+          {orders.length === 0 ? (
+            <EmptyState title="No orders yet" body="Orders will appear here after customers complete checkout." action={canSeeBot ? <Link to="/assistant">Review your assistant</Link> : undefined} />
           ) : (
-            <ul className="attention-links">
-              {awaitingPrep > 0 ? <li><Link to="/orders">{awaitingPrep} order{awaitingPrep === 1 ? "" : "s"} waiting to be prepared</Link></li> : null}
-              {awaitingFulfilment > 0 ? <li><Link to="/orders">{awaitingFulfilment} order{awaitingFulfilment === 1 ? "" : "s"} being fulfilled</Link></li> : null}
-              {waitingConversations > 0 ? <li><Link to="/conversations">{waitingConversations} conversation{waitingConversations === 1 ? "" : "s"} waiting for a person</Link></li> : null}
-              {lowStock.length > 0 ? <li><Link to="/inventory">{lowStock.length} product{lowStock.length === 1 ? "" : "s"} low or out of stock</Link></li> : null}
-              {whatsapp?.status !== "active" ? <li><Link to="/settings/whatsapp">Connect WhatsApp so customers can message you</Link></li> : null}
-              {!paystack?.enabled ? <li><Link to="/settings/payments">Connect payments so customers can pay</Link></li> : null}
-            </ul>
+            <div className="table-wrap flush-table">
+              <table>
+                <thead><tr><th>Order</th><th>Customer</th><th>Total</th><th>Status</th><th>When</th></tr></thead>
+                <tbody>
+                  {orders.slice(0, 8).map((order) => {
+                    const customer = (order.customer ?? {}) as Row;
+                    const status = String(order.status);
+                    return <tr key={String(order.id)}><td><Link to={`/orders?open=${String(order.id)}`}>{String(order.order_number ?? "Order")}</Link></td><td>{String(customer.name || customer.phone || "Customer")}</td><td>{money(order.total_minor, String(order.currency ?? currency))}</td><td><Badge tone={["paid", "completed"].includes(status) ? "success" : status === "cancelled" ? "danger" : "warning"}>{humanStatus(status)}</Badge></td><td>{relativeTime(order.created_at)}</td></tr>;
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </Card>
-        <Card>
-          <h3>Assistant</h3>
-          <p><StatusDot live={Boolean(bot?.published_version_id) && bot?.status === "active"} label={bot?.published_version_id ? "Live" : "Not published"} /></p>
-          <p><strong>{bot?.name || "No assistant yet"}</strong></p>
-          <p className="muted">{whatsapp?.status === "active" ? `WhatsApp ${whatsapp.display_number || "connected"}` : "WhatsApp not connected"}</p>
-          <p className="muted">{paystack?.enabled ? "Payments connected" : "Payments not connected"}</p>
-          <div className="page-actions" style={{ marginTop: 16 }}>
-            <Link to="/assistant"><button type="button" className="primary">Open assistant</button></Link>
-            <Link to="/conversations"><button type="button">Conversations</button></Link>
-          </div>
-        </Card>
+        <div className="operations-stack">
+          <Card>
+            <div className="panel-heading"><div><h3>Customer operations</h3><p>Current service readiness.</p></div></div>
+            <div className="health-list">
+              <div><span>Human handoffs</span><StatusDot live={waitingConversations === 0} label={waitingConversations === 0 ? "Covered" : `${waitingConversations} need attention`} /></div>
+              {canSeeBot ? <div><span>Assistant</span><StatusDot live={Boolean(bot?.published_version_id) && bot?.status === "active"} label={bot?.published_version_id ? "Live" : "Not published"} /></div> : null}
+              {canSeeChannels ? <div><span>Customer channel</span><StatusDot live={isUsableChannelStatus(customerChannel?.status)} label={isUsableChannelStatus(customerChannel?.status) ? "Connected" : "Not connected"} /></div> : null}
+              {canSeePayments ? <div><span>Payments</span><StatusDot live={Boolean(paymentConfiguration?.enabled)} label={paymentConfiguration?.enabled ? "Ready" : "Not ready"} /></div> : null}
+            </div>
+            <div className="page-actions compact-actions">{canSeeBot ? <Link className="button" to="/assistant">Assistant</Link> : null}<Link className="button" to="/conversations">Inbox</Link></div>
+          </Card>
+          {canManageSetup && setupStatus && !setupStatus.ready ? (
+            <Card>
+              <div className="panel-heading"><div><h3>Setup progress</h3><p>{setupDone} of {requiredItems.length} required steps ready.</p></div><Link to="/setup">Continue</Link></div>
+              <div className="progress-bar"><span style={{ width: `${requiredItems.length ? (setupDone / requiredItems.length) * 100 : 0}%` }} /></div>
+              <div className="setup-list compact-setup">
+                {requiredItems.filter((item) => !item.complete).slice(0, 3).map((item) => <SetupItem key={item.key} complete={false} label={item.label} to={setupHref(item.key)} description={item.description} />)}
+              </div>
+            </Card>
+          ) : null}
+        </div>
       </div>
-
-      {setupStatus && !setupStatus.ready ? (
-        <Card>
-          <h3>Finish setting up your store</h3>
-          <p className="muted">{setupDone} of {merchantItems.length} merchant steps complete</p>
-          <div className="progress-bar"><span style={{ width: `${merchantItems.length ? (setupDone / merchantItems.length) * 100 : 0}%` }} /></div>
-          <div className="setup-list">
-            {merchantItems.map((item) => (
-              <SetupItem key={item.key} complete={item.complete} label={item.label} to={setupHref(item.key)} description={item.complete ? undefined : item.description} />
-            ))}
-          </div>
-        </Card>
-      ) : null}
-
-      <Card>
-        <h3>Recent orders</h3>
-        {orders.length === 0 ? (
-          <EmptyState title="No orders yet" body="They will appear here as customers order on WhatsApp." action={<Link to="/assistant">Set up your assistant</Link>} />
-        ) : (
-          <div className="table-wrap" style={{ border: 0, margin: 0 }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>Order</th>
-                  <th>Customer</th>
-                  <th>Total</th>
-                  <th>Status</th>
-                  <th>When</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.slice(0, 8).map((order) => {
-                  const customer = (order.customer ?? {}) as Row;
-                  return (
-                    <tr key={String(order.id)}>
-                      <td><Link to={`/orders?open=${String(order.id)}`}>{String(order.order_number ?? "—")}</Link></td>
-                      <td>{String(customer.name || customer.phone || "Customer")}</td>
-                      <td>{money(order.total_minor, String(order.currency ?? currency))}</td>
-                      <td>{humanStatus(order.status)}</td>
-                      <td>{relativeTime(order.created_at)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
     </Page>
   );
 }

@@ -34,6 +34,19 @@ const (
 	PaymentFailed   = "failed"
 	PaymentExpired  = "expired"
 	PaymentRefunded = "refunded"
+
+	CommerceEventSourceHuman         = "human"
+	CommerceEventSourceSystem        = "system"
+	CommerceEventSourceRuntime       = "runtime"
+	CommerceEventSourceExternalEvent = "external_event"
+
+	CommerceEventOrderCreated            = "order.created"
+	CommerceEventOrderStatusChanged      = "order.status_changed"
+	CommerceEventOrderCancelled          = "order.cancelled"
+	CommerceEventOrderCompleted          = "order.completed"
+	CommerceEventPaymentConfirmed        = "payment.confirmed"
+	CommerceEventFulfilmentCreated       = "fulfilment.created"
+	CommerceEventFulfilmentStatusChanged = "fulfilment.status_changed"
 )
 
 type Store struct {
@@ -266,6 +279,37 @@ type OrderEvent struct {
 }
 
 func (OrderEvent) TableName() string { return "order_events" }
+
+type CommerceEvent struct {
+	ID             uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID uuid.UUID  `gorm:"type:uuid;index" json:"organization_id"`
+	EventType      string     `gorm:"index" json:"event_type"`
+	Source         string     `gorm:"index" json:"source"`
+	ResourceType   string     `gorm:"index" json:"resource_type"`
+	ResourceID     uuid.UUID  `gorm:"type:uuid;index" json:"resource_id"`
+	OrderID        *uuid.UUID `gorm:"type:uuid;index" json:"order_id,omitempty"`
+	PaymentID      *uuid.UUID `gorm:"type:uuid;index" json:"payment_id,omitempty"`
+	FulfilmentID   *uuid.UUID `gorm:"type:uuid;index" json:"fulfilment_id,omitempty"`
+	ActorUserID    *uuid.UUID `gorm:"type:uuid" json:"actor_user_id,omitempty"`
+	IdempotencyKey string     `gorm:"index" json:"idempotency_key"`
+	Metadata       string     `json:"metadata"`
+	CreatedAt      time.Time  `json:"created_at"`
+}
+
+func (CommerceEvent) TableName() string { return "commerce_events" }
+
+type ConversationOrderLink struct {
+	ID                    uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID        uuid.UUID `gorm:"type:uuid;index;uniqueIndex:idx_conversation_order_link" json:"organization_id"`
+	ConversationSessionID uuid.UUID `gorm:"type:uuid;index;uniqueIndex:idx_conversation_order_link" json:"conversation_session_id"`
+	OrderID               uuid.UUID `gorm:"type:uuid;index;uniqueIndex:idx_conversation_order_link" json:"order_id"`
+	CustomerID            uuid.UUID `gorm:"type:uuid;index" json:"customer_id"`
+	StoreID               uuid.UUID `gorm:"type:uuid;index" json:"store_id"`
+	Source                string    `json:"source"`
+	CreatedAt             time.Time `json:"created_at"`
+}
+
+func (ConversationOrderLink) TableName() string { return "conversation_order_links" }
 
 type Payment struct {
 	ID               uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`

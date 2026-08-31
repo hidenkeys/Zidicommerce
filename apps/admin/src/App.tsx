@@ -4,6 +4,8 @@ import { apiGet, apiPatch, apiPost, apiPut, setStoredToken } from "./api/client"
 import { RequireAuth } from "./auth";
 import { LoginPage } from "./components/LoginPage";
 import { Shell } from "./components/Shell";
+import { Page } from "./components/ui";
+import { AIChatPage } from "./pages/AIChat";
 import { AssistantPage } from "./pages/Assistant";
 import { BusinessPage } from "./pages/Business";
 import { CataloguePage } from "./pages/Catalogue";
@@ -19,7 +21,8 @@ import { SetupPage } from "./pages/Setup";
 import { StoresPage } from "./pages/Stores";
 import { TeamPage } from "./pages/Team";
 import { InviteAcceptPage } from "./pages/InviteAccept";
-import { WhatsAppPage } from "./pages/WhatsApp";
+import { ChannelsPage } from "./pages/Channels";
+import { isUsableChannelStatus } from "./lib/channels";
 
 type Row = Record<string, unknown>;
 type ApiUser = { id: string; organization_id: string; email?: string; role: string };
@@ -263,7 +266,7 @@ function Dashboard() {
   const currency = String(org?.currency ?? todayOrders[0]?.currency ?? "NGN");
   const attention: string[] = [];
   if (awaitingPrep > 0) attention.push(`${awaitingPrep} order${awaitingPrep === 1 ? "" : "s"} waiting to be prepared`);
-  if (whatsapp && whatsapp.status !== "active") attention.push("WhatsApp connection needs attention");
+  if (whatsapp && !isUsableChannelStatus(whatsapp.status)) attention.push("WhatsApp connection needs attention");
   if (!whatsapp) attention.push("WhatsApp is not connected yet");
   if (waitingConversations > 0) attention.push(`${waitingConversations} customer conversation${waitingConversations === 1 ? "" : "s"} waiting for a response`);
   if (lowStock > 0) attention.push(`Inventory is low for ${lowStock} product${lowStock === 1 ? "" : "s"}`);
@@ -296,7 +299,7 @@ function Dashboard() {
         </div>
         <div className="table-wrap">
           <h3>WhatsApp</h3>
-          <p className="status-pill">{whatsapp?.status === "active" ? "Connected" : "Not connected"}</p>
+          <p className="status-pill">{isUsableChannelStatus(whatsapp?.status) ? "Connected" : "Not connected"}</p>
           <p className="muted">{whatsapp?.display_number || "Connect a number in Settings → WhatsApp."}</p>
         </div>
       </div>
@@ -1358,13 +1361,9 @@ function AuditLogScreen() {
   }, []);
 
   return (
-    <section className="content">
-      <div className="section-heading">
-        <h2>Audit logs</h2>
-        <p>Administrative events for organization, member, invitation and store-access changes.</p>
-      </div>
+    <Page title="Audit log" description="Administrative events for organization, team, invitation, and store-access changes.">
       <ResourceTable rows={rows} message={message} />
-    </section>
+    </Page>
   );
 }
 
@@ -2283,7 +2282,7 @@ function formatCell(value: unknown) {
 }
 
 function whatsappConnected(channels: Channel[]) {
-  return channels.some((channel) => channel.provider === "whatsapp" && channel.status === "active");
+  return channels.some((channel) => channel.provider === "whatsapp" && isUsableChannelStatus(channel.status));
 }
 
 function WhatsAppScreen() {
@@ -2317,7 +2316,7 @@ function WhatsAppScreen() {
       {message ? <p className="error-text">{message}</p> : null}
       <div className="grid">
         <article className="summary-card"><span>Number</span><p>{channel?.display_number || "Not connected"}</p></article>
-        <article className="summary-card"><span>Connection</span><p>{channel?.status === "active" ? "Connected" : "Not connected"}</p></article>
+        <article className="summary-card"><span>Connection</span><p>{isUsableChannelStatus(channel?.status) ? "Connected" : "Not connected"}</p></article>
         <article className="summary-card"><span>Bot</span><p>{whatsappReady?.complete ? "Ready" : "Needs attention"}</p></article>
       </div>
       <p className="muted">Secrets stay hidden. If something looks wrong, check Advanced → Readiness.</p>
@@ -2432,12 +2431,13 @@ export default function App() {
           <Route path="customers" element={<CustomersPage />} />
           <Route path="stores" element={<StoresPage />} />
           <Route path="assistant" element={<AssistantPage />} />
+          <Route path="assistant/ai-chat" element={<AIChatPage />} />
           <Route path="conversations" element={<ConversationsPage />} />
           <Route path="knowledge" element={<KnowledgePage />} />
           <Route path="team" element={<TeamPage />} />
           <Route path="settings/business" element={<BusinessPage />} />
           <Route path="settings/payments" element={<PaymentsPage />} />
-          <Route path="settings/whatsapp" element={<WhatsAppPage />} />
+          <Route path="settings/whatsapp" element={<ChannelsPage />} />
           <Route path="advanced/bot-builder" element={<BotBuilderScreen variant="builder" />} />
           <Route path="advanced/payments" element={<PaymentsScreen />} />
           <Route path="advanced/delivery" element={<FulfilmentScreen />} />
@@ -2469,7 +2469,7 @@ export default function App() {
           <Route path="organization/audit-logs" element={<AuditLogScreen />} />
           <Route path="configuration/payments" element={<PaymentsScreen />} />
           <Route path="configuration/fulfilment" element={<FulfilmentScreen />} />
-          <Route path="configuration/channels" element={<WhatsAppPage />} />
+          <Route path="configuration/channels" element={<ChannelsPage />} />
           <Route path="automation/bots" element={<AssistantPage />} />
           <Route path="automation/versions" element={<BotBuilderScreen variant="builder" />} />
           <Route path="automation/support-handoffs" element={<ConversationsPage />} />

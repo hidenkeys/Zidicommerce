@@ -1,15 +1,20 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiGet, apiPatch } from "../api/client";
-import { Card, Flash, FormGrid, Page } from "../components/ui";
+import { useAuth } from "../auth";
+import { Card, Flash, FormGrid, LoadingState, Page } from "../components/ui";
 import { type Row } from "../lib/format";
+import { hasPermission } from "../lib/permissions";
 
 type Organization = Row & { id: string; name?: string };
 
 export function BusinessPage() {
+  const { user } = useAuth();
+  const canManageSettings = hasPermission(user.role, "settings.manage");
   const [org, setOrg] = useState<Organization | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("");
   const [flash, setFlash] = useState("");
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
@@ -23,6 +28,8 @@ export function BusinessPage() {
         setForm(next);
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Could not load business profile");
+      } finally {
+        setLoading(false);
       }
     }
     void load();
@@ -44,11 +51,12 @@ export function BusinessPage() {
     <Page title="Business" description="Your public name, contact details, currency, and timezone." help="This is what the assistant and receipts use for your business.">
       <Flash message={message} />
       <Flash message={flash} tone="success" />
+      {loading ? <LoadingState label="Loading business settings" /> : <>
       <Card>
         <p><strong>{org?.name || "Your business"}</strong></p>
         <p className="muted">{form.currency || "NGN"} · {form.timezone || "Timezone not set"}</p>
       </Card>
-      <FormGrid onSubmit={submit}>
+      {canManageSettings ? <FormGrid onSubmit={submit}>
         <label>Business name<input value={form.name ?? ""} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
         <label>Contact name<input value={form.contact_name ?? ""} onChange={(event) => setForm({ ...form, contact_name: event.target.value })} /></label>
         <label>Contact email<input value={form.contact_email ?? ""} onChange={(event) => setForm({ ...form, contact_email: event.target.value })} /></label>
@@ -59,7 +67,8 @@ export function BusinessPage() {
         <label>Logo URL<input value={form.logo_url ?? ""} onChange={(event) => setForm({ ...form, logo_url: event.target.value })} /></label>
         <label className="full">About<textarea value={form.description ?? ""} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
         <div className="full"><button type="submit">Save</button></div>
-      </FormGrid>
+      </FormGrid> : <p className="read-only-note">Business settings are read-only for your role.</p>}
+      </>}
     </Page>
   );
 }

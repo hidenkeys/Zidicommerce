@@ -28,6 +28,8 @@ import (
 
 const defaultSessionTTL = 24 * time.Hour
 
+var runtimeUsableChannelStatuses = []string{core.StatusActive, "connected", "healthy", "degraded", "requires_attention"}
+
 type Service struct {
 	db              *gorm.DB
 	commerce        *core.Service
@@ -36,6 +38,7 @@ type Service struct {
 	senders         map[string]ChannelSender
 	log             *slog.Logger
 	handoffInbound  HandoffInboundHandler
+	aiInbound       AIInboundHandler
 	lifecycleCancel LifecycleCancelHandler
 	now             func() time.Time
 }
@@ -73,28 +76,55 @@ func (s *Service) ProcessMessage(ctx context.Context, input InboundMessage) (Run
 	if err != nil {
 		return RuntimeResult{}, err
 	}
-	if found && processed.Status == "processing" {
-		return RuntimeResult{}, runtimeError(ErrSessionConflict, "This message is already being processed. Please try again.")
-	}
 	if found {
-		var result RuntimeResult
-		if err := json.Unmarshal([]byte(defaultObject(processed.Result)), &result); err == nil {
-			return result, nil
+		switch processed.Status {
+		case "processing":
+			return RuntimeResult{}, runtimeError(ErrSessionConflict, "This message is already being processed. Please try again.")
+		case "processed":
+			var result RuntimeResult
+			if err := json.Unmarshal([]byte(defaultObject(processed.Result)), &result); err == nil {
+				return result, nil
+			}
+			return RuntimeResult{}, runtimeError(ErrRuntimeConfigurationError, "This message could not be replayed safely.")
+		case "failed":
+			claimed, claimErr := s.claimFailedProcessed(ctx, processed)
+			if claimErr != nil {
+				return RuntimeResult{}, claimErr
+			}
+			if !claimed {
+				return RuntimeResult{}, runtimeError(ErrSessionConflict, "This message is already being retried. Please try again.")
+			}
+			processed.Status, processed.Result, processed.SessionID = "processing", "{}", nil
+		default:
+			return RuntimeResult{}, runtimeError(ErrRuntimeConfigurationError, "This message has an unsupported processing state.")
 		}
-		return RuntimeResult{}, runtimeError(ErrRuntimeConfigurationError, "This message could not be replayed safely.")
 	}
 	if !found {
 		processed = ProcessedMessage{ID: uuid.New(), OrganizationID: channel.OrganizationID, ChannelID: channel.ID, ExternalMessageID: input.ExternalMessageID, ExternalConversationID: input.ExternalConversationID, Status: "processing", Result: "{}"}
 		if err := s.db.WithContext(ctx).Create(&processed).Error; err != nil {
 			if duplicateProcessed, ok, findErr := s.findProcessed(ctx, channel, input.ExternalMessageID); findErr == nil && ok {
-				if duplicateProcessed.Status == "processing" {
+				switch duplicateProcessed.Status {
+				case "processing":
 					return RuntimeResult{}, runtimeError(ErrSessionConflict, "This message is already being processed. Please try again.")
+				case "processed":
+					var result RuntimeResult
+					if err := json.Unmarshal([]byte(defaultObject(duplicateProcessed.Result)), &result); err == nil {
+						return result, nil
+					}
+					return RuntimeResult{}, runtimeError(ErrRuntimeConfigurationError, "This message could not be replayed safely.")
+				case "failed":
+					claimed, claimErr := s.claimFailedProcessed(ctx, duplicateProcessed)
+					if claimErr != nil {
+						return RuntimeResult{}, claimErr
+					}
+					if !claimed {
+						return RuntimeResult{}, runtimeError(ErrSessionConflict, "This message is already being retried. Please try again.")
+					}
+					processed = duplicateProcessed
+					processed.Status, processed.Result, processed.SessionID = "processing", "{}", nil
+				default:
+					return RuntimeResult{}, runtimeError(ErrRuntimeConfigurationError, "This message has an unsupported processing state.")
 				}
-				var result RuntimeResult
-				if err := json.Unmarshal([]byte(defaultObject(duplicateProcessed.Result)), &result); err == nil {
-					return result, nil
-				}
-				return RuntimeResult{}, runtimeError(ErrRuntimeConfigurationError, "This message could not be replayed safely.")
 			}
 			return RuntimeResult{}, err
 		}
@@ -148,7 +178,7 @@ func (s *Service) ProcessMessage(ctx context.Context, input InboundMessage) (Run
 }
 
 func (s *Service) StartTestSession(ctx context.Context, actor auth.CurrentUser, input RuntimeStartInput) (ConversationSession, error) {
-	if !canUseRuntimeSimulator(actor.Role) {
+	if !actor.Role.HasPermission(authz.PermissionAIUse) {
 		return ConversationSession{}, httperror.Forbidden("You cannot use the runtime simulator")
 	}
 	channel, err := s.getChannelForActor(ctx, actor, input.ChannelID)
@@ -166,7 +196,7 @@ func (s *Service) StartTestSession(ctx context.Context, actor auth.CurrentUser, 
 }
 
 func (s *Service) ProcessTestMessage(ctx context.Context, actor auth.CurrentUser, input RuntimeMessageInput) (RuntimeResult, error) {
-	if !canUseRuntimeSimulator(actor.Role) {
+	if !actor.Role.HasPermission(authz.PermissionAIUse) {
 		return RuntimeResult{}, httperror.Forbidden("You cannot use the runtime simulator")
 	}
 	var session ConversationSession
@@ -184,16 +214,34 @@ func (s *Service) ProcessTestMessage(ctx context.Context, actor auth.CurrentUser
 	return s.ProcessMessage(ctx, inbound)
 }
 
-func (s *Service) ListConversations(ctx context.Context, actor auth.CurrentUser) ([]ConversationSummary, error) {
-	if !actor.Role.CanViewCommerce() && actor.Role != authz.ServiceProvider {
+func (s *Service) ListConversations(ctx context.Context, actor auth.CurrentUser, filter ConversationFilter) ([]ConversationSummary, error) {
+	if !actor.Role.HasPermission(authz.PermissionConversationsView) && actor.Role != authz.ServiceProvider {
 		return nil, httperror.Forbidden("You cannot view runtime conversations")
 	}
 	var sessions []ConversationSession
-	if err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("updated_at DESC").Limit(100).Find(&sessions).Error; err != nil {
+	query := s.db.WithContext(ctx).Where("conversation_sessions.organization_id = ?", actor.OrganizationID).Order("conversation_sessions.updated_at DESC").Limit(100)
+	query = s.scopeConversationQuery(query, actor)
+	if status := strings.ToLower(strings.TrimSpace(filter.Status)); status != "" && status != "all" {
+		if !validConversationStatus(status) {
+			return nil, httperror.BadRequest("Conversation status is not valid")
+		}
+		query = query.Where("conversation_status = ?", status)
+	}
+	switch strings.ToLower(strings.TrimSpace(filter.Assigned)) {
+	case "me":
+		query = query.Where("assigned_user_id = ?", actor.ID)
+	case "unassigned":
+		query = query.Where("assigned_user_id IS NULL")
+	}
+	if filter.Unread {
+		query = query.Where("unread_count > 0")
+	}
+	if err := query.Find(&sessions).Error; err != nil {
 		return nil, err
 	}
 	summaries := make([]ConversationSummary, 0, len(sessions))
 	for _, session := range sessions {
+		conversationStatus := conversationStatusForRuntime(session)
 		summary := ConversationSummary{
 			ID:                     session.ID,
 			OrganizationID:         session.OrganizationID,
@@ -201,11 +249,22 @@ func (s *Service) ListConversations(ctx context.Context, actor auth.CurrentUser)
 			BotVersionID:           session.BotVersionID,
 			ChannelID:              session.ChannelID,
 			CustomerID:             session.CustomerID,
+			StoreID:                session.StoreID,
 			ExternalConversationID: session.ExternalConversationID,
 			CurrentStepKey:         session.CurrentStepKey,
 			ExpectedInput:          session.ExpectedInput,
 			Status:                 session.Status,
+			ConversationStatus:     conversationStatus,
+			AssignedUserID:         session.AssignedUserID,
+			Priority:               sessionPriority(session),
+			HandoffState:           session.HandoffState,
+			UnreadCount:            session.UnreadCount,
 			CurrentModule:          currentModuleName(session),
+			LastMessage:            session.LastMessageBody,
+			LastMessageDirection:   session.LastMessageDirection,
+			LastMessageAt:          session.LastMessageAt,
+			LastReadAt:             session.LastReadAt,
+			ResolvedAt:             session.ResolvedAt,
 			UpdatedAt:              session.UpdatedAt,
 			CreatedAt:              session.CreatedAt,
 		}
@@ -216,26 +275,138 @@ func (s *Service) ListConversations(ctx context.Context, actor auth.CurrentUser)
 				summary.CustomerPhone = customer.Phone
 			}
 		}
-		var last ConversationMessage
-		if err := s.db.WithContext(ctx).Where("organization_id = ? AND session_id = ?", actor.OrganizationID, session.ID).Order("created_at DESC").First(&last).Error; err == nil {
-			summary.LastMessage = last.Body
-			summary.LastMessageDirection = last.Direction
+		if session.StoreID != nil {
+			storeName, err := s.conversationStore(ctx, actor.OrganizationID, session.StoreID)
+			if err != nil {
+				return nil, err
+			}
+			summary.StoreName = storeName
+		}
+		if session.AssignedUserID != nil {
+			var user organizationUserLite
+			if err := s.db.WithContext(ctx).Table("users").Select("first_name, last_name, email").Where("id = ?", *session.AssignedUserID).First(&user).Error; err == nil {
+				summary.AssignedUserName = strings.TrimSpace(strings.TrimSpace(user.FirstName+" "+user.LastName) + " " + user.Email)
+			}
+		}
+		if summary.LastMessage == "" {
+			var last ConversationMessage
+			if err := s.db.WithContext(ctx).Where("organization_id = ? AND session_id = ?", actor.OrganizationID, session.ID).Order("created_at DESC").First(&last).Error; err == nil {
+				summary.LastMessage = last.Body
+				summary.LastMessageDirection = last.Direction
+			}
 		}
 		var handoff SupportHandoff
-		if err := s.db.WithContext(ctx).Where("organization_id = ? AND session_id = ? AND status IN ?", actor.OrganizationID, session.ID, []string{"open", "assigned"}).Order("created_at DESC").First(&handoff).Error; err == nil {
+		if err := s.db.WithContext(ctx).Where("organization_id = ? AND session_id = ? AND status IN ?", actor.OrganizationID, session.ID, activeHandoffStatuses).Order("created_at DESC").First(&handoff).Error; err == nil {
 			summary.HandoffStatus = handoff.Status
+			summary.HandoffID = &handoff.ID
+			if handoff.Priority != "" {
+				summary.Priority = handoff.Priority
+			}
+		}
+		if err := s.attachConversationCommerceContext(ctx, actor, &summary); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(filter.Search) != "" {
+			haystack := strings.ToLower(summary.CustomerName + " " + summary.CustomerPhone + " " + summary.StoreName + " " + summary.LastMessage + " " + summary.OrderNumber + " " + summary.OrderStatus + " " + summary.PaymentStatus + " " + summary.FulfilmentStatus)
+			if !strings.Contains(haystack, strings.ToLower(strings.TrimSpace(filter.Search))) {
+				continue
+			}
 		}
 		summaries = append(summaries, summary)
 	}
 	return summaries, nil
 }
 
+type organizationUserLite struct {
+	FirstName string
+	LastName  string
+	Email     string
+}
+
+func (s *Service) GetConversationDetail(ctx context.Context, actor auth.CurrentUser, sessionID uuid.UUID) (ConversationSummary, error) {
+	session, err := s.GetConversation(ctx, actor, sessionID)
+	if err != nil {
+		return ConversationSummary{}, err
+	}
+	return s.hydrateConversationSummary(ctx, actor, session)
+}
+
+func (s *Service) hydrateConversationSummary(ctx context.Context, actor auth.CurrentUser, session ConversationSession) (ConversationSummary, error) {
+	summary := ConversationSummary{
+		ID:                     session.ID,
+		OrganizationID:         session.OrganizationID,
+		BotID:                  session.BotID,
+		BotVersionID:           session.BotVersionID,
+		ChannelID:              session.ChannelID,
+		CustomerID:             session.CustomerID,
+		StoreID:                session.StoreID,
+		ExternalConversationID: session.ExternalConversationID,
+		CurrentStepKey:         session.CurrentStepKey,
+		ExpectedInput:          session.ExpectedInput,
+		Status:                 session.Status,
+		ConversationStatus:     conversationStatusForRuntime(session),
+		AssignedUserID:         session.AssignedUserID,
+		Priority:               sessionPriority(session),
+		HandoffState:           session.HandoffState,
+		UnreadCount:            session.UnreadCount,
+		CurrentModule:          currentModuleName(session),
+		LastMessage:            session.LastMessageBody,
+		LastMessageDirection:   session.LastMessageDirection,
+		LastMessageAt:          session.LastMessageAt,
+		LastReadAt:             session.LastReadAt,
+		ResolvedAt:             session.ResolvedAt,
+		UpdatedAt:              session.UpdatedAt,
+		CreatedAt:              session.CreatedAt,
+	}
+	if session.CustomerID != nil {
+		var customer core.Customer
+		if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, *session.CustomerID).First(&customer).Error; err == nil {
+			summary.CustomerName = customer.Name
+			summary.CustomerPhone = customer.Phone
+		}
+	}
+	if session.StoreID != nil {
+		storeName, err := s.conversationStore(ctx, actor.OrganizationID, session.StoreID)
+		if err != nil {
+			return summary, err
+		}
+		summary.StoreName = storeName
+	}
+	if session.AssignedUserID != nil {
+		var user organizationUserLite
+		if err := s.db.WithContext(ctx).Table("users").Select("first_name, last_name, email").Where("id = ?", *session.AssignedUserID).First(&user).Error; err == nil {
+			summary.AssignedUserName = strings.TrimSpace(strings.TrimSpace(user.FirstName+" "+user.LastName) + " " + user.Email)
+		}
+	}
+	if summary.LastMessage == "" {
+		var last ConversationMessage
+		if err := s.db.WithContext(ctx).Where("organization_id = ? AND session_id = ?", actor.OrganizationID, session.ID).Order("created_at DESC").First(&last).Error; err == nil {
+			summary.LastMessage = last.Body
+			summary.LastMessageDirection = last.Direction
+		}
+	}
+	var handoff SupportHandoff
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND session_id = ? AND status IN ?", actor.OrganizationID, session.ID, activeHandoffStatuses).Order("created_at DESC").First(&handoff).Error; err == nil {
+		summary.HandoffStatus = handoff.Status
+		summary.HandoffID = &handoff.ID
+		if handoff.Priority != "" {
+			summary.Priority = handoff.Priority
+		}
+	}
+	if err := s.attachConversationCommerceContext(ctx, actor, &summary); err != nil {
+		return summary, err
+	}
+	return summary, nil
+}
+
 func (s *Service) GetConversation(ctx context.Context, actor auth.CurrentUser, sessionID uuid.UUID) (ConversationSession, error) {
-	if !actor.Role.CanViewCommerce() && actor.Role != authz.ServiceProvider {
+	if !actor.Role.HasPermission(authz.PermissionConversationsView) && actor.Role != authz.ServiceProvider {
 		return ConversationSession{}, httperror.Forbidden("You cannot view runtime conversations")
 	}
 	var session ConversationSession
-	err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, sessionID).First(&session).Error
+	query := s.db.WithContext(ctx).Where("conversation_sessions.organization_id = ? AND conversation_sessions.id = ?", actor.OrganizationID, sessionID)
+	query = s.scopeConversationQuery(query, actor)
+	err := query.First(&session).Error
 	return session, mapNotFoundCode(err, ErrSessionNotFound, "Runtime session not found")
 }
 
@@ -249,7 +420,7 @@ func (s *Service) ListConversationMessages(ctx context.Context, actor auth.Curre
 }
 
 func (s *Service) ReplyToConversation(ctx context.Context, actor auth.CurrentUser, sessionID uuid.UUID, input ConversationReplyInput) (ConversationMessage, error) {
-	if !actor.Role.CanOperateStore() && actor.Role != authz.SupportAgent && actor.Role != authz.ServiceProvider {
+	if !actor.Role.HasPermission(authz.PermissionConversationsManage) && actor.Role != authz.ServiceProvider {
 		return ConversationMessage{}, httperror.Forbidden("You cannot reply to conversations")
 	}
 	text := strings.TrimSpace(input.Text)
@@ -264,8 +435,23 @@ func (s *Service) ReplyToConversation(ctx context.Context, actor auth.CurrentUse
 	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, session.ChannelID).First(&channel).Error; err != nil {
 		return ConversationMessage{}, mapNotFoundCode(err, ErrChannelNotFound, "Channel not found")
 	}
-	outbound := ConversationMessage{ID: uuid.New(), OrganizationID: session.OrganizationID, SessionID: session.ID, ChannelID: session.ChannelID, Direction: DirectionOutbound, MessageType: MessageText, Sender: "agent", Body: text, Metadata: jsonValue(map[string]any{"source": "admin_reply"})}
-	if err := s.db.WithContext(ctx).Create(&outbound).Error; err != nil {
+	now := s.now()
+	outbound := ConversationMessage{ID: uuid.New(), OrganizationID: session.OrganizationID, SessionID: session.ID, ChannelID: session.ChannelID, Direction: DirectionOutbound, MessageType: MessageText, Sender: "agent", Body: text, Metadata: jsonValue(map[string]any{"source": "admin_reply", "actor_user_id": actor.ID.String()}), CreatedAt: now}
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&outbound).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&ConversationSession{}).Where("organization_id = ? AND id = ?", session.OrganizationID, session.ID).Updates(map[string]any{
+			"last_message_at":        &now,
+			"last_message_body":      text,
+			"last_message_direction": DirectionOutbound,
+			"conversation_status":    ConversationWaiting,
+			"updated_at":             now,
+		}).Error; err != nil {
+			return err
+		}
+		return s.auditTx(tx, actor, "conversation_session", session.ID, "conversation_agent_reply_added", map[string]any{"message_id": outbound.ID.String()})
+	}); err != nil {
 		return ConversationMessage{}, err
 	}
 	result := RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{Type: MessageText, Text: text}}}
@@ -278,31 +464,46 @@ func (s *Service) ReplyToConversation(ctx context.Context, actor auth.CurrentUse
 }
 
 func (s *Service) ReopenSupportHandoff(ctx context.Context, actor auth.CurrentUser, handoffID uuid.UUID) (SupportHandoff, error) {
-	if !actor.Role.CanOperateStore() && actor.Role != authz.SupportAgent {
+	if !actor.Role.HasPermission(authz.PermissionConversationsManage) {
 		return SupportHandoff{}, httperror.Forbidden("You cannot reopen support handoffs")
 	}
 	var handoff SupportHandoff
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error; err != nil {
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID)
+		query = s.scopeHandoffQuery(query, actor)
+		if err := query.First(&handoff).Error; err != nil {
 			return mapNotFoundCode(err, ErrSessionNotFound, "Support handoff not found")
 		}
 		now := s.now()
-		if err := tx.Model(&handoff).Updates(map[string]any{"status": "open", "resolved_at": nil, "updated_at": now}).Error; err != nil {
+		newStatus := "open"
+		conversationStatus := ConversationHumanRequested
+		if handoff.AssignedUserID != nil {
+			newStatus = "assigned"
+			conversationStatus = ConversationHumanAssigned
+		}
+		if err := tx.Model(&handoff).Updates(map[string]any{"status": newStatus, "resolved_at": nil, "released_at": nil, "updated_at": now}).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&ConversationSession{}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoff.SessionID).Updates(map[string]any{"status": SessionHandoff, "updated_at": now}).Error; err != nil {
+		if err := tx.Model(&ConversationSession{}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoff.SessionID).Updates(map[string]any{"status": SessionHandoff, "conversation_status": conversationStatus, "assigned_user_id": handoff.AssignedUserID, "handoff_state": newStatus, "human_owned_at": &now, "resolved_at": nil, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		if err := s.auditTx(tx, actor, "support_handoff", handoff.ID, "handoff_reopened", map[string]any{"previous_status": handoff.Status, "new_status": newStatus}); err != nil {
 			return err
 		}
 		return tx.Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error
 	})
+	if err == nil {
+		s.recordEvent(ctx, ConversationSession{ID: handoff.SessionID, OrganizationID: actor.OrganizationID}, EventHandoffReopened, "info", "", "", map[string]any{"status": handoff.Status})
+	}
 	return handoff, err
 }
 
 func (s *Service) ListSupportHandoffs(ctx context.Context, actor auth.CurrentUser, status string) ([]SupportHandoff, error) {
-	if !actor.Role.CanViewCommerce() && actor.Role != authz.SupportAgent {
+	if !actor.Role.HasPermission(authz.PermissionConversationsView) {
 		return nil, httperror.Forbidden("You cannot view support handoffs")
 	}
 	query := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("created_at DESC").Limit(100)
+	query = s.scopeHandoffQuery(query, actor)
 	if strings.TrimSpace(status) != "" {
 		query = query.Where("status = ?", strings.TrimSpace(status))
 	}
@@ -311,7 +512,7 @@ func (s *Service) ListSupportHandoffs(ctx context.Context, actor auth.CurrentUse
 }
 
 func (s *Service) ListSupportTickets(ctx context.Context, actor auth.CurrentUser, status string) ([]SupportTicket, error) {
-	if !actor.Role.CanViewCommerce() && actor.Role != authz.SupportAgent {
+	if !actor.Role.HasPermission(authz.PermissionComplaintsView) {
 		return nil, httperror.Forbidden("You cannot view support tickets")
 	}
 	query := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("created_at DESC").Limit(100)
@@ -323,20 +524,32 @@ func (s *Service) ListSupportTickets(ctx context.Context, actor auth.CurrentUser
 }
 
 func (s *Service) ClaimSupportHandoff(ctx context.Context, actor auth.CurrentUser, handoffID uuid.UUID, input SupportHandoffClaimInput) (SupportHandoff, error) {
-	if !actor.Role.CanOperateStore() && actor.Role != authz.SupportAgent {
+	if !actor.Role.HasPermission(authz.PermissionConversationsManage) {
 		return SupportHandoff{}, httperror.Forbidden("You cannot claim support handoffs")
 	}
 	var handoff SupportHandoff
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error; err != nil {
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID)
+		query = s.scopeHandoffQuery(query, actor)
+		if err := query.First(&handoff).Error; err != nil {
 			return mapNotFoundCode(err, ErrSessionNotFound, "Support handoff not found")
 		}
-		if handoff.Status == "resolved" {
-			return httperror.BadRequest("Resolved handoffs cannot be claimed")
+		if handoff.Status == "resolved" || handoff.Status == "released" {
+			return httperror.BadRequest("Closed handoffs cannot be claimed")
+		}
+		if handoff.AssignedUserID != nil && *handoff.AssignedUserID != actor.ID && actor.Role == authz.SupportAgent {
+			return httperror.Forbidden("You cannot claim another agent's handoff")
 		}
 		now := s.now()
-		updates := map[string]any{"status": "assigned", "assigned_user_id": actor.ID, "updated_at": now}
+		priority := normalizePriority(input.Priority)
+		if input.Priority == "" && handoff.Priority != "" {
+			priority = handoff.Priority
+		}
+		updates := map[string]any{"status": "assigned", "assigned_user_id": actor.ID, "priority": priority, "released_at": nil, "updated_at": now}
 		if err := tx.Model(&handoff).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&ConversationSession{}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoff.SessionID).Updates(map[string]any{"status": SessionHandoff, "conversation_status": ConversationHumanAssigned, "assigned_user_id": actor.ID, "priority": priority, "handoff_state": "assigned", "human_owned_at": &now, "human_released_at": nil, "resolved_at": nil, "updated_at": now}).Error; err != nil {
 			return err
 		}
 		if strings.TrimSpace(input.Note) != "" {
@@ -345,13 +558,19 @@ func (s *Service) ClaimSupportHandoff(ctx context.Context, actor auth.CurrentUse
 				return err
 			}
 		}
+		if err := s.auditTx(tx, actor, "support_handoff", handoff.ID, "handoff_claimed", map[string]any{"previous_status": handoff.Status, "assigned_user_id": actor.ID.String()}); err != nil {
+			return err
+		}
 		return tx.Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error
 	})
+	if err == nil {
+		s.recordEvent(ctx, ConversationSession{ID: handoff.SessionID, OrganizationID: actor.OrganizationID}, EventHandoffClaimed, "info", "", "", map[string]any{"assigned_user_id": actor.ID.String()})
+	}
 	return handoff, err
 }
 
 func (s *Service) AddSupportHandoffNote(ctx context.Context, actor auth.CurrentUser, handoffID uuid.UUID, input SupportHandoffNoteInput) (SupportHandoffNote, error) {
-	if !actor.Role.CanViewCommerce() && actor.Role != authz.SupportAgent {
+	if !actor.Role.HasPermission(authz.PermissionConversationsManage) {
 		return SupportHandoffNote{}, httperror.Forbidden("You cannot add support notes")
 	}
 	noteText := strings.TrimSpace(input.Note)
@@ -359,19 +578,50 @@ func (s *Service) AddSupportHandoffNote(ctx context.Context, actor auth.CurrentU
 		return SupportHandoffNote{}, httperror.BadRequest("Note is required")
 	}
 	var handoff SupportHandoff
-	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error; err != nil {
+	query := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID)
+	query = s.scopeHandoffQuery(query, actor)
+	if err := query.First(&handoff).Error; err != nil {
 		return SupportHandoffNote{}, mapNotFoundCode(err, ErrSessionNotFound, "Support handoff not found")
 	}
-	note := SupportHandoffNote{ID: uuid.New(), OrganizationID: actor.OrganizationID, HandoffID: handoffID, ActorUserID: actor.ID, Note: noteText, Internal: input.Internal}
-	return note, s.db.WithContext(ctx).Create(&note).Error
+	note := SupportHandoffNote{ID: uuid.New(), OrganizationID: actor.OrganizationID, HandoffID: handoffID, ActorUserID: actor.ID, Note: noteText, Internal: input.Internal, CreatedAt: s.now()}
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&note).Error; err != nil {
+			return err
+		}
+		now := s.now()
+		channelID := uuidFromMetadataOrZero(handoff.Metadata, "channel_id")
+		if channelID == uuid.Nil {
+			var session ConversationSession
+			if err := tx.Select("channel_id").Where("organization_id = ? AND id = ?", actor.OrganizationID, handoff.SessionID).First(&session).Error; err == nil {
+				channelID = session.ChannelID
+			}
+		}
+		message := ConversationMessage{ID: uuid.New(), OrganizationID: actor.OrganizationID, SessionID: handoff.SessionID, ChannelID: channelID, Direction: DirectionInternal, MessageType: MessageText, Sender: "agent_note", Body: noteText, Metadata: jsonValue(map[string]any{"handoff_id": handoff.ID.String(), "internal": input.Internal, "actor_user_id": actor.ID.String()}), CreatedAt: now}
+		if !input.Internal {
+			message.Direction = DirectionOutbound
+			message.Sender = "agent"
+		}
+		if message.ChannelID != uuid.Nil {
+			if err := tx.Create(&message).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&ConversationSession{}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoff.SessionID).Updates(map[string]any{"last_message_at": &now, "last_message_body": noteText, "last_message_direction": message.Direction, "updated_at": now}).Error; err != nil {
+				return err
+			}
+		}
+		return s.auditTx(tx, actor, "support_handoff", handoff.ID, "handoff_note_added", map[string]any{"internal": input.Internal})
+	})
+	return note, err
 }
 
 func (s *Service) ListSupportHandoffNotes(ctx context.Context, actor auth.CurrentUser, handoffID uuid.UUID) ([]SupportHandoffNote, error) {
-	if !actor.Role.CanViewCommerce() && actor.Role != authz.SupportAgent {
+	if !actor.Role.HasPermission(authz.PermissionConversationsView) {
 		return nil, httperror.Forbidden("You cannot view support notes")
 	}
 	var handoff SupportHandoff
-	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error; err != nil {
+	query := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID)
+	query = s.scopeHandoffQuery(query, actor)
+	if err := query.First(&handoff).Error; err != nil {
 		return nil, mapNotFoundCode(err, ErrSessionNotFound, "Support handoff not found")
 	}
 	var notes []SupportHandoffNote
@@ -380,12 +630,14 @@ func (s *Service) ListSupportHandoffNotes(ctx context.Context, actor auth.Curren
 }
 
 func (s *Service) ResolveSupportHandoff(ctx context.Context, actor auth.CurrentUser, handoffID uuid.UUID, input SupportHandoffResolveInput) (SupportHandoff, error) {
-	if !actor.Role.CanViewCommerce() && actor.Role != authz.SupportAgent {
+	if !actor.Role.HasPermission(authz.PermissionConversationsManage) {
 		return SupportHandoff{}, httperror.Forbidden("You cannot resolve support handoffs")
 	}
 	var handoff SupportHandoff
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error; err != nil {
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID)
+		query = s.scopeHandoffQuery(query, actor)
+		if err := query.First(&handoff).Error; err != nil {
 			return mapNotFoundCode(err, ErrSessionNotFound, "Support handoff not found")
 		}
 		if handoff.Status == "resolved" {
@@ -396,20 +648,57 @@ func (s *Service) ResolveSupportHandoff(ctx context.Context, actor auth.CurrentU
 		if strings.TrimSpace(input.ResolutionNote) != "" {
 			metadata["resolution_note"] = strings.TrimSpace(input.ResolutionNote)
 		}
+		if handoff.AssignedUserID != nil && actor.Role == authz.SupportAgent && *handoff.AssignedUserID != actor.ID {
+			return httperror.Forbidden("You cannot resolve another agent's handoff")
+		}
 		updates := map[string]any{"status": "resolved", "resolved_at": &now, "metadata": jsonMap(metadata), "updated_at": now}
 		if err := tx.Model(&handoff).Updates(updates).Error; err != nil {
 			return err
 		}
 		sessionStatus := SessionCompleted
+		conversationStatus := ConversationResolved
+		sessionUpdates := map[string]any{"status": sessionStatus, "conversation_status": conversationStatus, "assigned_user_id": nil, "handoff_state": "resolved", "human_released_at": &now, "resolved_at": &now, "updated_at": now}
 		if input.ResumeBot {
 			sessionStatus = SessionActive
+			conversationStatus = ConversationAIHandling
+			sessionUpdates["status"] = sessionStatus
+			sessionUpdates["conversation_status"] = conversationStatus
+			sessionUpdates["resolved_at"] = nil
+			if startStepKey := s.startStepKeyForHandoffTx(tx, actor.OrganizationID, handoff.SessionID); startStepKey != "" {
+				sessionUpdates["current_step_key"] = startStepKey
+				sessionUpdates["expected_input"] = ""
+			}
 		}
-		if err := tx.Model(&ConversationSession{}).Where("organization_id = ? AND id = ? AND status = ?", actor.OrganizationID, handoff.SessionID, SessionHandoff).Updates(map[string]any{"status": sessionStatus, "updated_at": now}).Error; err != nil {
+		if err := tx.Model(&ConversationSession{}).Where("organization_id = ? AND id = ?", actor.OrganizationID, handoff.SessionID).Updates(sessionUpdates).Error; err != nil {
+			return err
+		}
+		if err := s.auditTx(tx, actor, "support_handoff", handoff.ID, "handoff_resolved", map[string]any{"previous_status": handoff.Status, "resume_bot": input.ResumeBot, "resolution_note": strings.TrimSpace(input.ResolutionNote)}); err != nil {
 			return err
 		}
 		return tx.Where("organization_id = ? AND id = ?", actor.OrganizationID, handoffID).First(&handoff).Error
 	})
+	if err == nil {
+		s.recordEvent(ctx, ConversationSession{ID: handoff.SessionID, OrganizationID: actor.OrganizationID}, EventHandoffResolved, "info", "", "", map[string]any{"resume_bot": input.ResumeBot})
+	}
 	return handoff, err
+}
+
+func (s *Service) scopeConversationQuery(query *gorm.DB, actor auth.CurrentUser) *gorm.DB {
+	if actor.Role != authz.SupportAgent {
+		return query
+	}
+	return query.Joins(
+		"JOIN support_handoffs sh_scope ON sh_scope.organization_id = conversation_sessions.organization_id AND sh_scope.session_id = conversation_sessions.id AND ((sh_scope.status IN ? AND sh_scope.assigned_user_id IS NULL) OR sh_scope.assigned_user_id = ?)",
+		activeHandoffStatuses,
+		actor.ID,
+	)
+}
+
+func (s *Service) scopeHandoffQuery(query *gorm.DB, actor auth.CurrentUser) *gorm.DB {
+	if actor.Role != authz.SupportAgent {
+		return query
+	}
+	return query.Where("((status IN ? AND assigned_user_id IS NULL) OR assigned_user_id = ?)", activeHandoffStatuses, actor.ID)
 }
 
 func (s *Service) VerifyWhatsAppRequest(channel core.Channel, signature string, body []byte) bool {
@@ -474,6 +763,10 @@ func (s *Service) ParseWhatsAppWebhook(payload WhatsAppWebhookPayload) []Inbound
 }
 
 func (s *Service) TranslateWhatsAppOutbound(message OutboundMessage) map[string]any {
+	return translateWhatsAppOutbound(message)
+}
+
+func translateWhatsAppOutbound(message OutboundMessage) map[string]any {
 	switch message.Type {
 	case MessageButtons:
 		buttons := make([]map[string]any, 0, len(message.Options))
@@ -506,7 +799,9 @@ func (s *Service) loadOrCreateSession(ctx context.Context, channel core.Channel,
 		if expired && session.Status == SessionActive {
 			session.Status = SessionExpired
 		}
-		shouldReset := input.SimulatorStart || isHardResetText(input.Text)
+		terminal := session.Status == SessionCompleted || session.Status == SessionExpired || session.Status == SessionCancelled
+		preserveCompletedCheckout := terminal && isCommerceCancelText(input.Text)
+		shouldReset := input.SimulatorStart || isHardResetText(input.Text) || (terminal && !preserveCompletedCheckout)
 		if !shouldReset {
 			if session.CustomerID == nil && input.CustomerID != nil {
 				if err := s.db.WithContext(ctx).Model(&ConversationSession{}).Where("id = ?", session.ID).Update("customer_id", input.CustomerID).Error; err != nil {
@@ -529,7 +824,7 @@ func (s *Service) loadOrCreateSession(ctx context.Context, channel core.Channel,
 	now := s.now()
 	expiresAt := now.Add(defaultSessionTTL)
 	if newConversation {
-		session = ConversationSession{ID: uuid.New(), OrganizationID: channel.OrganizationID, BotID: botRecord.ID, BotVersionID: snapshot.Version.ID, ChannelID: channel.ID, CustomerID: input.CustomerID, ExternalConversationID: input.ExternalConversationID, CurrentStepKey: snapshot.Version.StartStepKey, Status: SessionActive, Variables: "{}", SystemContext: jsonMap(systemContext), LockVersion: 1, LastMessageAt: &now, ExpiresAt: &expiresAt}
+		session = ConversationSession{ID: uuid.New(), OrganizationID: channel.OrganizationID, BotID: botRecord.ID, BotVersionID: snapshot.Version.ID, ChannelID: channel.ID, CustomerID: input.CustomerID, ExternalConversationID: input.ExternalConversationID, CurrentStepKey: snapshot.Version.StartStepKey, Status: SessionActive, ConversationStatus: ConversationAIHandling, Priority: "normal", Variables: "{}", SystemContext: jsonMap(systemContext), LockVersion: 1, LastMessageAt: &now, ExpiresAt: &expiresAt}
 		if err := s.db.WithContext(ctx).Create(&session).Error; err != nil {
 			return ConversationSession{}, bot.VersionConfiguration{}, err
 		}
@@ -542,11 +837,15 @@ func (s *Service) loadOrCreateSession(ctx context.Context, channel core.Channel,
 	session.CurrentStepKey = snapshot.Version.StartStepKey
 	session.ExpectedInput = ""
 	session.Status = SessionActive
+	session.ConversationStatus = ConversationAIHandling
+	session.AssignedUserID = nil
+	session.Priority = "normal"
+	session.HandoffState = ""
 	session.Variables = "{}"
 	session.SystemContext = jsonMap(systemContext)
 	session.LastMessageAt = &now
 	session.ExpiresAt = &expiresAt
-	if err := s.db.WithContext(ctx).Model(&ConversationSession{}).Where("id = ?", session.ID).Updates(map[string]any{"bot_id": session.BotID, "bot_version_id": session.BotVersionID, "customer_id": session.CustomerID, "current_step_key": session.CurrentStepKey, "expected_input": "", "status": SessionActive, "variables": "{}", "system_context": session.SystemContext, "last_message_at": &now, "expires_at": &expiresAt, "updated_at": now, "lock_version": gorm.Expr("lock_version + 1")}).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(&ConversationSession{}).Where("id = ?", session.ID).Updates(map[string]any{"bot_id": session.BotID, "bot_version_id": session.BotVersionID, "customer_id": session.CustomerID, "current_step_key": session.CurrentStepKey, "expected_input": "", "status": SessionActive, "conversation_status": ConversationAIHandling, "assigned_user_id": nil, "priority": "normal", "handoff_state": "", "variables": "{}", "system_context": session.SystemContext, "last_message_at": &now, "expires_at": &expiresAt, "resolved_at": nil, "human_released_at": &now, "updated_at": now, "lock_version": gorm.Expr("lock_version + 1")}).Error; err != nil {
 		return ConversationSession{}, bot.VersionConfiguration{}, err
 	}
 	session.LockVersion++
@@ -565,7 +864,7 @@ func (s *Service) resolveCustomer(ctx context.Context, channel core.Channel, inp
 
 func (s *Service) openSupportHandoff(ctx context.Context, session ConversationSession, reason string, runtimeContext RuntimeContext) error {
 	var existing SupportHandoff
-	err := s.db.WithContext(ctx).Where("organization_id = ? AND session_id = ? AND status IN ?", session.OrganizationID, session.ID, []string{"open", "assigned"}).First(&existing).Error
+	err := s.db.WithContext(ctx).Where("organization_id = ? AND session_id = ? AND status IN ?", session.OrganizationID, session.ID, activeHandoffStatuses).First(&existing).Error
 	if err == nil {
 		return nil
 	}
@@ -578,6 +877,12 @@ func (s *Service) openSupportHandoff(ctx context.Context, session ConversationSe
 			orderID = uuidFromAny(raw)
 		}
 	}
+	if orderID == nil {
+		var link core.ConversationOrderLink
+		if err := s.db.WithContext(ctx).Where("organization_id = ? AND conversation_session_id = ?", session.OrganizationID, session.ID).Order("created_at DESC").First(&link).Error; err == nil {
+			orderID = &link.OrderID
+		}
+	}
 	handoff := SupportHandoff{
 		ID:             uuid.New(),
 		OrganizationID: session.OrganizationID,
@@ -586,6 +891,7 @@ func (s *Service) openSupportHandoff(ctx context.Context, session ConversationSe
 		OrderID:        orderID,
 		Status:         "open",
 		Reason:         strings.TrimSpace(reason),
+		Priority:       "normal",
 		Metadata:       jsonMap(map[string]any{"bot_id": session.BotID.String(), "bot_version_id": session.BotVersionID.String(), "channel_id": session.ChannelID.String(), "external_conversation_id": session.ExternalConversationID}),
 	}
 	return s.db.WithContext(ctx).Create(&handoff).Error
@@ -618,14 +924,23 @@ func (s *Service) execute(ctx context.Context, snapshot bot.VersionConfiguration
 		session.Variables = jsonMap(variables)
 	}()
 	system := parseJSONMap(session.SystemContext)
-	runtimeContext := RuntimeContext{Session: *session, Variables: variables, System: system}
+	runtimeContext := RuntimeContext{Session: *session, Variables: variables, System: system, Source: core.CommerceEventSourceRuntime}
 	result := RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{}, Metadata: map[string]any{}}
 	if session.Status == SessionHandoff {
+		s.applyActiveHandoffState(ctx, session)
 		if classifyCommand(input.Text) == commandRestart || classifyCommand(input.Text) == commandMenu {
 			returnToEntry(snapshot, session, runtimeContext)
 			variables = map[string]any{}
 			runtimeContext.Variables = variables
+			session.ConversationStatus = ConversationAIHandling
+			session.AssignedUserID = nil
+			session.HandoffState = "released"
+			releasedAt := s.now()
+			session.HumanReleasedAt = &releasedAt
 		} else {
+			if session.AIShouldPause() {
+				return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Handoff: true, Messages: []OutboundMessage{}, Metadata: map[string]any{"ai_paused": true, "reason": "human_handoff_active"}}, nil
+			}
 			if s.handoffInbound != nil {
 				handled, reply, err := s.handoffInbound(ctx, session.OrganizationID, session.ID, input.Text)
 				if err != nil {
@@ -639,16 +954,39 @@ func (s *Service) execute(ctx context.Context, snapshot bot.VersionConfiguration
 					return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Handoff: true, Messages: messages}, nil
 				}
 			}
-			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Handoff: true, Messages: []OutboundMessage{{Type: MessageText, Text: "A team member is handling this conversation. Type 'menu' if you want to start a new request."}}}, nil
+			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Handoff: true, Messages: []OutboundMessage{}, Metadata: map[string]any{"ai_paused": true, "reason": "handoff_requested"}}, nil
 		}
 	}
 	if session.Status == SessionCompleted || session.Status == SessionExpired || session.Status == SessionCancelled {
-		if !isResetText(input.Text) {
+		if !isResetText(input.Text) && !isCommerceCancelText(input.Text) {
 			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{Type: MessageText, Text: "This conversation has ended. Send 'hi' or 'menu' to begin again."}}}, nil
 		}
-		returnToEntry(snapshot, session, runtimeContext)
-		variables = map[string]any{}
-		runtimeContext.Variables = variables
+		if !isCommerceCancelText(input.Text) {
+			returnToEntry(snapshot, session, runtimeContext)
+			variables = map[string]any{}
+			runtimeContext.Variables = variables
+		}
+	}
+	if session.Status == SessionActive && session.ExpectedInput == "" && session.CurrentStepKey == snapshot.Version.StartStepKey && !input.SimulatorStart && !isResetText(input.Text) {
+		if intent := classifyNaturalEntryIntent(input.Text); intent != "" {
+			if start, ok := indexSteps(snapshot.Steps)[snapshot.Version.StartStepKey]; ok && start.NextStepKey != "" {
+				setPath(runtimeContext.Variables, "intent", intent)
+				session.CurrentStepKey = start.NextStepKey
+			}
+		} else if s.aiInbound != nil {
+			response, err := s.aiInbound(ctx, *session, input.Text)
+			if err != nil {
+				s.log.Warn("grounded AI entry handling failed; falling back to workflow", "organization_id", session.OrganizationID, "conversation_id", session.ID, "error", err.Error())
+			} else if strings.TrimSpace(response.Reply) != "" {
+				if strings.TrimSpace(response.Variables) != "" {
+					variables = parseJSONMap(response.Variables)
+					runtimeContext.Variables = variables
+				}
+				result.Messages = append(result.Messages, OutboundMessage{Type: MessageText, Text: strings.TrimSpace(response.Reply)})
+				result.SessionStatus = session.Status
+				return result, nil
+			}
+		}
 	}
 	if handled, err := s.handleLifecycle(ctx, snapshot, session, input, runtimeContext, &result); err != nil {
 		return result, err
@@ -715,6 +1053,34 @@ func (s *Service) execute(ctx context.Context, snapshot bot.VersionConfiguration
 	return result, nil
 }
 
+func classifyNaturalEntryIntent(text string) string {
+	normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(text)), " "))
+	if normalized == "" {
+		return ""
+	}
+	for _, term := range []string{"track my order", "track order", "order status", "where is my order", "my order"} {
+		if strings.Contains(normalized, term) {
+			return "track_order"
+		}
+	}
+	for _, term := range []string{"complaint", "complain", "wrong item", "damaged item", "problem with my order"} {
+		if strings.Contains(normalized, term) {
+			return "complaint"
+		}
+	}
+	for _, term := range []string{"speak to a human", "speak to someone", "human agent", "customer support", "talk to an agent"} {
+		if strings.Contains(normalized, term) {
+			return "support"
+		}
+	}
+	for _, term := range []string{"i want to order", "i would like to order", "i want to buy", "i would like to buy", "can i order", "can i buy", "place an order", "add to cart", "i'll take", "ill take"} {
+		if strings.Contains(normalized, term) {
+			return "order"
+		}
+	}
+	return ""
+}
+
 func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.VersionConfiguration, session *ConversationSession, runtimeContext RuntimeContext, result *RuntimeResult) (bool, error) {
 	switch step.Type {
 	case bot.StepMessage:
@@ -757,8 +1123,17 @@ func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.V
 		if err != nil {
 			return false, err
 		}
-		s.recordEvent(ctx, *session, EventActionStarted, "info", step.StepKey, action.ActionKey, nil)
-		outputs, err := s.actions.Execute(ctx, action, runtimeContext)
+		policy := authz.PolicyForRuntimeAction(action.ActionType)
+		actionMetadata := map[string]any{"action_type": action.ActionType, "class": policy.Class, "confirmation": policy.Confirmation}
+		s.recordEvent(ctx, *session, EventActionRequested, "info", step.StepKey, action.ActionKey, actionMetadata)
+		s.recordEvent(ctx, *session, EventActionStarted, "info", step.StepKey, action.ActionKey, actionMetadata)
+		if err := s.actions.Authorize(ctx, action.ActionType, runtimeContext); err != nil {
+			s.recordEvent(ctx, *session, EventActionDenied, "warning", step.StepKey, action.ActionKey, map[string]any{"action_type": action.ActionType, "error": publicRuntimeError(err)})
+			s.recordEvent(ctx, *session, EventActionFailed, "error", step.StepKey, action.ActionKey, map[string]any{"error": publicRuntimeError(err)})
+			return false, err
+		}
+		s.recordEvent(ctx, *session, EventActionAuthorized, "info", step.StepKey, action.ActionKey, actionMetadata)
+		outputs, err := s.actions.ExecuteAuthorized(ctx, action, runtimeContext)
 		if err != nil {
 			s.recordEvent(ctx, *session, EventActionFailed, "error", step.StepKey, action.ActionKey, map[string]any{"error": publicRuntimeError(err)})
 			return false, err
@@ -769,8 +1144,20 @@ func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.V
 		}
 		if outputs["handoff"] == true {
 			session.Status = SessionHandoff
+			session.ConversationStatus = ConversationHumanRequested
+			session.HandoffState = "open"
 			_ = s.openSupportHandoff(ctx, *session, stringValue(outputs["reason"]), runtimeContext)
 			return false, nil
+		}
+		if action.ActionType == "get_stores" && outputs["auto_selected"] == true {
+			setPath(runtimeContext.Variables, "store_choice", "1")
+			setPath(runtimeContext.Variables, "store_id", stringValue(outputs["store_id"]))
+			setPath(runtimeContext.Variables, "store_name", stringValue(outputs["store_name"]))
+			setPath(runtimeContext.Variables, "store_address", stringValue(outputs["store_address"]))
+			return s.advance(session, skipSelectableQuestion(snapshot, step.NextStepKey)), nil
+		}
+		if action.ActionType == "create_order" {
+			s.recordEvent(ctx, *session, EventCommerceOrderLinked, "info", step.StepKey, action.ActionKey, map[string]any{"order_id": stringValue(outputs["order_id"]), "store_id": stringValue(outputs["store_id"])})
 		}
 		if action.ActionType == "get_customer_orders" {
 			count := int(int64Value(outputs["count"]))
@@ -821,6 +1208,8 @@ func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.V
 			result.Messages = append(result.Messages, OutboundMessage{Type: MessageText, Text: runtimeContext.Render(step.Message, fallbackVariable(snapshot))})
 		}
 		session.Status = SessionHandoff
+		session.ConversationStatus = ConversationHumanRequested
+		session.HandoffState = "open"
 		_ = s.openSupportHandoff(ctx, *session, step.Message, runtimeContext)
 		s.recordEvent(ctx, *session, EventHandoffStarted, "info", step.StepKey, "", nil)
 		return false, nil
@@ -835,6 +1224,9 @@ func (s *Service) executeStep(ctx context.Context, step bot.Step, snapshot bot.V
 			return s.advance(session, frame.ReturnStepKey), nil
 		}
 		session.Status = SessionCompleted
+		session.ConversationStatus = ConversationResolved
+		resolvedAt := s.now()
+		session.ResolvedAt = &resolvedAt
 		s.recordEvent(ctx, *session, EventConversationCompleted, "info", step.StepKey, "", nil)
 		return false, nil
 	default:
@@ -867,8 +1259,11 @@ func (s *Service) handleLifecycle(ctx context.Context, snapshot bot.VersionConfi
 	case commandMenu, commandRestart, commandCancel:
 		if command == commandCancel {
 			message := "Okay, I cancelled that request."
-			if s.lifecycleCancel != nil {
-				handled, cancellationMessage, err := s.lifecycleCancel(ctx, runtimeContext)
+			handled, cancellationMessage, err := s.cancelCommerceLifecycle(ctx, runtimeContext)
+			if !handled && err == nil && s.lifecycleCancel != nil {
+				handled, cancellationMessage, err = s.lifecycleCancel(ctx, runtimeContext)
+			}
+			if handled || err != nil {
 				if err != nil {
 					s.log.Warn("runtime lifecycle cancellation failed", "organization_id", session.OrganizationID, "conversation_id", session.ID, "error", err)
 					result.Messages = append(result.Messages, OutboundMessage{Type: MessageText, Text: "I couldn't cancel that request because its payment or fulfilment status may have changed. Please check its status or contact support."})
@@ -1195,7 +1590,7 @@ func (s *Service) advance(session *ConversationSession, nextStepKey string) bool
 
 func (s *Service) resolveChannel(ctx context.Context, input InboundMessage) (core.Channel, error) {
 	var channel core.Channel
-	query := s.db.WithContext(ctx).Where("status = ?", core.StatusActive)
+	query := s.db.WithContext(ctx).Where("status IN ?", runtimeUsableChannelStatuses)
 	if input.ChannelID != nil {
 		err := query.Where("id = ?", *input.ChannelID).First(&channel).Error
 		return channel, mapNotFoundCode(err, ErrChannelNotFound, "Channel not found")
@@ -1209,7 +1604,7 @@ func (s *Service) resolveChannel(ctx context.Context, input InboundMessage) (cor
 
 func (s *Service) getChannelForActor(ctx context.Context, actor auth.CurrentUser, channelID uuid.UUID) (core.Channel, error) {
 	var channel core.Channel
-	err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ? AND status = ?", actor.OrganizationID, channelID, core.StatusActive).First(&channel).Error
+	err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ? AND status IN ?", actor.OrganizationID, channelID, runtimeUsableChannelStatuses).First(&channel).Error
 	return channel, mapNotFoundCode(err, ErrChannelNotFound, "Channel not found")
 }
 
@@ -1256,7 +1651,33 @@ func (s *Service) persistResult(ctx context.Context, session *ConversationSessio
 	now := s.now()
 	session.LastMessageAt = &now
 	session.UpdatedAt = now
-	updates := map[string]any{"current_step_key": session.CurrentStepKey, "expected_input": session.ExpectedInput, "status": session.Status, "variables": defaultObject(session.Variables), "system_context": defaultObject(session.SystemContext), "last_message_at": &now, "updated_at": now, "lock_version": gorm.Expr("lock_version + 1")}
+	lastBody := strings.TrimSpace(input.Text)
+	lastDirection := DirectionInbound
+	if len(result.Messages) > 0 {
+		last := result.Messages[len(result.Messages)-1]
+		if strings.TrimSpace(last.Text) != "" {
+			lastBody = strings.TrimSpace(last.Text)
+			lastDirection = DirectionOutbound
+		}
+	}
+	if session.ConversationStatus == "" {
+		session.ConversationStatus = conversationStatusForRuntime(*session)
+	}
+	if session.Priority == "" {
+		session.Priority = "normal"
+	}
+	storeID := session.StoreID
+	if storeID == nil {
+		storeID = storeIDFromVariables(session.Variables)
+	}
+	unreadCount := session.UnreadCount
+	if input.Text != "" {
+		unreadCount++
+	}
+	if lastDirection == DirectionOutbound && len(result.Messages) > 0 {
+		unreadCount = 0
+	}
+	updates := map[string]any{"current_step_key": session.CurrentStepKey, "expected_input": session.ExpectedInput, "status": session.Status, "conversation_status": session.ConversationStatus, "assigned_user_id": session.AssignedUserID, "priority": sessionPriority(*session), "handoff_state": session.HandoffState, "store_id": storeID, "unread_count": unreadCount, "last_message_body": lastBody, "last_message_direction": lastDirection, "variables": defaultObject(session.Variables), "system_context": defaultObject(session.SystemContext), "last_message_at": &now, "human_owned_at": session.HumanOwnedAt, "human_released_at": session.HumanReleasedAt, "resolved_at": session.ResolvedAt, "updated_at": now, "lock_version": gorm.Expr("lock_version + 1")}
 	tx := s.db.WithContext(ctx).Model(&ConversationSession{}).Where("id = ? AND lock_version = ?", session.ID, session.LockVersion).Updates(updates)
 	if tx.Error != nil {
 		return tx.Error
@@ -1265,6 +1686,10 @@ func (s *Service) persistResult(ctx context.Context, session *ConversationSessio
 		return runtimeError(ErrSessionConflict, "This conversation is already being processed. Please try again.")
 	}
 	session.LockVersion++
+	session.UnreadCount = unreadCount
+	session.LastMessageBody = lastBody
+	session.LastMessageDirection = lastDirection
+	session.StoreID = storeID
 	inbound := ConversationMessage{ID: uuid.New(), OrganizationID: session.OrganizationID, SessionID: session.ID, ChannelID: session.ChannelID, ExternalMessageID: input.ExternalMessageID, Direction: DirectionInbound, MessageType: MessageText, Sender: input.Sender, Body: input.Text, Metadata: jsonValue(input.Metadata)}
 	if err := s.db.WithContext(ctx).Create(&inbound).Error; err != nil {
 		return err
@@ -1289,6 +1714,13 @@ func (s *Service) findProcessed(ctx context.Context, channel core.Channel, exter
 
 func (s *Service) markProcessed(ctx context.Context, processed ProcessedMessage, sessionID *uuid.UUID, status string, result RuntimeResult) error {
 	return s.db.WithContext(ctx).Model(&processed).Updates(map[string]any{"session_id": sessionID, "status": status, "result": jsonValue(result), "updated_at": s.now()}).Error
+}
+
+func (s *Service) claimFailedProcessed(ctx context.Context, processed ProcessedMessage) (bool, error) {
+	result := s.db.WithContext(ctx).Model(&ProcessedMessage{}).
+		Where("id = ? AND organization_id = ? AND channel_id = ? AND status = ?", processed.ID, processed.OrganizationID, processed.ChannelID, "failed").
+		Updates(map[string]any{"session_id": nil, "status": "processing", "result": "{}", "updated_at": s.now()})
+	return result.RowsAffected == 1, result.Error
 }
 
 func (s *Service) recordEvent(ctx context.Context, session ConversationSession, eventType, severity, stepKey, actionKey string, metadata map[string]any) {

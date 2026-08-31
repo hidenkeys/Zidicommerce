@@ -24,7 +24,7 @@ export function minorToNairaInput(minor: unknown) {
 }
 
 export function humanStatus(value: unknown) {
-  const raw = String(value ?? "").replace(/_/g, " ");
+  const raw = String(value ?? "").replace(/[_.-]+/g, " ");
   if (!raw) return "—";
   return raw.replace(/\b\w/g, (letter: string) => letter.toUpperCase());
 }
@@ -33,6 +33,11 @@ export function relativeTime(value: unknown) {
   const date = new Date(String(value ?? ""));
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleString("en-NG", { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" });
+}
+
+export function maskPhone(value: unknown, fallback = "—") {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  return digits ? `****${digits.slice(-4)}` : fallback;
 }
 
 export function isToday(value: unknown) {
@@ -89,6 +94,8 @@ export function orderTimeline(status: string) {
 
 export function setupHref(key: string) {
   switch (key) {
+    case "organization":
+      return "/settings/business";
     case "stores":
       return "/stores";
     case "catalogue":
@@ -103,6 +110,8 @@ export function setupHref(key: string) {
       return "/assistant";
     case "faqs":
       return "/knowledge";
+    case "team":
+      return "/team";
     case "support":
       return "/conversations";
     default:
@@ -123,15 +132,15 @@ export const moduleHelp: Record<string, { title: string; summary: string }> = {
 export function roleLabel(role: string) {
   switch (role) {
     case "merchant_admin":
-      return "Owner";
+      return "Administrator";
     case "store_manager":
-      return "Manager";
+      return "Store Manager";
     case "store_staff":
-      return "Staff";
+      return "Storekeeper";
     case "support_agent":
-      return "Support";
+      return "Support Agent";
     case "platform_admin":
-      return "Platform";
+      return "Platform Administrator";
     case "viewer":
       return "Viewer";
     default:

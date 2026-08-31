@@ -10,19 +10,64 @@ Related docs:
 - [Merchant deployment](merchant-deployment.md)
 - [How-to walkthroughs](how-to.md)
 - [Bot modules](modules/README.md)
+- [Product experience, merchant workflows, and future channel UX](product-experience.md)
+- [Channel platform foundation](channel-platform.md)
+- [Meta WhatsApp connection](meta-whatsapp-connection.md)
 
-The WhatsApp bot runtime is production-critical. Do not change action semantics, webhook handling, published snapshots, payment verification, inventory reservation, or customer isolation unless you fully understand the consequences.
+The conversation runtime is production-critical. Do not change action semantics, provider boundary handling, published snapshots, payment verification, inventory reservation, or customer isolation unless you fully understand the consequences.
 
-Admin navigation (merchant):
+Admin navigation is permission-aware:
 
 - **Home:** Overview, Setup
-- **Commerce:** Orders, Catalogue, Inventory, Customers, Stores
-- **Assistant:** Your assistant, Conversations, Knowledge
-- **Team:** People
-- **Settings:** Business, Payments, WhatsApp
-- **Advanced:** Bot Builder, Payment tools, Delivery lookup, Import, Audit logs
+- **Commerce:** Orders, Catalogue, Inventory, Stores, Customers, Payments
+- **Engagement:** Assistant, AI workspace, Conversations, Business knowledge
+- **Operations:** Team, Audit log
+- **Organization:** Business settings, Channels
+- **Advanced:** Bot Builder, Payment tools, Delivery lookup, Import data
 
 IDs and secrets belong in Advanced or API responses, not in the normal merchant UI.
+
+Phase I narrows this navigation by job:
+
+- **Administrator:** complete product setup, daily operations, people, assistant, knowledge, settings, and deferred channel preparation.
+- **Store Manager:** assigned-store orders, catalogue, inventory, stores, conversations, and viewable organization context.
+- **Storekeeper:** assigned-store Overview, Orders, Inventory, Stores, and Conversations only.
+- **Support Agent:** Overview, Orders, Customers, Conversations, and Business knowledge.
+- **Viewer:** permitted read-only pages with no mutation controls.
+
+Backend permissions and store assignments remain authoritative. Navigation is not a security boundary.
+
+## Merchant readiness workflow
+
+Open **Home -> Setup** as an organization administrator. Readiness checks current tenant data in this order:
+
+1. Complete the business profile.
+2. Add an active store.
+3. Add an active product and sellable option.
+4. Set available inventory at a store.
+5. Enable and test a payment configuration.
+6. Publish active business knowledge, either structured knowledge or a compatible FAQ.
+7. Test and publish the assistant.
+8. Optionally invite team members and assign stores.
+9. Optionally review the existing customer channel area.
+
+The customer channel is deliberately non-blocking until external channel foundation work begins. Operational notification, outbound-message, and support queues are health signals, not merchant setup steps.
+
+## Validated daily workflows
+
+- **Orders:** use Needs action, open an order, verify payment and fulfilment context, perform only the displayed next action, and return to the queue.
+- **Storekeepers:** confirm the store shown is assigned, process permitted orders, and review stock. The API scopes stores, inventory, and orders by assignment.
+- **Support:** claim or accept an assigned handoff, review linked customer and order context, send customer-visible replies, keep internal notes separate, resolve, and explicitly release to AI only when appropriate.
+- **Assistant:** review business-facing capabilities, verified commerce stages, payment verification, fulfilment, and human handoff; test before publishing.
+- **Viewers:** verify operational state without being offered status changes, replies, stock edits, staff changes, or configuration forms.
+
+Phase J.1 uses Meta Embedded Signup for merchant authorization and asset selection, with a separate assisted state for Zidi-managed setup. Secure credential rotation and manual references remain only for legacy/operator recovery. Billing still has no subscription state, usage balances, invoices, or synthetic metrics.
+
+Phase M production pilots must use a separate API deployment and an approved test identity. Verify public health plus fail-closed GET/POST webhook behavior first. Obtain explicit approval before changing Meta webhook settings and again before sending a real message. Never promote setup state or health manually when provider evidence is missing.
+
+Phase N applies WhatsApp policy before every provider request. In **Organization -> Channels**, use Messaging policy to review 24-hour windows and consent; use Templates to mirror exact Meta-approved records; use Recent policy blocks to diagnose sends stopped before Meta. A normal support reply is free-form only while the customer-service window is open. Outside it, select an approved template with every required variable. A local `approved` status is an operator assertion, not a Meta approval workflow.
+
+The conversation inbox shows the contact's current WhatsApp consent and service-window state. When free-form messaging is blocked, the composer is disabled and directs the operator to use an approved template from Channels; the server-side policy guard remains authoritative for every send.
 
 ---
 
@@ -232,29 +277,27 @@ Human statuses: Awaiting payment, Paid, Processing (preparing), Ready, Out for d
 14. **Developer-only:** Fulfilment metadata.
 15. **Never:** Delete fulfilment rows for completed orders.
 
-## WhatsApp and channels
+## Channels
 
-1. **What:** A channel row (`provider=whatsapp`) with display number, Meta phone number ID, config, and secrets.
-2. **Why:** One org, one (or more) WhatsApp identities. Runtime resolves org from `phone_number_id`.
-3. **Problem:** Receive and send WhatsApp messages for the published bot.
-4. **Who:** Owner for status. A technician for Meta IDs and tokens (Advanced on the WhatsApp page).
-5. **Where:** Settings → WhatsApp.
-6. **Requires:** Display number, `phone_number_id`, `verify_token` in config, `access_token` + `app_secret` in `secret_config` (not returned by the API). Config should include `bot_id`.
-7. **Configure:** Create/patch channel. Test checks identifiers, not Meta’s live graph. Disconnect sets status inactive.
-8. **Runtime:** Public `GET/POST /v1/runtime/webhooks/whatsapp`. Signature verified with `app_secret`. Outbound uses `access_token`. Simulator `/v1/runtime/test/*` does **not** send WhatsApp.
-9. **Interacts with:** Bot publish, conversations, customers.
-10. **Test:** Admin Test WhatsApp (config completeness), then Assistant test (no WhatsApp), then a real phone.
-11. **Troubleshoot:** Webhook verify fail → verify token mismatch. Incoming 200 but no reply → bot not published, wrong `bot_id` in channel config, or inactive channel. Outbound fail → bad access token.
-12. **Mistakes:** Putting tokens in env instead of channel secrets for this product. Creating a new Meta app/number when the existing one already works.
-13. **Careful:** Disconnecting the live number.
-14. **Developer-only:** `phone_number_id`, secrets, channel JSON config.
-15. **Never:** Commit real `access_token` / `app_secret`. Never rotate Meta credentials unless Meta requires it.
+1. **What:** Tenant-scoped connection, provider account, identity, secure credential-reference, health, provider-event, and daily-metric records. WhatsApp Cloud API is the first production adapter.
+2. **Why:** WhatsApp, Instagram, web chat, and later providers must enter the same conversation runtime through adapters.
+3. **Problem:** Track connection ownership and operational health without hard-coding provider concepts into conversations or commerce.
+4. **Who:** Organization administrators manage. Viewers may inspect. Store and support roles do not receive organization channel configuration.
+5. **Where:** Organization -> Channels.
+6. **Requires:** The Zidi deployment needs an approved/configured Meta app, Embedded Signup configuration, explicit Graph version, shared webhook configuration, encrypted channel secret key, and public HTTPS API URL. Merchants provide authorization through Meta rather than pasting an access token.
+7. **Configure:** Prepare a WhatsApp record and choose **Connect with Meta**, or choose **Let Zidi help** for assisted setup. Mirror an approved Meta template for the first controlled outbound test when no customer-service window exists. After Meta completes authorization, send the controlled test, confirm the matching signed reply, complete validation, and run Check health. Manual identifiers/credentials are an operator or legacy recovery path only.
+8. **Runtime:** The WhatsApp adapter verifies and normalizes provider activity into `channelplatform.InboundEvent`, which enters the existing runtime. Outbound responses remain provider-neutral until the WhatsApp policy guard checks consent, window, and template requirements before adapter translation.
+9. **Interacts with:** Conversations, outbound jobs, assistant, customers, audit logs, and future provider adapters.
+10. **Test:** Complete Meta's hosted flow, confirm the connected business/phone label, controlled outbound acceptance, matching signed inbound reply, completion, and health. Confirm tenant-scoped delivery, safe event, metric, and audit records.
+11. **Troubleshoot:** An unavailable Connect with Meta button means one or more server-side Meta values or encrypted secret storage is missing. Authorization `failed` requires a new Meta launch after fixing the external prerequisite. `requires_attention` means credentials, signatures, or delivery need review.
+12. **Mistakes:** Configuring a stale/guessed Graph version, omitting the WABA `messages` subscription, using the wrong app/configuration ID, assuming assisted setup bypasses merchant consent, or interpreting missing metrics as zero activity.
+13. **Careful:** Ownership changes and archival are audited. Existing conversation history keeps its channel ID.
+14. **Developer-only:** Idempotency keys, safe provider metadata, adapter payload translation, signature bypass, and legacy credential migration internals.
+15. **Never:** Log or return credentials, enable signature bypass in production, change another tenant's channel ID, or manufacture connected/healthy state.
 
-Webhook URL:
+The runtime package still compiles its legacy WhatsApp implementation for compatibility, but production wiring uses `internal/channelplatform/whatsapp` and the generic runtime sender bridge. `channels.secret_config` is read only through explicit migration compatibility. See [Meta/WhatsApp Production Adapter](whatsapp-adapter.md).
 
-```text
-https://<api-host>/v1/runtime/webhooks/whatsapp
-```
+For pilot rollback, pause/archive the connection, remove or replace the Meta webhook subscription, revoke the upstream access token, rotate any exposed secret, remove the test recipient, and only then retire the isolated deployment. Archiving in Zidi does not revoke a credential in Meta. Preserve redacted events and audit history; never export raw credential values.
 
 ## Bot Builder, versions, publishing
 
@@ -320,19 +363,19 @@ Runtime executes the published module graph and commerce actions. Disabling a mo
 
 ## Conversations and support handoff
 
-1. **What:** Sessions, messages, claimable handoffs, internal notes, complaint tickets.
-2. **Why:** Some customers need a human.
-3. **Problem:** An inbox, not a session debugger.
+1. **What:** Sessions, messages, claimable handoffs, assignments, read state, internal notes, complaint tickets.
+2. **Why:** Some customers need a human and AI must pause while a person owns the conversation.
+3. **Problem:** A channel-neutral support inbox, not a session debugger.
 4. **Who:** Support and owners.
 5. **Where:** Assistant → Conversations.
-6. **Requires:** A live or test session. Handoff created by `handoff_to_agent` or complaint flows.
-7. **Configure:** Reply `POST /v1/runtime/conversations/:id/reply`. Claim/resolve/reopen/notes on `/v1/runtime/support-handoffs/:id/*`.
-8. **Runtime:** Status `handoff` pauses bot control until resolved/reopened per existing lifecycle. Reply sends outbound on the real channel for live sessions.
+6. **Requires:** A live or test session. Handoff created by `handoff_to_agent`, complaint flows, or `POST /v1/runtime/conversations/:id/handoff`.
+7. **Configure:** Reply, assign, release, resolve, reopen, mark read/unread, and notes are available on `/v1/runtime/conversations/:id/*`. Handoff-specific operations remain on `/v1/runtime/support-handoffs/:id/*`.
+8. **Runtime:** `human_requested` and `human_assigned` pause AI. Releasing with `resume_bot=true` returns the session to `ai_handling`.
 9. **Interacts with:** Human Support module, complaints, customers, orders (if linked in session variables).
-10. **Test:** Enable handoff, trigger it in simulator, claim in Admin. For live, use a real chat.
-11. **Troubleshoot:** Reply does nothing → session not on WhatsApp, or channel disconnected.
+10. **Test:** Trigger handoff in a test session, claim it in Admin, send another customer message, verify AI stays silent, then release to AI.
+11. **Troubleshoot:** Reply does nothing → check channel status and outbound dispatch logs.
 12. **Mistakes:** Resolving without answering the customer.
-13. **Careful:** Reopen vs starting a new WhatsApp session.
+13. **Careful:** Reopen vs starting a new channel conversation.
 14. **Developer-only:** Session `current_step_key`, lock_version, system_context.
 15. **Never:** Delete conversation sessions to “clean up” production.
 
@@ -432,6 +475,19 @@ Statuses in the inbox: Open, Waiting, Resolved.
 
 The runtime executes **published snapshots only**, with persistent sessions, commerce actions, greeting/menu lifecycle, and WhatsApp adapters. Details: [runtime.md](runtime.md).
 
+## Merchant commerce workflow
+
+Merchant admins configure the operational guardrails on **Your assistant -> Commerce workflow**:
+
+- turn the workflow, ordering, payment, or handoff on/off
+- choose deterministic store selection behavior
+- restrict the fulfilment modes offered to customers
+- record the operational steps expected after verified payment
+
+Save applies the authorization configuration immediately. Publish remains necessary only for conversational Bot Builder changes. `nearest` and `merchant_rule` currently fall back to customer choice; they are extension points, not automatic routing claims.
+
+Orders show authoritative payment/fulfilment state, committed commerce events, the linked customer conversation, and the next allowed store operation. Store staff see only assigned-store data. See [Merchant Operations and Commerce Workflows](merchant-operations-workflows.md).
+
 Do not rewrite `apps/api/internal/runtime` for UI work. Simulator tests must keep passing: `go test ./internal/runtime ./internal/bot`.
 
 ---
@@ -446,3 +502,37 @@ If the live WhatsApp bot works, leave these alone unless a defect is proven:
 - Published snapshot immutability
 - Order/inventory transactions
 - Customer org isolation
+
+## Phase O pilot operations
+
+Phase N currently runs on the isolated WhatsApp pilot deployment, not the production API. Its controlled release passed health, migration, webhook verification/signature, service-window, consent, policy-event, and advanced-metrics checks without exposing credentials or sending a real customer message.
+
+The local template used for the pilot remains pending because Meta approval was not independently verified. Do not mark it approved or use it for a live send until Meta shows the matching name and language as approved. Authenticated visual confirmation of the Admin policy pages also remains outstanding because the available pilot login was rejected.
+
+Rollback is limited to the isolated pilot: redeploy its preceding Phase M deployment, verify health and fail-closed webhook behavior, then restore or remove the Meta callback as appropriate. The production API must remain untouched during this rollback.
+
+## Phase P pilot acceptance
+
+The isolated WhatsApp pilot has now passed external transport acceptance. The supplied pilot owner account authenticated, and Channels and Conversations were checked at desktop and mobile sizes. Meta already pointed at the pilot callback with `messages` subscribed, so no external Meta setting was changed.
+
+Meta-approved template state was mirrored locally. A real signed inbound message opened the customer service window and entered the runtime. The first attempt revealed that the pilot bot had no steps or published snapshot and that failed runtime messages were not safely reclaimable. The runtime retry path was fixed and covered by regression testing, then one pilot-only terminal acceptance step was published through the immutable snapshot flow.
+
+The next signed inbound message created the expected tenant-scoped contact, session, and messages. The pilot acceptance step automatically replied; Meta accepted that reply and later sent a delivered callback. No additional live message was sent, and no read callback was observed. The production API remained untouched.
+
+This deployment is suitable for adapter acceptance only. Before merchant use, replace the terminal acceptance step with the complete merchant workflow, publish it, and run order, payment, support, and policy-window acceptance. If the pilot is retired, disable traffic in Meta before removing the deployment.
+
+## Phase Q Bing Chun workflow pilot
+
+The isolated pilot now contains a read-only-derived copy of Bing Chun merchant data: 7 stores, 6 categories, 28 products and variants, 28 images, and 196 store inventory records. Source keys map to stable target store codes, category slugs, product slugs, and variant SKUs, so rerunning the importer updates rows instead of duplicating them. The pilot's old sample stores and products are inactive and remain available only for rollback evidence.
+
+Fourteen structured knowledge entries and nineteen compatibility FAQs were created. Seven confirmed operational entries are active. Seven uncertain delivery, payment, return, exchange, bulk, custom-order, and warranty positions remain draft and use the wording “This has not been confirmed yet. Please contact the store for confirmation.” Draft entries are not AI grounding sources.
+
+The active Bing Chun bot has one immutable published snapshot with 43 steps and seven modules. Admin operators can verify it under **Advanced -> Bot Builder**, then verify stores, catalogue, inventory, business knowledge, conversations, channel health, and the masked merchant payment configuration from their normal workspaces. The isolated pilot's Paystack test configuration is active and provider-tested; this does not enable live-mode charging.
+
+Before each live scenario, obtain explicit approval. Use one scenario at a time: product discovery, known price and stock, nonexistent product, order intent, test-mode payment, fulfilment, human handoff, and policy behavior. Do not create a live payment, override an opt-out, mark a local template approved, or send outside the service window without the required approved template.
+
+The controlled scenario pass confirmed that explicit `cancel order`, `cancel request`, `stop order`, and `end order` commands cancel the current commerce request without triggering WhatsApp opt-out. Exact `CANCEL` remains a Meta consent opt-out and exact `START` restores consent. After checkout, cancellation must use the persisted order ID; before checkout it clears the persisted cart. Order creation is idempotent per cart, while payment and cancellation are idempotent per order. Never scope these keys only to the long-lived WhatsApp conversation because that can return a previous checkout on a later order.
+
+The pilot passed Paystack test-mode payment acceptance through the merchant-scoped, write-only encrypted secret path. Two provider-hosted test checkouts produced signed webhooks and authoritative `paid` payment/order state. The first confirmation identified an `active`-only WhatsApp channel lookup that skipped healthy channel-platform connections; the deployed fix and regression test now cover usable connection states, and the second confirmation completed its notification job with a delivered WhatsApp outbound. Live-mode keys, charges, and promotion remain separate approval gates.
+
+For rollback, redeploy the preceding isolated pilot image and select the previous published snapshot. Recheck health and fail-closed webhook behavior. Preserve aggregate provider evidence, do not export private contact data, and leave the original Bing Chun database untouched.

@@ -1,6 +1,7 @@
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { UNAUTHORIZED_EVENT, apiGet, clearStoredToken, getStoredToken } from "./api/client";
+import { ZidiCommerceLogo } from "./components/brand/ZidiCommerceLogo";
 
 export type AuthUser = {
   id: string;
@@ -21,13 +22,9 @@ export function AuthLayout({ children }: { children: ReactNode }) {
     <div className="login-layout">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">ZC</div>
-          <div>
-            <strong>ZidiCommerce</strong>
-            <span>Sign in to run your store</span>
-          </div>
+          <ZidiCommerceLogo tone="light" subtitle="Sign in to run your store" />
         </div>
-        <p className="login-sidebar-copy">Orders, catalogue, WhatsApp, and your assistant — in one place.</p>
+        <p className="login-sidebar-copy">Orders, catalogue, customer support, and your assistant in one place.</p>
       </aside>
       <main className="login-panel">{children}</main>
     </div>

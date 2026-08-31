@@ -45,7 +45,17 @@ async function request<T>(method: string, path: string, body?: JsonBody): Promis
 
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    const message = payload?.error?.message ?? `Request failed with status ${response.status}`;
+    const serverMessage = String(payload?.error?.message ?? "").trim();
+    const technical = /foreign key|constraint|sql|stack|panic|internal server|status \d{3}/i.test(serverMessage);
+    const fallback: Record<number, string> = {
+      400: "Please review the information and try again.",
+      403: "You do not have permission to perform this action.",
+      404: "This item is no longer available. Refresh the page to see the latest information.",
+      409: "This item changed while you were working. Refresh the page and try again.",
+      429: "Too many requests were made. Wait a moment and try again.",
+      500: "Something went wrong while completing this action. Try again.",
+    };
+    const message = serverMessage && !technical && response.status < 500 ? serverMessage : fallback[response.status] ?? "The request could not be completed. Try again.";
     if (response.status === 401 && !isPublicPath(path)) {
       clearStoredToken();
       window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));

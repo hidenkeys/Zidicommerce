@@ -51,3 +51,16 @@ func RequireRole(allowed ...authz.Role) fiber.Handler {
 		return c.Next()
 	}
 }
+
+func RequirePermission(permission authz.Permission) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		user, err := GetCurrentUser(c)
+		if err != nil {
+			return err
+		}
+		if !user.Role.HasPermission(permission) {
+			return httperror.Forbidden("You do not have permission to perform this action")
+		}
+		return c.Next()
+	}
+}

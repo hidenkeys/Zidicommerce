@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -12,17 +13,20 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type ActionHandler func(context.Context, RuntimeContext, map[string]any) (map[string]any, error)
 
 type ActionRegistry struct {
 	handlers map[string]ActionHandler
+	db       *gorm.DB
 }
 
 func NewActionRegistry(db *gorm.DB, commerce *core.Service) *ActionRegistry {
-	registry := &ActionRegistry{handlers: map[string]ActionHandler{}}
+	registry := &ActionRegistry{handlers: map[string]ActionHandler{}, db: db}
 	adapter := commerceActions{db: db, commerce: commerce}
 	registry.Register("get_store", adapter.getStore)
 	registry.Register("get_stores", adapter.getStore)
@@ -68,6 +72,17 @@ func (r *ActionRegistry) Register(key string, handler ActionHandler) {
 }
 
 func (r *ActionRegistry) Execute(ctx context.Context, action bot.Action, runtimeContext RuntimeContext) (map[string]any, error) {
+	if err := r.Authorize(ctx, action.ActionType, runtimeContext); err != nil {
+		return nil, err
+	}
+	return r.ExecuteAuthorized(ctx, action, runtimeContext)
+}
+
+func (r *ActionRegistry) Authorize(ctx context.Context, actionType string, runtimeContext RuntimeContext) error {
+	return r.authorizeRuntimeAction(ctx, actionType, runtimeContext)
+}
+
+func (r *ActionRegistry) ExecuteAuthorized(ctx context.Context, action bot.Action, runtimeContext RuntimeContext) (map[string]any, error) {
 	handler, ok := r.handlers[strings.ToLower(strings.TrimSpace(action.ActionType))]
 	if !ok {
 		return nil, runtimeErrorf(ErrActionNotFound, "This action is not available yet.", "action %s is not registered", action.ActionType)
@@ -82,6 +97,56 @@ func (r *ActionRegistry) Execute(ctx context.Context, action bot.Action, runtime
 	}
 	applyActionOutputs(action.OutputMappings, outputs, runtimeContext.Variables)
 	return outputs, nil
+}
+
+func (r *ActionRegistry) ExecuteDirect(ctx context.Context, actionType string, runtimeContext RuntimeContext, inputs map[string]any) (map[string]any, error) {
+	handler, ok := r.handlers[strings.ToLower(strings.TrimSpace(actionType))]
+	if !ok {
+		return nil, runtimeErrorf(ErrActionNotFound, "This action is not available yet.", "action %s is not registered", actionType)
+	}
+	if err := r.authorizeRuntimeAction(ctx, actionType, runtimeContext); err != nil {
+		return nil, err
+	}
+	if inputs == nil {
+		inputs = map[string]any{}
+	}
+	return handler(ctx, runtimeContext, inputs)
+}
+
+func (r *ActionRegistry) authorizeRuntimeAction(ctx context.Context, actionType string, runtimeContext RuntimeContext) error {
+	policy := authz.PolicyForRuntimeAction(strings.ToLower(strings.TrimSpace(actionType)))
+	if policy.Permission == "" {
+		return runtimeErrorf(ErrActionNotFound, "This action is not available yet.", "action %s has no authorization policy", actionType)
+	}
+	if strings.EqualFold(runtimeContext.Source, "ai") && policy.Mode == authz.RuntimeActionWrite {
+		r.recordAuthorizationDenied(ctx, actionType, runtimeContext, policy, "ai_write_restricted")
+		return runtimeErrorf(ErrActionFailed, "I cannot perform that action automatically.", "AI source attempted write runtime action %s requiring %s", actionType, policy.Permission)
+	}
+	config, err := bot.LoadEffectiveCommerceWorkflowConfiguration(ctx, r.db, runtimeContext.Session.OrganizationID)
+	if err != nil {
+		return runtimeErrorf(ErrActionFailed, "I could not confirm whether that action is enabled.", "load commerce workflow configuration: %v", err)
+	}
+	if !config.AllowsAction(actionType) {
+		r.recordAuthorizationDenied(ctx, actionType, runtimeContext, policy, "merchant_workflow_disabled")
+		return runtimeErrorf(ErrActionDenied, "That action is not enabled for this merchant.", "runtime action %s is disabled by commerce workflow configuration", actionType)
+	}
+	return nil
+}
+
+func (r *ActionRegistry) recordAuthorizationDenied(ctx context.Context, actionType string, runtimeContext RuntimeContext, policy authz.RuntimeActionPolicy, reason string) {
+	if r == nil || r.db == nil || runtimeContext.Session.OrganizationID == uuid.Nil {
+		return
+	}
+	sessionID := runtimeContext.Session.ID
+	log := organization.AuditLog{
+		ID:             uuid.New(),
+		OrganizationID: &runtimeContext.Session.OrganizationID,
+		TargetType:     "conversation_session",
+		TargetID:       &sessionID,
+		Action:         "authorization_denied",
+		Metadata:       jsonValue(map[string]any{"source": runtimeContext.Source, "runtime_action": actionType, "permission": policy.Permission, "reason": reason}),
+	}
+	_ = r.db.WithContext(ctx).Create(&log).Error
 }
 
 type commerceActions struct {
@@ -115,9 +180,37 @@ func (a commerceActions) getStore(ctx context.Context, runtimeContext RuntimeCon
 			rows = append(rows, map[string]any{"id": store.ID.String(), "name": store.Name, "address": store.Address})
 		}
 	}
-	return map[string]any{"stores": rows, "count": len(rows), "message": numberedRowsMessage("Choose an open store:", rows, func(row map[string]any) string {
+	sort.SliceStable(rows, func(i, j int) bool {
+		left := strings.ToLower(strings.TrimSpace(stringValue(rows[i]["name"])))
+		right := strings.ToLower(strings.TrimSpace(stringValue(rows[j]["name"])))
+		if left != right {
+			return left < right
+		}
+		left = strings.ToLower(strings.TrimSpace(stringValue(rows[i]["address"])))
+		right = strings.ToLower(strings.TrimSpace(stringValue(rows[j]["address"])))
+		if left != right {
+			return left < right
+		}
+		return stringValue(rows[i]["id"]) < stringValue(rows[j]["id"])
+	})
+	config, err := bot.LoadEffectiveCommerceWorkflowConfiguration(ctx, a.db, runtimeContext.Session.OrganizationID)
+	if err != nil {
+		return nil, runtimeErrorf(ErrActionFailed, "I could not load store selection settings.", "load commerce workflow configuration: %v", err)
+	}
+	outputs := map[string]any{"stores": rows, "count": len(rows), "store_selection_strategy": config.StoreSelectionStrategy}
+	autoSelect := config.StoreSelectionStrategy == bot.StoreSelectionFirstAvailable || (config.StoreSelectionStrategy == bot.StoreSelectionSingleStore && len(rows) == 1)
+	if autoSelect && len(rows) > 0 {
+		outputs["store_id"] = stringValue(rows[0]["id"])
+		outputs["store_name"] = stringValue(rows[0]["name"])
+		outputs["store_address"] = stringValue(rows[0]["address"])
+		outputs["auto_selected"] = true
+		outputs["message"] = "Using " + stringValue(rows[0]["name"]) + " for this order."
+		return outputs, nil
+	}
+	outputs["message"] = numberedRowsMessage("Choose an open store:", rows, func(row map[string]any) string {
 		return strings.TrimSpace(fmt.Sprintf("%s - %s", stringValue(row["name"]), stringValue(row["address"])))
-	})}, nil
+	})
+	return outputs, nil
 }
 
 func (a commerceActions) selectStore(_ context.Context, _ RuntimeContext, inputs map[string]any) (map[string]any, error) {
@@ -296,7 +389,24 @@ func (a commerceActions) checkInventory(ctx context.Context, runtimeContext Runt
 	if err != nil {
 		return nil, runtimeErrorf(ErrActionFailed, "That quantity is not available.", "check inventory failed: %v", err)
 	}
-	return map[string]any{"inventory_id": level.ID.String(), "store_id": level.StoreID.String(), "variant_id": level.VariantID.String(), "available": level.Available(), "requested": quantity, "in_stock": true}, nil
+	store, _ := a.commerce.GetStore(ctx, a.actor(runtimeContext), storeID)
+	totalMinor := level.Variant.PriceMinor * int64(quantity)
+	return map[string]any{
+		"inventory_id": level.ID.String(),
+		"store_id":     level.StoreID.String(),
+		"store_name":   store.Name,
+		"variant_id":   level.VariantID.String(),
+		"product_name": level.Variant.Product.Name,
+		"variant_name": level.Variant.Name,
+		"unit_price":   formatMinorCurrency(level.Variant.PriceMinor, level.Variant.Currency),
+		"unit_minor":   level.Variant.PriceMinor,
+		"total_price":  formatMinorCurrency(totalMinor, level.Variant.Currency),
+		"total_minor":  totalMinor,
+		"currency":     level.Variant.Currency,
+		"available":    level.Available(),
+		"requested":    quantity,
+		"in_stock":     true,
+	}, nil
 }
 
 func (a commerceActions) createCart(ctx context.Context, runtimeContext RuntimeContext, inputs map[string]any) (map[string]any, error) {
@@ -430,9 +540,13 @@ func (a commerceActions) getFulfilmentModes(ctx context.Context, runtimeContext 
 	if err != nil {
 		return nil, runtimeErrorf(ErrActionFailed, "I could not confirm that store.", "get store failed: %v", err)
 	}
+	config, err := bot.LoadEffectiveCommerceWorkflowConfiguration(ctx, a.db, runtimeContext.Session.OrganizationID)
+	if err != nil {
+		return nil, runtimeErrorf(ErrActionFailed, "I could not load fulfilment settings.", "load commerce workflow configuration: %v", err)
+	}
 	rows := make([]map[string]any, 0, len(store.FulfilmentModes))
 	for _, mode := range store.FulfilmentModes {
-		if !mode.Enabled {
+		if !mode.Enabled || !config.AllowsFulfilmentMode(mode.Mode) {
 			continue
 		}
 		rows = append(rows, map[string]any{"id": mode.Mode, "mode": mode.Mode, "label": customerFulfilmentLabel(mode.Mode), "delivery_fee_minor": mode.DeliveryFeeMinor, "metadata": mode.Metadata})
@@ -498,10 +612,18 @@ func (a commerceActions) createOrder(ctx context.Context, runtimeContext Runtime
 		}
 		cartID = &parsed
 	}
-	idempotency := defaultString(stringValue(inputs["idempotency_key"]), "runtime-order-"+runtimeContext.Session.ID.String())
-	order, err := a.commerce.CreateOrder(ctx, a.actor(runtimeContext), core.OrderInput{CartID: cartID, StoreID: storeID, CustomerID: customerID, FulfilmentType: defaultString(stringValue(inputs["fulfilment_type"]), core.FulfilmentPickup), RecipientName: stringValue(inputs["recipient_name"]), RecipientPhone: stringValue(inputs["recipient_phone"]), DeliveryAddress: stringValue(inputs["delivery_address"]), Currency: defaultString(stringValue(inputs["currency"]), "NGN"), IdempotencyKey: idempotency})
+	idempotencyScope := runtimeContext.Session.ID.String()
+	if cartID != nil {
+		idempotencyScope = cartID.String()
+	}
+	idempotency := defaultString(stringValue(inputs["idempotency_key"]), "runtime-order-"+idempotencyScope)
+	order, err := a.commerce.CreateOrder(ctx, a.actor(runtimeContext), core.OrderInput{CartID: cartID, StoreID: storeID, CustomerID: customerID, FulfilmentType: defaultString(stringValue(inputs["fulfilment_type"]), core.FulfilmentPickup), RecipientName: stringValue(inputs["recipient_name"]), RecipientPhone: stringValue(inputs["recipient_phone"]), DeliveryAddress: stringValue(inputs["delivery_address"]), Currency: defaultString(stringValue(inputs["currency"]), "NGN"), IdempotencyKey: idempotency, Source: core.CommerceEventSourceRuntime})
 	if err != nil {
 		return nil, runtimeErrorf(ErrActionFailed, "I could not create your order.", "create order failed: %v", err)
+	}
+	link := core.ConversationOrderLink{ID: uuid.New(), OrganizationID: runtimeContext.Session.OrganizationID, ConversationSessionID: runtimeContext.Session.ID, OrderID: order.ID, CustomerID: order.CustomerID, StoreID: order.StoreID, Source: core.CommerceEventSourceRuntime}
+	if err := a.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "organization_id"}, {Name: "conversation_session_id"}, {Name: "order_id"}}, DoNothing: true}).Create(&link).Error; err != nil {
+		return nil, runtimeErrorf(ErrActionFailed, "Your order was created, but I could not attach it to this conversation.", "link conversation to order: %v", err)
 	}
 	outputs := orderOutputs(order)
 	outputs["message"] = orderSummaryMessage(order, "Order created. Please complete payment to confirm it.")
@@ -516,7 +638,7 @@ func (a commerceActions) cancelOrder(ctx context.Context, runtimeContext Runtime
 	if _, err := a.getOrder(ctx, runtimeContext, map[string]any{"order_id": orderID.String()}); err != nil {
 		return nil, err
 	}
-	order, err := a.commerce.TransitionOrder(ctx, a.actor(runtimeContext), orderID, core.TransitionInput{Status: core.OrderCancelled, Reason: defaultString(stringValue(inputs["reason"]), "customer_cancelled_before_payment"), IdempotencyKey: defaultString(stringValue(inputs["idempotency_key"]), "runtime-cancel-"+runtimeContext.Session.ID.String())})
+	order, err := a.commerce.TransitionOrder(ctx, a.actor(runtimeContext), orderID, core.TransitionInput{Status: core.OrderCancelled, Reason: defaultString(stringValue(inputs["reason"]), "customer_cancelled_before_payment"), IdempotencyKey: defaultString(stringValue(inputs["idempotency_key"]), "runtime-cancel-"+orderID.String()), Source: core.CommerceEventSourceRuntime})
 	if err != nil {
 		return nil, runtimeErrorf(ErrActionFailed, "I could not cancel that order.", "cancel order failed: %v", err)
 	}
@@ -539,7 +661,7 @@ func (a commerceActions) checkPayment(ctx context.Context, runtimeContext Runtim
 		return nil, runtimeErrorf(ErrActionFailed, "I could not find that payment.", "get payment failed: %v", err)
 	}
 	if payment.Status != core.PaymentPaid {
-		if verified, err := a.commerce.VerifyPayment(ctx, a.actor(runtimeContext), core.PaymentVerifyInput{Reference: payment.Reference}); err == nil {
+		if verified, err := a.commerce.VerifyPayment(ctx, a.actor(runtimeContext), core.PaymentVerifyInput{Reference: payment.Reference, Source: core.CommerceEventSourceRuntime}); err == nil {
 			payment = verified
 		}
 	}
@@ -569,7 +691,7 @@ func (a commerceActions) initializePayment(ctx context.Context, runtimeContext R
 	if _, err := a.getOrder(ctx, runtimeContext, map[string]any{"order_id": orderID.String()}); err != nil {
 		return nil, err
 	}
-	payment, err := a.commerce.InitializePayment(ctx, a.actor(runtimeContext), core.PaymentInput{OrderID: orderID, Provider: stringValue(inputs["provider"]), Email: stringValue(inputs["email"]), CallbackURL: stringValue(inputs["callback_url"]), IdempotencyKey: defaultString(stringValue(inputs["idempotency_key"]), "runtime-payment-"+runtimeContext.Session.ID.String())})
+	payment, err := a.commerce.InitializePayment(ctx, a.actor(runtimeContext), core.PaymentInput{OrderID: orderID, Provider: stringValue(inputs["provider"]), Email: stringValue(inputs["email"]), CallbackURL: stringValue(inputs["callback_url"]), IdempotencyKey: defaultString(stringValue(inputs["idempotency_key"]), "runtime-payment-"+orderID.String()), Source: core.CommerceEventSourceRuntime})
 	if err != nil {
 		return nil, runtimeErrorf(ErrActionFailed, "I could not initialize payment.", "initialize payment failed: %v", err)
 	}
@@ -646,6 +768,33 @@ func (a commerceActions) ensureCartCustomer(ctx context.Context, runtimeContext 
 		return runtimeError(ErrActionFailed, "I could not load that cart.")
 	}
 	return nil
+}
+
+func (s *Service) cancelCommerceLifecycle(ctx context.Context, runtimeContext RuntimeContext) (bool, string, error) {
+	if orderID := strings.TrimSpace(stringValue(runtimeContext.Variables["order_id"])); orderID != "" {
+		outputs, err := s.actions.ExecuteDirect(ctx, "cancel_order", runtimeContext, map[string]any{"order_id": orderID})
+		if err != nil {
+			return true, "", err
+		}
+		return true, stringValue(outputs["message"]), nil
+	}
+
+	cartIDText := strings.TrimSpace(stringValue(runtimeContext.Variables["cart_id"]))
+	if cartIDText == "" {
+		return false, "", nil
+	}
+	cartID, err := uuid.Parse(cartIDText)
+	if err != nil {
+		return true, "", runtimeErrorf(ErrInvalidInput, "I couldn't identify that cart.", "invalid commerce cart id: %v", err)
+	}
+	adapter := commerceActions{db: s.db, commerce: s.commerce}
+	if err := adapter.ensureCartCustomer(ctx, runtimeContext, cartID); err != nil {
+		return true, "", err
+	}
+	if _, err := s.commerce.ClearCart(ctx, adapter.actor(runtimeContext), cartID); err != nil {
+		return true, "", runtimeErrorf(ErrActionFailed, "I couldn't clear that cart.", "clear cart failed: %v", err)
+	}
+	return true, "Okay, I cancelled that request and cleared the cart.", nil
 }
 
 func (a commerceActions) matchFAQ(ctx context.Context, runtimeContext RuntimeContext, inputs map[string]any) (map[string]any, error) {

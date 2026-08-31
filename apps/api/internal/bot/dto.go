@@ -127,6 +127,28 @@ type SelfServiceBotInput struct {
 	AllowMerchantRider *bool  `json:"allow_merchant_rider"`
 }
 
+type CommerceWorkflowConfigurationInput struct {
+	Status                   string   `json:"status"`
+	BotDisplayName           string   `json:"bot_display_name"`
+	Greeting                 string   `json:"greeting"`
+	Tone                     string   `json:"tone"`
+	OrderingEnabled          *bool    `json:"ordering_enabled"`
+	PaymentEnabled           *bool    `json:"payment_enabled"`
+	HumanHandoffEnabled      *bool    `json:"human_handoff_enabled"`
+	StoreSelectionStrategy   string   `json:"store_selection_strategy"`
+	EnabledActions           []string `json:"enabled_actions"`
+	SupportedFulfilmentModes []string `json:"supported_fulfilment_modes"`
+	PostPaymentSteps         []string `json:"post_payment_steps"`
+	Metadata                 string   `json:"metadata"`
+}
+
+type CommerceWorkflowConfigurationView struct {
+	CommerceWorkflowConfiguration
+	EnabledActionList           []string `json:"enabled_action_list"`
+	SupportedFulfilmentModeList []string `json:"supported_fulfilment_mode_list"`
+	PostPaymentStepList         []string `json:"post_payment_step_list"`
+}
+
 type ServiceBookingBotInput struct {
 	Name           string `json:"name"`
 	WelcomeMessage string `json:"welcome_message"`
@@ -147,6 +169,67 @@ type FAQMatch struct {
 	Confidence string  `json:"confidence"`
 }
 
+type KnowledgeEntryInput struct {
+	Kind       string   `json:"kind"`
+	Category   string   `json:"category"`
+	Title      string   `json:"title"`
+	Question   string   `json:"question"`
+	Answer     string   `json:"answer"`
+	Keywords   []string `json:"keywords"`
+	SourceType string   `json:"source_type"`
+	Status     string   `json:"status"`
+	Metadata   string   `json:"metadata"`
+}
+
+type KnowledgeEntryFilter struct {
+	Kind     string
+	Category string
+	Status   string
+	Search   string
+}
+
+type DocumentSourceInput struct {
+	Title            string `json:"title"`
+	SourceType       string `json:"source_type"`
+	Status           string `json:"status"`
+	OriginalFilename string `json:"original_filename"`
+	SourceURL        string `json:"source_url"`
+	SourceLabel      string `json:"source_label"`
+	MimeType         string `json:"mime_type"`
+	StorageKey       string `json:"storage_key"`
+	RawText          string `json:"raw_text"`
+	ErrorMessage     string `json:"error_message"`
+	Metadata         string `json:"metadata"`
+}
+
+type DocumentSourceFilter struct {
+	SourceType string
+	Status     string
+	Search     string
+}
+
+type DocumentChunkInput struct {
+	Title    string `json:"title"`
+	Heading  string `json:"heading"`
+	Content  string `json:"content"`
+	Status   string `json:"status"`
+	Metadata string `json:"metadata"`
+}
+
+type DocumentChunkApprovalInput struct {
+	Kind     string   `json:"kind"`
+	Category string   `json:"category"`
+	Title    string   `json:"title"`
+	Question string   `json:"question"`
+	Keywords []string `json:"keywords"`
+	Status   string   `json:"status"`
+	Metadata string   `json:"metadata"`
+}
+
+type DocumentSourceArchiveOptions struct {
+	ArchiveLinkedKnowledge bool
+}
+
 type ShareLink struct {
 	Available     bool   `json:"available"`
 	URL           string `json:"url"`
@@ -161,14 +244,18 @@ type ChecklistItem struct {
 	Label       string `json:"label"`
 	Complete    bool   `json:"complete"`
 	Description string `json:"description"`
+	Required    bool   `json:"required"`
+	Group       string `json:"group"`
 }
 
 type BotSetupStatus struct {
-	OrganizationID uuid.UUID       `json:"organization_id"`
-	Items          []ChecklistItem `json:"items"`
-	CompleteCount  int             `json:"complete_count"`
-	TotalCount     int             `json:"total_count"`
-	Ready          bool            `json:"ready"`
+	OrganizationID        uuid.UUID       `json:"organization_id"`
+	Items                 []ChecklistItem `json:"items"`
+	CompleteCount         int             `json:"complete_count"`
+	TotalCount            int             `json:"total_count"`
+	RequiredCompleteCount int             `json:"required_complete_count"`
+	RequiredCount         int             `json:"required_count"`
+	Ready                 bool            `json:"ready"`
 }
 
 type ValidationIssue struct {

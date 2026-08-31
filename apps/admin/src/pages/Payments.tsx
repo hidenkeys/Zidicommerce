@@ -1,17 +1,22 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiGet, apiPost } from "../api/client";
-import { Card, EmptyState, Flash, FormGrid, Page, StatusDot } from "../components/ui";
+import { useAuth } from "../auth";
+import { Card, EmptyState, Flash, FormGrid, LoadingState, Page, StatusDot } from "../components/ui";
 import { parseJSON, type Row } from "../lib/format";
+import { hasPermission } from "../lib/permissions";
 
 type PaymentConfiguration = Row & { id: string; provider: string; display_name: string; status: string; enabled: boolean; public_config?: string; secret_source?: string; has_secret?: boolean };
 
 export function PaymentsPage() {
+  const { user } = useAuth();
+  const canManagePayments = hasPermission(user.role, "payments.manage");
   const [rows, setRows] = useState<PaymentConfiguration[]>([]);
   const [org, setOrg] = useState<Row | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const [form, setForm] = useState({ public_key: "", secret_key: "", mode: "test" });
   const [message, setMessage] = useState("");
   const [flash, setFlash] = useState("");
+  const [loading, setLoading] = useState(true);
 
   async function load() {
     try {
@@ -24,6 +29,8 @@ export function PaymentsPage() {
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load payments");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -65,6 +72,7 @@ export function PaymentsPage() {
     >
       <Flash message={message} />
       <Flash message={flash} tone="success" />
+      {loading ? <LoadingState label="Loading payment settings" /> : <>
       <Card>
         {paystack ? (
           <>
@@ -72,15 +80,15 @@ export function PaymentsPage() {
             <p><strong>Paystack</strong></p>
             <p>Currency {String(org?.currency ?? "NGN")}</p>
             <p className="muted">{publicConfig.mode === "live" ? "Live mode" : "Test mode"}{paystack.has_secret ? " · Merchant key stored" : paystack.secret_source === "environment" ? " · Using platform key" : ""}</p>
-            <div className="page-actions" style={{ marginTop: 16 }}>
+            {canManagePayments ? <div className="page-actions" style={{ marginTop: 16 }}>
               <button type="button" onClick={() => void test()}>Run test</button>
-            </div>
+            </div> : null}
           </>
         ) : (
           <EmptyState title="Payments are not connected yet" body="Connect Paystack so customers can pay after they place an order." />
         )}
       </Card>
-      <FormGrid onSubmit={connect} title={paystack ? "Update Paystack" : "Connect Paystack"}>
+      {canManagePayments ? <FormGrid onSubmit={connect} title={paystack ? "Update Paystack" : "Connect Paystack"}>
         <label>Mode
           <select value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value })}>
             <option value="test">Test</option>
@@ -95,7 +103,8 @@ export function PaymentsPage() {
           </>
         ) : <p className="help-text full">Most merchants can leave keys blank if the platform already has a Paystack key.</p>}
         <div className="full"><button type="submit">{paystack ? "Save" : "Connect Paystack"}</button></div>
-      </FormGrid>
+      </FormGrid> : <p className="read-only-note">Payment configuration is read-only for your role.</p>}
+      </>}
     </Page>
   );
 }

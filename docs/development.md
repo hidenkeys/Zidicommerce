@@ -87,6 +87,15 @@ cd apps/api
 go test ./...
 ```
 
+AI regression tests for the grounded customer-service layer:
+
+```bash
+cd apps/api
+go test ./internal/ai -run 'TestAIRegression'
+```
+
+See [AI Regression Suite](ai-regression.md) for coverage, live Ollama/Groq smoke tests, and how to add cases.
+
 The tests do not require a live production database. They cover health behavior, config DSNs, migration runner behavior, token issuing/parsing, auth middleware, role policy, tenant scope validation, cart totals, order creation, insufficient inventory, inventory decrement, invalid transitions, payment idempotency, tenant isolation, organization onboarding, invitations, role restrictions, store-level access, disabled member login protection, bot builder validation, tenant isolation, publish snapshots, immutability, bot role restrictions, runtime sessions, questions, validation, conditions, actions, modules, handoff, idempotency, version pinning, and WhatsApp signature verification.
 
 ## Commerce API
@@ -216,7 +225,7 @@ POST   /v1/runtime/webhooks/whatsapp
 
 The simulator endpoints are authenticated and run the real runtime engine. They are distinct from Bot Builder preview.
 
-WhatsApp webhook verification uses an active WhatsApp channel `verify_token`. WhatsApp POST webhooks require `X-Hub-Signature-256` and a configured channel `app_secret`; requests fail closed when the secret is missing.
+WhatsApp webhook verification uses the shared Zidi Meta app verify token for Embedded Signup connections and retains tenant-scoped credential references for legacy/manual connections. POST webhooks require a known `phone_number_id`, `X-Hub-Signature-256`, and a resolvable app secret; requests fail closed when any requirement is missing. Configure `CHANNEL_SECRET_ENCRYPTION_KEY` for encrypted database-backed secrets or use `env://ENV_NAME` references. `WHATSAPP_SIGNATURE_BYPASS` defaults to false and configuration loading rejects it in production. Embedded Signup additionally requires `META_APP_ID`, `META_APP_SECRET`, `META_EMBEDDED_SIGNUP_CONFIGURATION_ID`, `META_GRAPH_API_VERSION`, `META_WEBHOOK_VERIFY_TOKEN`, and a public HTTPS `WHATSAPP_WEBHOOK_PUBLIC_BASE_URL`. See [Meta WhatsApp Connection](meta-whatsapp-connection.md) and [Meta/WhatsApp Production Adapter](whatsapp-adapter.md).
 
 Runtime responses are structured:
 

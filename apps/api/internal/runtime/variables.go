@@ -14,6 +14,7 @@ type RuntimeContext struct {
 	Session   ConversationSession
 	Variables map[string]any
 	System    map[string]any
+	Source    string
 }
 
 func (c RuntimeContext) Resolve(path string) (any, bool) {

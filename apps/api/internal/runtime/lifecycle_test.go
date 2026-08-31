@@ -11,19 +11,22 @@ import (
 
 func TestClassifyCommandRecognizesGreetingsAndControls(t *testing.T) {
 	cases := map[string]lifecycleCommand{
-		"hi":           commandGreeting,
-		"Hello!":       commandGreeting,
-		"heyyy":        commandGreeting,
-		"good morning": commandGreeting,
-		"menu":         commandMenu,
-		"Main menu":    commandMenu,
-		"restart":      commandRestart,
-		"start":        commandRestart,
-		"cancel":       commandCancel,
-		"back":         commandBack,
-		"2":            commandNone,
-		"track_order":  commandNone,
-		"I want tea":   commandNone,
+		"hi":              commandGreeting,
+		"Hello!":          commandGreeting,
+		"heyyy":           commandGreeting,
+		"good morning":    commandGreeting,
+		"menu":            commandMenu,
+		"Main menu":       commandMenu,
+		"restart":         commandRestart,
+		"start":           commandRestart,
+		"cancel":          commandCancel,
+		"cancel order":    commandCancel,
+		"Cancel request!": commandCancel,
+		"end order":       commandCancel,
+		"back":            commandBack,
+		"2":               commandNone,
+		"track_order":     commandNone,
+		"I want tea":      commandNone,
 	}
 	for text, want := range cases {
 		if got := classifyCommand(text); got != want {

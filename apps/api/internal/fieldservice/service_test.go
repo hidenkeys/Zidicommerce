@@ -50,7 +50,7 @@ func newFieldFixture(t *testing.T) fieldFixture {
 	if err := db.AutoMigrate(
 		&organization.Organization{}, &organization.User{}, &organization.OrganizationMembership{}, &organization.AuditLog{},
 		&core.Store{}, &core.StoreHour{}, &core.StoreFulfilmentMode{}, &core.Category{}, &core.Product{}, &core.Variant{}, &core.ProductImage{},
-		&core.InventoryLevel{}, &core.Customer{}, &core.Cart{}, &core.CartItem{}, &core.Order{}, &core.OrderItem{}, &core.OrderEvent{},
+		&core.InventoryLevel{}, &core.Customer{}, &core.Cart{}, &core.CartItem{}, &core.Order{}, &core.OrderItem{}, &core.OrderEvent{}, &core.CommerceEvent{},
 		&core.Payment{}, &core.Fulfilment{}, &core.Channel{}, &core.CommerceNotification{},
 		&Settings{}, &Pool{}, &Provider{}, &ProviderPool{}, &Request{}, &Match{}, &DispatchAttempt{}, &Assignment{}, &Quote{}, &QuoteItem{}, &Rating{}, &Message{},
 	); err != nil {

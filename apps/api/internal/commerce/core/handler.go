@@ -34,29 +34,29 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Put("/organizations/current/members/:id/stores", h.assignMemberStores)
 	router.Get("/organizations/current/audit-logs", h.listAuditLogs)
 
-	router.Get("/stores", auth.RequireRole(authz.MerchantAdmin, authz.StoreManager, authz.StoreStaff, authz.Viewer), h.listStores)
-	router.Post("/stores", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.createStore)
+	router.Get("/stores", auth.RequirePermission(authz.PermissionStoresView), h.listStores)
+	router.Post("/stores", auth.RequirePermission(authz.PermissionStoresCreate), h.createStore)
 	router.Get("/stores/:id", h.getStore)
 	router.Patch("/stores/:id", h.updateStore)
 	router.Post("/stores/:id/activate", h.setStoreStatus(StatusActive))
 	router.Post("/stores/:id/deactivate", h.setStoreStatus(StatusInactive))
 
 	router.Get("/catalogue/categories", h.listCategories)
-	router.Post("/catalogue/categories", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.createCategory)
+	router.Post("/catalogue/categories", auth.RequirePermission(authz.PermissionCatalogueManage), h.createCategory)
 	router.Get("/catalogue/products", h.listProducts)
-	router.Post("/catalogue/products", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.createProduct)
+	router.Post("/catalogue/products", auth.RequirePermission(authz.PermissionCatalogueManage), h.createProduct)
 	router.Get("/catalogue/products/:id", h.getProduct)
-	router.Patch("/catalogue/products/:id", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.updateProduct)
-	router.Post("/catalogue/products/:id/variants", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.createVariant)
-	router.Post("/catalogue/products/:id/images", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.createImage)
-	router.Patch("/catalogue/variants/:id", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.updateVariant)
+	router.Patch("/catalogue/products/:id", auth.RequirePermission(authz.PermissionCatalogueManage), h.updateProduct)
+	router.Post("/catalogue/products/:id/variants", auth.RequirePermission(authz.PermissionCatalogueManage), h.createVariant)
+	router.Post("/catalogue/products/:id/images", auth.RequirePermission(authz.PermissionCatalogueManage), h.createImage)
+	router.Patch("/catalogue/variants/:id", auth.RequirePermission(authz.PermissionCatalogueManage), h.updateVariant)
 
-	router.Get("/inventory", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin, authz.StoreManager, authz.StoreStaff, authz.Viewer), h.listInventory)
-	router.Post("/inventory", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin, authz.StoreManager), h.upsertInventory)
-	router.Patch("/inventory/:id", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin, authz.StoreManager), h.updateInventory)
+	router.Get("/inventory", auth.RequirePermission(authz.PermissionInventoryView), h.listInventory)
+	router.Post("/inventory", auth.RequirePermission(authz.PermissionInventoryAdjust), h.upsertInventory)
+	router.Patch("/inventory/:id", auth.RequirePermission(authz.PermissionInventoryAdjust), h.updateInventory)
 
-	router.Get("/customers", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin, authz.SupportAgent, authz.Viewer), h.listCustomers)
-	router.Post("/customers", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin, authz.SupportAgent), h.createCustomer)
+	router.Get("/customers", auth.RequirePermission(authz.PermissionCustomersView), h.listCustomers)
+	router.Post("/customers", auth.RequirePermission(authz.PermissionCustomersManage), h.createCustomer)
 
 	router.Post("/carts", h.createCart)
 	router.Get("/carts/:id", h.getCart)
@@ -65,27 +65,28 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Delete("/carts/:id/items/:item_id", h.removeCartItem)
 	router.Delete("/carts/:id/items", h.clearCart)
 
-	router.Get("/orders", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin, authz.StoreManager, authz.StoreStaff, authz.SupportAgent), h.listOrders)
+	router.Get("/orders", auth.RequirePermission(authz.PermissionOrdersView), h.listOrders)
 	router.Post("/orders", h.createOrder)
 	router.Get("/orders/:id", h.getOrder)
-	router.Post("/orders/:id/transition", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin, authz.StoreManager, authz.StoreStaff), h.transitionOrder)
+	router.Get("/orders/:id/operations", h.getOrderOperations)
+	router.Post("/orders/:id/transition", auth.RequirePermission(authz.PermissionOrdersManage), h.transitionOrder)
 
-	router.Get("/payments", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.listPayments)
+	router.Get("/payments", auth.RequirePermission(authz.PermissionPaymentsView), h.listPayments)
 	router.Post("/payments/initialize", h.initializePayment)
 	router.Post("/payments/verify", h.verifyPayment)
-	router.Post("/payments/:id/reconcile", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.reconcilePayment)
-	router.Get("/payment-configurations", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.listPaymentConfigurations)
-	router.Post("/payment-configurations", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.upsertPaymentConfiguration)
-	router.Post("/payment-configurations/:provider/test", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.testPaymentConfiguration)
+	router.Post("/payments/:id/reconcile", auth.RequirePermission(authz.PermissionPaymentsReconcile), h.reconcilePayment)
+	router.Get("/payment-configurations", auth.RequirePermission(authz.PermissionPaymentsView), h.listPaymentConfigurations)
+	router.Post("/payment-configurations", auth.RequirePermission(authz.PermissionPaymentsManage), h.upsertPaymentConfiguration)
+	router.Post("/payment-configurations/:provider/test", auth.RequirePermission(authz.PermissionPaymentsManage), h.testPaymentConfiguration)
 
 	router.Get("/fulfilment/:order_id", h.getFulfilment)
-	router.Patch("/fulfilment/:order_id", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin, authz.StoreManager, authz.StoreStaff), h.updateFulfilment)
+	router.Patch("/fulfilment/:order_id", auth.RequirePermission(authz.PermissionOrdersManage), h.updateFulfilment)
 
-	router.Get("/channels", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.listChannels)
-	router.Post("/channels", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.createChannel)
-	router.Patch("/channels/:id", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.updateChannel)
-	router.Post("/channels/:id/test", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.testChannel)
-	router.Post("/channels/:id/disconnect", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.disconnectChannel)
+	router.Get("/channels", auth.RequirePermission(authz.PermissionChannelsView), h.listChannels)
+	router.Post("/channels", auth.RequirePermission(authz.PermissionChannelsManage), h.createChannel)
+	router.Patch("/channels/:id", auth.RequirePermission(authz.PermissionChannelsManage), h.updateChannel)
+	router.Post("/channels/:id/test", auth.RequirePermission(authz.PermissionChannelsManage), h.testChannel)
+	router.Post("/channels/:id/disconnect", auth.RequirePermission(authz.PermissionChannelsManage), h.disconnectChannel)
 
 	router.Get("/merchant-imports", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.listMerchantImportJobs)
 	router.Post("/merchant-imports/configuration", auth.RequireRole(authz.PlatformAdmin, authz.MerchantAdmin), h.importMerchantConfiguration)
@@ -559,6 +560,15 @@ func (h *Handler) getOrder(c *fiber.Ctx) error {
 		return err
 	}
 	data, err := h.service.GetOrder(c.UserContext(), mustUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) getOrderOperations(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	data, err := h.service.GetOrderOperations(c.UserContext(), mustUser(c), id)
 	return respond(c, data, err)
 }
 

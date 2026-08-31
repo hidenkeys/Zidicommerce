@@ -17,20 +17,19 @@ func (r Role) String() string {
 }
 
 func (r Role) CanManageOrganization() bool {
-	return r == PlatformAdmin || r == MerchantAdmin
+	return r.HasPermission(PermissionOrganizationUpdate)
 }
 
 func (r Role) CanOperateStore() bool {
-	return r == PlatformAdmin || r == MerchantAdmin || r == StoreManager || r == StoreStaff
+	return r.HasPermission(PermissionStoresUpdate) || r.HasPermission(PermissionOrdersManage) || r.HasPermission(PermissionInventoryAdjust)
 }
 
 func (r Role) CanViewCommerce() bool {
-	switch r {
-	case PlatformAdmin, MerchantAdmin, StoreManager, StoreStaff, SupportAgent, Viewer:
-		return true
-	default:
-		return false
-	}
+	return r.HasPermission(PermissionStoresView) ||
+		r.HasPermission(PermissionCatalogueView) ||
+		r.HasPermission(PermissionInventoryView) ||
+		r.HasPermission(PermissionCustomersView) ||
+		r.HasPermission(PermissionOrdersView)
 }
 
 func IsValid(role string) bool {

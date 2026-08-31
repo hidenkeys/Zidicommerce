@@ -1,6 +1,6 @@
 # ZidiCommerce Bot Runtime
 
-Phase 5 adds a deterministic runtime engine that executes immutable published Bot Builder snapshots.
+Phase 5 adds a deterministic runtime engine that executes immutable published Bot Builder snapshots. Phase E adds a channel-neutral conversation operations layer for human handoff, assignment, notes, read state, resolution, and AI pause/resume. Phase G adds merchant workflow authorization and durable conversation-order continuity without creating another runtime.
 
 The runtime is separate from:
 
@@ -44,6 +44,8 @@ sequenceDiagram
 - external conversation ID
 - current step and expected input
 - status: `active`, `completed`, `handoff`, `expired`, `cancelled`
+- conversation status: `open`, `ai_handling`, `human_requested`, `human_assigned`, `pending`, `waiting`, `resolved`, `reopened`
+- assigned user, priority, handoff state, unread count, last message summary, read/release/resolution timestamps
 - variables and system context
 - optimistic `lock_version`
 - last activity and expiry timestamps
@@ -144,6 +146,10 @@ Action inputs are resolved through configured mappings. Outputs are mapped back 
 
 Commerce actions call `commerce/core.Service`; the runtime does not update commerce tables directly.
 
+Before execution, the action registry checks both the application-owned runtime action policy and the tenant's active commerce workflow configuration. Runtime events record requested, authorized, denied, completed, and failed actions. AI-originated writes remain blocked.
+
+When `create_order` succeeds, the runtime creates an idempotent tenant-scoped `conversation_order_links` record. Conversation operations can then display the authoritative order, payment, and fulfilment state even after the conversational step has moved on.
+
 ## Modules
 
 Modules are reusable flow entry points. A module can define `entry_step` in its parameters. Entering a module records runtime events and routes execution to that entry step while preserving the session context.
@@ -171,6 +177,23 @@ The WhatsApp adapter:
 
 Conversation logic is not in the WhatsApp adapter.
 
+## Conversation Operations
+
+The Phase E operations layer is tenant-scoped and channel-neutral. It uses `conversation_sessions`, `conversation_messages`, `support_handoffs`, and `support_handoff_notes`.
+
+Lifecycle rules:
+
+- normal automation uses `conversation_status = ai_handling`
+- requesting handoff sets the runtime session to `handoff` and `conversation_status = human_requested`
+- claiming or assigning a handoff sets `conversation_status = human_assigned`, records the owner, and pauses AI responses
+- inbound customer messages are still persisted while AI is paused
+- internal notes are stored as support notes and mirrored into the conversation timeline with `direction = internal`
+- releasing with `resume_bot = true` clears human ownership and moves the session back to AI handling
+- resolving without resume completes the session and keeps the conversation resolved
+- reopening restores handoff state and preserves the previous assigned user when one exists
+
+Support agents only see unassigned active handoffs and handoffs assigned to them. Merchant admins and permitted managers can view and manage the organization inbox.
+
 ## Idempotency
 
 Inbound idempotency is enforced by `processed_messages`:
@@ -182,6 +205,8 @@ organization_id + channel_id + external_message_id
 Duplicate inbound messages return the stored runtime result and do not execute side effects again.
 
 Order/payment actions also use deterministic idempotency keys derived from the runtime session unless a mapped idempotency key is supplied.
+
+Verified payment listeners project paid state and configured post-payment steps into linked sessions exactly once. They do not advance order or fulfilment state automatically and do not resume sessions owned by a human agent.
 
 ## Concurrency
 
@@ -219,6 +244,24 @@ POST /v1/runtime/test/message
 GET  /v1/runtime/conversations
 GET  /v1/runtime/conversations/:id
 GET  /v1/runtime/conversations/:id/messages
+POST /v1/runtime/conversations/:id/reply
+POST /v1/runtime/conversations/:id/notes
+POST /v1/runtime/conversations/:id/read
+POST /v1/runtime/conversations/:id/unread
+PATCH /v1/runtime/conversations/:id/status
+POST /v1/runtime/conversations/:id/assign
+POST /v1/runtime/conversations/:id/unassign
+POST /v1/runtime/conversations/:id/resolve
+POST /v1/runtime/conversations/:id/reopen
+POST /v1/runtime/conversations/:id/handoff
+GET  /v1/runtime/support-handoffs
+POST /v1/runtime/support-handoffs/:id/claim
+POST /v1/runtime/support-handoffs/:id/assign
+POST /v1/runtime/support-handoffs/:id/release
+POST /v1/runtime/support-handoffs/:id/resolve
+POST /v1/runtime/support-handoffs/:id/reopen
+GET  /v1/runtime/support-handoffs/:id/notes
+POST /v1/runtime/support-handoffs/:id/notes
 ```
 
 Public WhatsApp endpoints:
@@ -242,15 +285,16 @@ The runtime writes structured logs and persists `runtime_events` for:
 - action start/completion/failure
 - module start/completion
 - handoff
+- handoff claim/assign/release/resolve/reopen
+- conversation read/unread changes
 - runtime errors
 
 Metrics are represented as event data and processing duration metadata for now. A dedicated metrics backend can be added later without changing runtime semantics.
 
 ## Limitations
 
-- No LLM or AI intent detection yet.
 - WhatsApp outbound sending is asynchronous through persisted outbound records and the background worker.
-- Support operations are intentionally compact: conversation list, support tickets, claim, internal notes, and resolve.
+- Support operations are channel-neutral. Channel adapters remain thin normalization and delivery layers.
 - No Redis snapshot cache. Published snapshots are loaded from DB behind a clean service boundary.
 - Module execution supports entry-step routing with a bounded nested call stack.
 - Payment initialization is supported, but payment success still requires trusted provider verification.
