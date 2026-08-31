@@ -173,7 +173,21 @@ func (s *Service) HandlePaystackWebhook(ctx context.Context, body []byte, signat
 				if err := s.recordOrderEventTx(tx, actor, order.ID, OrderAwaitingPayment, OrderPaid, "payment_webhook_verified", "paystack:"+externalID, ""); err != nil {
 					return err
 				}
-				if err := s.recordOrderNotificationTx(tx, payment.OrganizationID, order.ID, "payment_confirmed", "Payment confirmed for order "+order.OrderNumber+"."); err != nil {
+				orderID := order.ID
+				paymentID := payment.ID
+				if err := s.recordCommerceEventTx(tx, actor, commerceEventRecord{
+					EventType:      CommerceEventPaymentConfirmed,
+					Source:         CommerceEventSourceExternalEvent,
+					ResourceType:   "payment",
+					ResourceID:     payment.ID,
+					OrderID:        &orderID,
+					PaymentID:      &paymentID,
+					IdempotencyKey: "payment.confirmed:" + payment.Reference,
+					Metadata:       map[string]any{"reference": payment.Reference, "provider": payment.Provider, "webhook_event_id": externalID, "order_status": OrderPaid},
+				}); err != nil {
+					return err
+				}
+				if err := s.recordOrderNotificationTx(tx, payment.OrganizationID, order.ID, "payment_confirmed", s.paymentConfirmedNotificationMessageTx(tx, payment.OrganizationID, order.ID)); err != nil {
 					return err
 				}
 			}

@@ -59,7 +59,7 @@ type Service struct {
 	appBaseURL              string
 	log                     *slog.Logger
 	jobs                    *jobs.Service
-	afterPaymentPaid        AfterPaymentPaid
+	afterPaymentPaid        []AfterPaymentPaid
 	now                     func() time.Time
 }
 
@@ -88,19 +88,23 @@ func (s *Service) ConfigureJobs(jobService *jobs.Service) {
 }
 
 func (s *Service) ConfigureAfterPaymentPaid(handler AfterPaymentPaid) {
-	s.afterPaymentPaid = handler
+	if handler != nil {
+		s.afterPaymentPaid = append(s.afterPaymentPaid, handler)
+	}
 }
 
 func (s *Service) fireAfterPaymentPaid(ctx context.Context, organizationID, orderID uuid.UUID) {
-	if s.afterPaymentPaid == nil || orderID == uuid.Nil {
+	if len(s.afterPaymentPaid) == 0 || orderID == uuid.Nil {
 		return
 	}
 	var order Order
 	if err := s.db.WithContext(ctx).Select("id, metadata").Where("organization_id = ? AND id = ?", organizationID, orderID).First(&order).Error; err != nil {
 		return
 	}
-	if err := s.afterPaymentPaid(ctx, organizationID, orderID, order.Metadata); err != nil && s.log != nil {
-		s.log.Error("after payment paid hook failed", "error", err)
+	for _, handler := range s.afterPaymentPaid {
+		if err := handler(ctx, organizationID, orderID, order.Metadata); err != nil && s.log != nil {
+			s.log.Error("after payment paid hook failed", "error", err)
+		}
 	}
 }
 
@@ -215,8 +219,8 @@ func (s *Service) UpdateOrganization(ctx context.Context, actor auth.CurrentUser
 }
 
 func (s *Service) CreateStore(ctx context.Context, actor auth.CurrentUser, input StoreInput) (Store, error) {
-	if !actor.Role.CanManageOrganization() {
-		return Store{}, httperror.Forbidden("You cannot create stores")
+	if err := s.authorize(ctx, actor, authz.PermissionStoresCreate, "store", nil); err != nil {
+		return Store{}, err
 	}
 	input.normalize()
 	if input.Name == "" || input.Code == "" {
@@ -264,8 +268,8 @@ func (s *Service) GetStore(ctx context.Context, actor auth.CurrentUser, storeID 
 }
 
 func (s *Service) UpdateStore(ctx context.Context, actor auth.CurrentUser, storeID uuid.UUID, input StoreInput) (Store, error) {
-	if !actor.Role.CanManageOrganization() && actor.Role != authz.StoreManager {
-		return Store{}, httperror.Forbidden("You cannot update stores")
+	if err := s.ensureStoreAccessible(ctx, actor, storeID, authz.PermissionStoresUpdate); err != nil {
+		return Store{}, err
 	}
 	store, err := s.GetStore(ctx, actor, storeID)
 	if err != nil {
@@ -310,8 +314,8 @@ func (s *Service) SetStoreStatus(ctx context.Context, actor auth.CurrentUser, st
 }
 
 func (s *Service) CreateCategory(ctx context.Context, actor auth.CurrentUser, input CategoryInput) (Category, error) {
-	if !actor.Role.CanManageOrganization() {
-		return Category{}, httperror.Forbidden("You cannot manage catalogue")
+	if err := s.authorize(ctx, actor, authz.PermissionCatalogueManage, "catalogue_category", nil); err != nil {
+		return Category{}, err
 	}
 	input.normalize()
 	if input.Name == "" || input.Slug == "" {
@@ -322,14 +326,17 @@ func (s *Service) CreateCategory(ctx context.Context, actor auth.CurrentUser, in
 }
 
 func (s *Service) ListCategories(ctx context.Context, actor auth.CurrentUser) ([]Category, error) {
+	if err := s.authorize(ctx, actor, authz.PermissionCatalogueView, "catalogue_category", nil); err != nil {
+		return nil, err
+	}
 	var categories []Category
 	err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("sort_order ASC, name ASC").Find(&categories).Error
 	return categories, err
 }
 
 func (s *Service) CreateProduct(ctx context.Context, actor auth.CurrentUser, input ProductInput) (Product, error) {
-	if !actor.Role.CanManageOrganization() {
-		return Product{}, httperror.Forbidden("You cannot manage catalogue")
+	if err := s.authorize(ctx, actor, authz.PermissionCatalogueManage, "product", nil); err != nil {
+		return Product{}, err
 	}
 	input.normalize()
 	if input.Name == "" || input.Slug == "" {
@@ -388,6 +395,9 @@ func (s *Service) CreateProduct(ctx context.Context, actor auth.CurrentUser, inp
 }
 
 func (s *Service) ListProducts(ctx context.Context, actor auth.CurrentUser) ([]Product, error) {
+	if err := s.authorize(ctx, actor, authz.PermissionCatalogueView, "product", nil); err != nil {
+		return nil, err
+	}
 	var products []Product
 	err := s.db.WithContext(ctx).
 		Where("organization_id = ?", actor.OrganizationID).
@@ -399,6 +409,9 @@ func (s *Service) ListProducts(ctx context.Context, actor auth.CurrentUser) ([]P
 }
 
 func (s *Service) GetProduct(ctx context.Context, actor auth.CurrentUser, productID uuid.UUID) (Product, error) {
+	if err := s.authorize(ctx, actor, authz.PermissionCatalogueView, "product", &productID); err != nil {
+		return Product{}, err
+	}
 	var product Product
 	err := s.db.WithContext(ctx).
 		Where("organization_id = ? AND id = ?", actor.OrganizationID, productID).
@@ -409,6 +422,9 @@ func (s *Service) GetProduct(ctx context.Context, actor auth.CurrentUser, produc
 }
 
 func (s *Service) GetVariant(ctx context.Context, actor auth.CurrentUser, variantID uuid.UUID) (Variant, error) {
+	if err := s.authorize(ctx, actor, authz.PermissionCatalogueView, "variant", &variantID); err != nil {
+		return Variant{}, err
+	}
 	var variant Variant
 	err := s.db.WithContext(ctx).
 		Where("product_variants.organization_id = ? AND product_variants.id = ?", actor.OrganizationID, variantID).
@@ -418,8 +434,8 @@ func (s *Service) GetVariant(ctx context.Context, actor auth.CurrentUser, varian
 }
 
 func (s *Service) UpdateProduct(ctx context.Context, actor auth.CurrentUser, productID uuid.UUID, input ProductInput) (Product, error) {
-	if !actor.Role.CanManageOrganization() {
-		return Product{}, httperror.Forbidden("You cannot manage catalogue")
+	if err := s.authorize(ctx, actor, authz.PermissionCatalogueManage, "product", &productID); err != nil {
+		return Product{}, err
 	}
 	product, err := s.GetProduct(ctx, actor, productID)
 	if err != nil {
@@ -452,8 +468,8 @@ func (s *Service) UpdateProduct(ctx context.Context, actor auth.CurrentUser, pro
 }
 
 func (s *Service) CreateVariant(ctx context.Context, actor auth.CurrentUser, productID uuid.UUID, input VariantInput) (Variant, error) {
-	if !actor.Role.CanManageOrganization() {
-		return Variant{}, httperror.Forbidden("You cannot manage catalogue")
+	if err := s.authorize(ctx, actor, authz.PermissionCatalogueManage, "product", &productID); err != nil {
+		return Variant{}, err
 	}
 	if _, err := s.GetProduct(ctx, actor, productID); err != nil {
 		return Variant{}, err
@@ -467,8 +483,8 @@ func (s *Service) CreateVariant(ctx context.Context, actor auth.CurrentUser, pro
 }
 
 func (s *Service) UpdateVariant(ctx context.Context, actor auth.CurrentUser, variantID uuid.UUID, input VariantUpdateInput) (Variant, error) {
-	if !actor.Role.CanManageOrganization() {
-		return Variant{}, httperror.Forbidden("You cannot manage catalogue")
+	if err := s.authorize(ctx, actor, authz.PermissionCatalogueManage, "variant", &variantID); err != nil {
+		return Variant{}, err
 	}
 	var variant Variant
 	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, variantID).First(&variant).Error; err != nil {
@@ -505,8 +521,8 @@ func (s *Service) UpdateVariant(ctx context.Context, actor auth.CurrentUser, var
 }
 
 func (s *Service) CreateProductImage(ctx context.Context, actor auth.CurrentUser, productID uuid.UUID, input ProductImageInput) (ProductImage, error) {
-	if !actor.Role.CanManageOrganization() {
-		return ProductImage{}, httperror.Forbidden("You cannot manage catalogue")
+	if err := s.authorize(ctx, actor, authz.PermissionCatalogueManage, "product", &productID); err != nil {
+		return ProductImage{}, err
 	}
 	if _, err := s.GetProduct(ctx, actor, productID); err != nil {
 		return ProductImage{}, err
@@ -520,6 +536,9 @@ func (s *Service) CreateProductImage(ctx context.Context, actor auth.CurrentUser
 }
 
 func (s *Service) ListInventory(ctx context.Context, actor auth.CurrentUser, storeID *uuid.UUID) ([]InventoryLevel, error) {
+	if err := s.authorize(ctx, actor, authz.PermissionInventoryView, "inventory", nil); err != nil {
+		return nil, err
+	}
 	var rows []InventoryLevel
 	query := s.db.WithContext(ctx).Where("inventory_levels.organization_id = ?", actor.OrganizationID).Preload("Variant").Preload("Variant.Product")
 	if storeID != nil {
@@ -527,7 +546,7 @@ func (s *Service) ListInventory(ctx context.Context, actor auth.CurrentUser, sto
 			return nil, err
 		}
 		query = query.Where("store_id = ?", *storeID)
-	} else if actor.Role == authz.StoreStaff || actor.Role == authz.StoreManager {
+	} else if actor.Role.RequiresStoreScope() {
 		query = query.Joins("JOIN store_user_assignments sua ON sua.organization_id = inventory_levels.organization_id AND sua.store_id = inventory_levels.store_id AND sua.user_id = ?", actor.ID)
 	}
 	err := query.Order("updated_at DESC").Find(&rows).Error
@@ -535,11 +554,11 @@ func (s *Service) ListInventory(ctx context.Context, actor auth.CurrentUser, sto
 }
 
 func (s *Service) CheckInventory(ctx context.Context, actor auth.CurrentUser, storeID, variantID uuid.UUID, quantity int) (InventoryLevel, error) {
+	if err := s.ensureStoreAccessible(ctx, actor, storeID, authz.PermissionInventoryView); err != nil {
+		return InventoryLevel{}, err
+	}
 	if quantity <= 0 {
 		return InventoryLevel{}, httperror.BadRequest("Quantity must be greater than zero")
-	}
-	if _, err := s.GetStore(ctx, actor, storeID); err != nil {
-		return InventoryLevel{}, err
 	}
 	var level InventoryLevel
 	err := s.db.WithContext(ctx).
@@ -557,8 +576,8 @@ func (s *Service) CheckInventory(ctx context.Context, actor auth.CurrentUser, st
 }
 
 func (s *Service) UpdateInventory(ctx context.Context, actor auth.CurrentUser, inventoryID uuid.UUID, input InventoryInput) (InventoryLevel, error) {
-	if !actor.Role.CanManageOrganization() && actor.Role != authz.StoreManager {
-		return InventoryLevel{}, httperror.Forbidden("You cannot update inventory")
+	if err := s.authorize(ctx, actor, authz.PermissionInventoryAdjust, "inventory", &inventoryID); err != nil {
+		return InventoryLevel{}, err
 	}
 	var level InventoryLevel
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -600,14 +619,11 @@ func (s *Service) UpdateInventory(ctx context.Context, actor auth.CurrentUser, i
 }
 
 func (s *Service) UpsertInventory(ctx context.Context, actor auth.CurrentUser, input InventoryCreateInput) (InventoryLevel, error) {
-	if !actor.Role.CanManageOrganization() && actor.Role != authz.StoreManager {
-		return InventoryLevel{}, httperror.Forbidden("You cannot update inventory")
+	if err := s.ensureStoreAccessible(ctx, actor, input.StoreID, authz.PermissionInventoryAdjust); err != nil {
+		return InventoryLevel{}, err
 	}
 	if input.StoreID == uuid.Nil || input.VariantID == uuid.Nil || input.OnHand < 0 || input.ReorderThreshold < 0 {
 		return InventoryLevel{}, httperror.BadRequest("Store, variant, on-hand stock, and reorder threshold are required")
-	}
-	if _, err := s.GetStore(ctx, actor, input.StoreID); err != nil {
-		return InventoryLevel{}, err
 	}
 	var variant Variant
 	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, input.VariantID).First(&variant).Error; err != nil {
@@ -635,6 +651,9 @@ func (s *Service) UpsertInventory(ctx context.Context, actor auth.CurrentUser, i
 }
 
 func (s *Service) CreateCustomer(ctx context.Context, actor auth.CurrentUser, input CustomerInput) (Customer, error) {
+	if err := s.authorize(ctx, actor, authz.PermissionCustomersManage, "customer", nil); err != nil {
+		return Customer{}, err
+	}
 	input.normalize()
 	if input.Name == "" && input.Phone == "" && input.Email == "" {
 		return Customer{}, httperror.BadRequest("Customer name, phone, or email is required")
@@ -697,6 +716,9 @@ func (s *Service) updateCustomerMissingFields(ctx context.Context, customer Cust
 }
 
 func (s *Service) ListCustomers(ctx context.Context, actor auth.CurrentUser) ([]Customer, error) {
+	if err := s.authorize(ctx, actor, authz.PermissionCustomersView, "customer", nil); err != nil {
+		return nil, err
+	}
 	var customers []Customer
 	err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("updated_at DESC").Find(&customers).Error
 	return customers, err
@@ -817,8 +839,8 @@ func (s *Service) ClearCart(ctx context.Context, actor auth.CurrentUser, cartID 
 }
 
 func (s *Service) CreateOrder(ctx context.Context, actor auth.CurrentUser, input OrderInput) (Order, error) {
-	if !actor.Role.CanViewCommerce() {
-		return Order{}, httperror.Forbidden("You cannot create orders")
+	if err := s.ensureStoreAccessible(ctx, actor, input.StoreID, authz.PermissionOrdersManage); err != nil {
+		return Order{}, err
 	}
 	input.normalize()
 	if input.StoreID == uuid.Nil || input.CustomerID == uuid.Nil {
@@ -920,9 +942,6 @@ func (s *Service) CreateOrder(ctx context.Context, actor auth.CurrentUser, input
 				return err
 			}
 			price := variant.PriceMinor
-			if item.UnitPriceMinor != nil && *item.UnitPriceMinor >= 0 {
-				price = *item.UnitPriceMinor
-			}
 			lineTotal, err := multiplyPrice(price, item.Quantity)
 			if err != nil {
 				return err
@@ -952,6 +971,31 @@ func (s *Service) CreateOrder(ctx context.Context, actor auth.CurrentUser, input
 		if err := s.recordOrderEventTx(tx, actor, order.ID, "", order.Status, "order_created", input.IdempotencyKey, ""); err != nil {
 			return err
 		}
+		orderID := order.ID
+		if err := s.recordCommerceEventTx(tx, actor, commerceEventRecord{
+			EventType:      CommerceEventOrderCreated,
+			Source:         input.Source,
+			ResourceType:   "order",
+			ResourceID:     order.ID,
+			OrderID:        &orderID,
+			IdempotencyKey: "order.created:" + order.ID.String(),
+			Metadata:       map[string]any{"status": order.Status, "store_id": order.StoreID.String(), "customer_id": order.CustomerID.String()},
+		}); err != nil {
+			return err
+		}
+		fulfilmentID := fulfilment.ID
+		if err := s.recordCommerceEventTx(tx, actor, commerceEventRecord{
+			EventType:      CommerceEventFulfilmentCreated,
+			Source:         input.Source,
+			ResourceType:   "fulfilment",
+			ResourceID:     fulfilment.ID,
+			OrderID:        &orderID,
+			FulfilmentID:   &fulfilmentID,
+			IdempotencyKey: "fulfilment.created:" + order.ID.String(),
+			Metadata:       map[string]any{"status": fulfilment.Status, "type": fulfilment.Type},
+		}); err != nil {
+			return err
+		}
 		created = order
 		return nil
 	})
@@ -975,7 +1019,7 @@ func (s *Service) ListOrders(ctx context.Context, actor auth.CurrentUser, filter
 			return nil, err
 		}
 		query = query.Where("orders.store_id = ?", *filter.StoreID)
-	} else if actor.Role == authz.StoreStaff || actor.Role == authz.StoreManager {
+	} else if actor.Role.RequiresStoreScope() {
 		query = query.Joins("JOIN store_user_assignments sua ON sua.organization_id = orders.organization_id AND sua.store_id = orders.store_id AND sua.user_id = ?", actor.ID)
 	}
 	if filter.Status != "" {
@@ -985,25 +1029,34 @@ func (s *Service) ListOrders(ctx context.Context, actor auth.CurrentUser, filter
 }
 
 func (s *Service) ListCustomerOrders(ctx context.Context, actor auth.CurrentUser, customerID uuid.UUID) ([]Order, error) {
+	if err := s.authorize(ctx, actor, authz.PermissionOrdersView, "order", nil); err != nil {
+		return nil, err
+	}
 	if customerID == uuid.Nil {
 		return nil, httperror.BadRequest("Customer is required")
 	}
 	var orders []Order
-	err := s.db.WithContext(ctx).
+	query := s.db.WithContext(ctx).
 		Where("orders.organization_id = ? AND orders.customer_id = ?", actor.OrganizationID, customerID).
 		Preload("Items").
 		Preload("Customer").
 		Preload("Store").
 		Order("orders.created_at DESC").
-		Limit(20).
-		Find(&orders).Error
+		Limit(20)
+	if actor.Role.RequiresStoreScope() {
+		query = query.Joins("JOIN store_user_assignments sua ON sua.organization_id = orders.organization_id AND sua.store_id = orders.store_id AND sua.user_id = ?", actor.ID)
+	}
+	err := query.Find(&orders).Error
 	return orders, err
 }
 
 func (s *Service) GetOrder(ctx context.Context, actor auth.CurrentUser, orderID uuid.UUID) (Order, error) {
+	if err := s.authorize(ctx, actor, authz.PermissionOrdersView, "order", &orderID); err != nil {
+		return Order{}, err
+	}
 	var order Order
 	query := s.db.WithContext(ctx).Where("orders.organization_id = ? AND orders.id = ?", actor.OrganizationID, orderID).Preload("Items").Preload("Customer").Preload("Store")
-	if actor.Role == authz.StoreStaff || actor.Role == authz.StoreManager {
+	if actor.Role.RequiresStoreScope() {
 		query = query.Joins("JOIN store_user_assignments sua ON sua.organization_id = orders.organization_id AND sua.store_id = orders.store_id AND sua.user_id = ?", actor.ID)
 	}
 	err := query.First(&order).Error
@@ -1011,6 +1064,13 @@ func (s *Service) GetOrder(ctx context.Context, actor auth.CurrentUser, orderID 
 }
 
 func (s *Service) TransitionOrder(ctx context.Context, actor auth.CurrentUser, orderID uuid.UUID, input TransitionInput) (Order, error) {
+	permission := authz.PermissionOrdersManage
+	if input.Status == OrderCancelled {
+		permission = authz.PermissionOrdersCancel
+	}
+	if err := s.authorize(ctx, actor, permission, "order", &orderID); err != nil {
+		return Order{}, err
+	}
 	input.Status = strings.TrimSpace(input.Status)
 	if input.Status == "" {
 		return Order{}, httperror.BadRequest("Target status is required")
@@ -1018,7 +1078,7 @@ func (s *Service) TransitionOrder(ctx context.Context, actor auth.CurrentUser, o
 	var order Order
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("orders.organization_id = ? AND orders.id = ?", actor.OrganizationID, orderID)
-		if actor.Role == authz.StoreStaff || actor.Role == authz.StoreManager {
+		if actor.Role.RequiresStoreScope() {
 			query = query.Joins("JOIN store_user_assignments sua ON sua.organization_id = orders.organization_id AND sua.store_id = orders.store_id AND sua.user_id = ?", actor.ID)
 		}
 		if err := query.First(&order).Error; err != nil {
@@ -1037,11 +1097,17 @@ func (s *Service) TransitionOrder(ctx context.Context, actor auth.CurrentUser, o
 		if order.Status == input.Status {
 			return nil
 		}
+		if input.Status == OrderCancelled && order.Status != OrderAwaitingPayment {
+			return httperror.BadRequest("Paid or fulfilled orders require manual review before cancellation")
+		}
 		if !canTransition(order.Status, input.Status) {
 			return httperror.BadRequest("Invalid order status transition")
 		}
 		from := order.Status
 		if err := tx.Model(&order).Updates(map[string]any{"status": input.Status, "updated_at": s.now()}).Error; err != nil {
+			return err
+		}
+		if err := s.syncFulfilmentForOrderTransitionTx(tx, actor, order.ID, input.Status, input.IdempotencyKey, input.Source); err != nil {
 			return err
 		}
 		if input.Status == OrderCancelled {
@@ -1052,10 +1118,22 @@ func (s *Service) TransitionOrder(ctx context.Context, actor auth.CurrentUser, o
 		if err := s.recordOrderEventTx(tx, actor, order.ID, from, input.Status, "order_transition", input.IdempotencyKey, input.Reason); err != nil {
 			return err
 		}
+		orderID := order.ID
+		if err := s.recordCommerceEventTx(tx, actor, commerceEventRecord{
+			EventType:      commerceOrderTransitionEventType(input.Status),
+			Source:         input.Source,
+			ResourceType:   "order",
+			ResourceID:     order.ID,
+			OrderID:        &orderID,
+			IdempotencyKey: "order.transition:" + order.ID.String() + ":" + input.Status + ":" + input.IdempotencyKey,
+			Metadata:       map[string]any{"from": from, "to": input.Status, "reason": input.Reason},
+		}); err != nil {
+			return err
+		}
 		if err := s.auditTx(tx, &actor.OrganizationID, &actor.ID, "order", &order.ID, "order_transition", fmt.Sprintf(`{"from":%q,"to":%q}`, from, input.Status)); err != nil {
 			return err
 		}
-		return s.recordOrderNotificationTx(tx, actor.OrganizationID, order.ID, "order_"+input.Status, "Order "+order.OrderNumber+" is now "+input.Status+".")
+		return s.recordOrderNotificationTx(tx, actor.OrganizationID, order.ID, "order_"+input.Status, s.orderTransitionNotificationMessageTx(tx, actor.OrganizationID, order.ID, input.Status))
 	})
 	if err != nil {
 		return Order{}, err
@@ -1070,6 +1148,9 @@ func (s *Service) InitializePayment(ctx context.Context, actor auth.CurrentUser,
 	order, err := s.GetOrder(ctx, actor, input.OrderID)
 	if err != nil {
 		return Payment{}, err
+	}
+	if order.Status != OrderAwaitingPayment {
+		return Payment{}, httperror.BadRequest("Payment can only be initialized for orders awaiting payment")
 	}
 	providerName := defaultString(strings.ToLower(strings.TrimSpace(input.Provider)), s.paymentProvider.Name())
 	provider, err := s.resolveUsablePaymentProvider(ctx, actor.OrganizationID, providerName)
@@ -1140,7 +1221,21 @@ func (s *Service) VerifyPayment(ctx context.Context, actor auth.CurrentUser, inp
 			if err := s.recordOrderEventTx(tx, actor, order.ID, OrderAwaitingPayment, OrderPaid, "payment_verified", "payment:"+payment.Reference, ""); err != nil {
 				return err
 			}
-			if err := s.recordOrderNotificationTx(tx, actor.OrganizationID, order.ID, "payment_confirmed", "Payment confirmed for order "+order.OrderNumber+"."); err != nil {
+			orderID := order.ID
+			paymentID := payment.ID
+			if err := s.recordCommerceEventTx(tx, actor, commerceEventRecord{
+				EventType:      CommerceEventPaymentConfirmed,
+				Source:         input.Source,
+				ResourceType:   "payment",
+				ResourceID:     payment.ID,
+				OrderID:        &orderID,
+				PaymentID:      &paymentID,
+				IdempotencyKey: "payment.confirmed:" + payment.Reference,
+				Metadata:       map[string]any{"reference": payment.Reference, "provider": payment.Provider, "order_status": OrderPaid},
+			}); err != nil {
+				return err
+			}
+			if err := s.recordOrderNotificationTx(tx, actor.OrganizationID, order.ID, "payment_confirmed", s.paymentConfirmedNotificationMessageTx(tx, actor.OrganizationID, order.ID)); err != nil {
 				return err
 			}
 		}
@@ -1195,7 +1290,21 @@ func (s *Service) ReconcilePayment(ctx context.Context, actor auth.CurrentUser, 
 				if err := s.recordOrderEventTx(tx, actor, order.ID, OrderAwaitingPayment, OrderPaid, "payment_reconciled", "payment-reconcile:"+payment.Reference, ""); err != nil {
 					return err
 				}
-				if err := s.recordOrderNotificationTx(tx, actor.OrganizationID, order.ID, "payment_confirmed", "Payment confirmed for order "+order.OrderNumber+"."); err != nil {
+				orderID := order.ID
+				paymentID := payment.ID
+				if err := s.recordCommerceEventTx(tx, actor, commerceEventRecord{
+					EventType:      CommerceEventPaymentConfirmed,
+					Source:         CommerceEventSourceSystem,
+					ResourceType:   "payment",
+					ResourceID:     payment.ID,
+					OrderID:        &orderID,
+					PaymentID:      &paymentID,
+					IdempotencyKey: "payment.confirmed:" + payment.Reference,
+					Metadata:       map[string]any{"reference": payment.Reference, "provider": payment.Provider, "order_status": OrderPaid, "reconciliation": true},
+				}); err != nil {
+					return err
+				}
+				if err := s.recordOrderNotificationTx(tx, actor.OrganizationID, order.ID, "payment_confirmed", s.paymentConfirmedNotificationMessageTx(tx, actor.OrganizationID, order.ID)); err != nil {
 					return err
 				}
 			}
@@ -1215,12 +1324,18 @@ func (s *Service) ReconcilePayment(ctx context.Context, actor auth.CurrentUser, 
 }
 
 func (s *Service) ListPayments(ctx context.Context, actor auth.CurrentUser) ([]Payment, error) {
+	if err := s.authorize(ctx, actor, authz.PermissionPaymentsView, "payment", nil); err != nil {
+		return nil, err
+	}
 	var payments []Payment
 	err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("created_at DESC").Find(&payments).Error
 	return payments, err
 }
 
 func (s *Service) GetPaymentByReference(ctx context.Context, actor auth.CurrentUser, reference string) (Payment, error) {
+	if err := s.authorize(ctx, actor, authz.PermissionPaymentsView, "payment", nil); err != nil {
+		return Payment{}, err
+	}
 	var payment Payment
 	err := s.db.WithContext(ctx).Where("organization_id = ? AND reference = ?", actor.OrganizationID, strings.TrimSpace(reference)).First(&payment).Error
 	return payment, mapNotFound(err, "Payment not found")
@@ -1264,6 +1379,9 @@ func (s *Service) GetFulfilment(ctx context.Context, actor auth.CurrentUser, ord
 }
 
 func (s *Service) UpdateFulfilment(ctx context.Context, actor auth.CurrentUser, orderID uuid.UUID, input FulfilmentInput) (Fulfilment, error) {
+	if err := s.authorize(ctx, actor, authz.PermissionOrdersManage, "order", &orderID); err != nil {
+		return Fulfilment{}, err
+	}
 	fulfilment, err := s.GetFulfilment(ctx, actor, orderID)
 	if err != nil {
 		return Fulfilment{}, err
@@ -1271,6 +1389,7 @@ func (s *Service) UpdateFulfilment(ctx context.Context, actor auth.CurrentUser, 
 	if input.Status != "" && input.Status != fulfilment.Status && !canFulfilmentTransition(fulfilment.Type, fulfilment.Status, input.Status) {
 		return Fulfilment{}, httperror.BadRequest("Invalid fulfilment status transition")
 	}
+	previousStatus := fulfilment.Status
 	updates := map[string]any{"updated_at": s.now()}
 	if input.Status != "" {
 		updates["status"] = input.Status
@@ -1290,15 +1409,29 @@ func (s *Service) UpdateFulfilment(ctx context.Context, actor auth.CurrentUser, 
 	if err := s.db.WithContext(ctx).Model(&fulfilment).Updates(updates).Error; err != nil {
 		return Fulfilment{}, err
 	}
-	if input.Status != "" && input.Status != fulfilment.Status {
-		_ = s.auditTx(s.db.WithContext(ctx), &actor.OrganizationID, &actor.ID, "fulfilment", &fulfilment.ID, "fulfilment_transition", fmt.Sprintf(`{"from":%q,"to":%q}`, fulfilment.Status, input.Status))
+	if input.Status != "" && input.Status != previousStatus {
+		_ = s.auditTx(s.db.WithContext(ctx), &actor.OrganizationID, &actor.ID, "fulfilment", &fulfilment.ID, "fulfilment_transition", fmt.Sprintf(`{"from":%q,"to":%q}`, previousStatus, input.Status))
+		linkedOrderID := orderID
+		fulfilmentID := fulfilment.ID
+		if err := s.recordCommerceEventTx(s.db.WithContext(ctx), actor, commerceEventRecord{
+			EventType:      CommerceEventFulfilmentStatusChanged,
+			Source:         input.Source,
+			ResourceType:   "fulfilment",
+			ResourceID:     fulfilment.ID,
+			OrderID:        &linkedOrderID,
+			FulfilmentID:   &fulfilmentID,
+			IdempotencyKey: "fulfilment.transition:" + fulfilment.ID.String() + ":" + input.IdempotencyKey + ":" + input.Status,
+			Metadata:       map[string]any{"from": previousStatus, "to": input.Status},
+		}); err != nil {
+			return Fulfilment{}, err
+		}
 	}
 	return s.GetFulfilment(ctx, actor, orderID)
 }
 
 func (s *Service) CreateChannel(ctx context.Context, actor auth.CurrentUser, input ChannelInput) (Channel, error) {
-	if !actor.Role.CanManageOrganization() {
-		return Channel{}, httperror.Forbidden("You cannot manage channels")
+	if err := s.authorize(ctx, actor, authz.PermissionChannelsManage, "channel", nil); err != nil {
+		return Channel{}, err
 	}
 	input.normalize()
 	if input.Provider == "" || input.DisplayName == "" {
@@ -1313,14 +1446,17 @@ func (s *Service) CreateChannel(ctx context.Context, actor auth.CurrentUser, inp
 }
 
 func (s *Service) ListChannels(ctx context.Context, actor auth.CurrentUser) ([]Channel, error) {
+	if err := s.authorize(ctx, actor, authz.PermissionChannelsView, "channel", nil); err != nil {
+		return nil, err
+	}
 	var channels []Channel
 	err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("created_at DESC").Find(&channels).Error
 	return channels, err
 }
 
 func (s *Service) UpdateChannel(ctx context.Context, actor auth.CurrentUser, channelID uuid.UUID, input ChannelInput) (Channel, error) {
-	if !actor.Role.CanManageOrganization() {
-		return Channel{}, httperror.Forbidden("You cannot manage channels")
+	if err := s.authorize(ctx, actor, authz.PermissionChannelsManage, "channel", &channelID); err != nil {
+		return Channel{}, err
 	}
 	var channel Channel
 	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, channelID).First(&channel).Error; err != nil {
@@ -1365,8 +1501,8 @@ func (s *Service) UpdateChannel(ctx context.Context, actor auth.CurrentUser, cha
 }
 
 func (s *Service) TestChannel(ctx context.Context, actor auth.CurrentUser, channelID uuid.UUID) (map[string]any, error) {
-	if !actor.Role.CanManageOrganization() {
-		return nil, httperror.Forbidden("You cannot test channels")
+	if err := s.authorize(ctx, actor, authz.PermissionChannelsManage, "channel", &channelID); err != nil {
+		return nil, err
 	}
 	var channel Channel
 	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, channelID).First(&channel).Error; err != nil {
@@ -1443,8 +1579,8 @@ func mapChannelNumberConflict(err error) error {
 }
 
 func (s *Service) ListPaymentConfigurations(ctx context.Context, actor auth.CurrentUser) ([]PaymentConfiguration, error) {
-	if !actor.Role.CanManageOrganization() {
-		return nil, httperror.Forbidden("You cannot view payment configuration")
+	if err := s.authorize(ctx, actor, authz.PermissionPaymentsView, "payment_configuration", nil); err != nil {
+		return nil, err
 	}
 	var configs []PaymentConfiguration
 	if err := s.db.WithContext(ctx).Where("organization_id = ?", actor.OrganizationID).Order("provider ASC").Find(&configs).Error; err != nil {
@@ -1454,8 +1590,8 @@ func (s *Service) ListPaymentConfigurations(ctx context.Context, actor auth.Curr
 }
 
 func (s *Service) UpsertPaymentConfiguration(ctx context.Context, actor auth.CurrentUser, input PaymentConfigurationInput) (PaymentConfiguration, error) {
-	if !actor.Role.CanManageOrganization() {
-		return PaymentConfiguration{}, httperror.Forbidden("You cannot manage payment configuration")
+	if err := s.authorize(ctx, actor, authz.PermissionPaymentsManage, "payment_configuration", nil); err != nil {
+		return PaymentConfiguration{}, err
 	}
 	input.normalize()
 	if input.Provider == "" {
@@ -1488,8 +1624,8 @@ func (s *Service) UpsertPaymentConfiguration(ctx context.Context, actor auth.Cur
 }
 
 func (s *Service) TestPaymentConfiguration(ctx context.Context, actor auth.CurrentUser, provider string) (PaymentConfiguration, error) {
-	if !actor.Role.CanManageOrganization() {
-		return PaymentConfiguration{}, httperror.Forbidden("You cannot test payment configuration")
+	if err := s.authorize(ctx, actor, authz.PermissionPaymentsManage, "payment_configuration", nil); err != nil {
+		return PaymentConfiguration{}, err
 	}
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	var config PaymentConfiguration
@@ -1574,7 +1710,7 @@ func (s *Service) SkipUndeliverableNotifications(ctx context.Context, organizati
 
 func (s *Service) storeQuery(db *gorm.DB, actor auth.CurrentUser) *gorm.DB {
 	query := db.Model(&Store{}).Where("stores.organization_id = ?", actor.OrganizationID)
-	if actor.Role == authz.StoreStaff || actor.Role == authz.StoreManager {
+	if actor.Role.RequiresStoreScope() {
 		query = query.Joins("JOIN store_user_assignments sua ON sua.organization_id = stores.organization_id AND sua.store_id = stores.id AND sua.user_id = ?", actor.ID)
 	}
 	return query
@@ -1653,7 +1789,7 @@ func (s *Service) ensureVariantAvailableTx(tx *gorm.DB, organizationID, storeID,
 func (s *Service) ensureStoreAccessibleTx(tx *gorm.DB, actor auth.CurrentUser, storeID uuid.UUID) error {
 	var count int64
 	query := tx.Table("stores").Where("stores.organization_id = ? AND stores.id = ? AND stores.status = ?", actor.OrganizationID, storeID, StatusActive)
-	if actor.Role == authz.StoreStaff || actor.Role == authz.StoreManager {
+	if actor.Role.RequiresStoreScope() {
 		query = query.Joins("JOIN store_user_assignments sua ON sua.organization_id = stores.organization_id AND sua.store_id = stores.id AND sua.user_id = ?", actor.ID)
 	}
 	if err := query.Count(&count).Error; err != nil {
@@ -1683,6 +1819,81 @@ func (s *Service) recordOrderEventTx(tx *gorm.DB, actor auth.CurrentUser, orderI
 	return tx.Create(&event).Error
 }
 
+type commerceEventRecord struct {
+	EventType      string
+	Source         string
+	ResourceType   string
+	ResourceID     uuid.UUID
+	OrderID        *uuid.UUID
+	PaymentID      *uuid.UUID
+	FulfilmentID   *uuid.UUID
+	IdempotencyKey string
+	Metadata       map[string]any
+}
+
+func (s *Service) recordCommerceEventTx(tx *gorm.DB, actor auth.CurrentUser, record commerceEventRecord) error {
+	eventType := strings.TrimSpace(record.EventType)
+	resourceType := strings.TrimSpace(record.ResourceType)
+	if eventType == "" || resourceType == "" || record.ResourceID == uuid.Nil {
+		return httperror.BadRequest("Commerce event requires type and resource")
+	}
+	idempotencyKey := strings.TrimSpace(record.IdempotencyKey)
+	if idempotencyKey != "" {
+		var existing CommerceEvent
+		err := tx.Where("organization_id = ? AND event_type = ? AND idempotency_key = ?", actor.OrganizationID, eventType, idempotencyKey).First(&existing).Error
+		if err == nil {
+			return nil
+		}
+		if err != gorm.ErrRecordNotFound {
+			return err
+		}
+	} else {
+		idempotencyKey = fmt.Sprintf("%s:%s:%d", eventType, record.ResourceID.String(), time.Now().UnixNano())
+	}
+	var actorUserID *uuid.UUID
+	if actor.ID != uuid.Nil {
+		actorUserID = &actor.ID
+	}
+	event := CommerceEvent{
+		ID:             uuid.New(),
+		OrganizationID: actor.OrganizationID,
+		EventType:      eventType,
+		Source:         commerceEventSource(actor, record.Source),
+		ResourceType:   resourceType,
+		ResourceID:     record.ResourceID,
+		OrderID:        record.OrderID,
+		PaymentID:      record.PaymentID,
+		FulfilmentID:   record.FulfilmentID,
+		ActorUserID:    actorUserID,
+		IdempotencyKey: idempotencyKey,
+		Metadata:       jsonValue(record.Metadata),
+	}
+	return tx.Create(&event).Error
+}
+
+func commerceEventSource(actor auth.CurrentUser, requested string) string {
+	source := strings.ToLower(strings.TrimSpace(requested))
+	switch source {
+	case CommerceEventSourceHuman, CommerceEventSourceSystem, CommerceEventSourceRuntime, CommerceEventSourceExternalEvent:
+		return source
+	}
+	if actor.ID == uuid.Nil {
+		return CommerceEventSourceSystem
+	}
+	return CommerceEventSourceHuman
+}
+
+func commerceOrderTransitionEventType(status string) string {
+	switch status {
+	case OrderCancelled:
+		return CommerceEventOrderCancelled
+	case OrderCompleted:
+		return CommerceEventOrderCompleted
+	default:
+		return CommerceEventOrderStatusChanged
+	}
+}
+
 func (s *Service) recordOrderNotificationTx(tx *gorm.DB, organizationID, orderID uuid.UUID, notificationType, message string) error {
 	var order Order
 	if err := tx.Where("organization_id = ? AND id = ?", organizationID, orderID).Preload("Customer").First(&order).Error; err != nil {
@@ -1690,7 +1901,8 @@ func (s *Service) recordOrderNotificationTx(tx *gorm.DB, organizationID, orderID
 	}
 	var channel Channel
 	var channelID *uuid.UUID
-	if err := tx.Where("organization_id = ? AND provider = ? AND status = ?", organizationID, "whatsapp", StatusActive).Order("created_at ASC").First(&channel).Error; err == nil {
+	usableStatuses := []string{StatusActive, "connected", "healthy", "degraded", "requires_attention"}
+	if err := tx.Where("organization_id = ? AND provider = ? AND status IN ?", organizationID, "whatsapp", usableStatuses).Order("created_at ASC").First(&channel).Error; err == nil {
 		channelID = &channel.ID
 	}
 	customerID := order.CustomerID
@@ -1699,6 +1911,122 @@ func (s *Service) recordOrderNotificationTx(tx *gorm.DB, organizationID, orderID
 		return err
 	}
 	return s.enqueueNotificationJobTx(tx, notification)
+}
+
+func (s *Service) paymentConfirmedNotificationMessageTx(tx *gorm.DB, organizationID, orderID uuid.UUID) string {
+	var order Order
+	if err := tx.Where("organization_id = ? AND id = ?", organizationID, orderID).Preload("Store").First(&order).Error; err != nil {
+		return "Payment confirmed for order " + orderID.String() + "."
+	}
+	lines := []string{"Payment confirmed for order " + order.OrderNumber + "."}
+	if order.Store.Name != "" {
+		lines = append(lines, "Store: "+order.Store.Name)
+	}
+	if code := s.ensureHandoverCodeTx(tx, organizationID, order.ID); code != "" {
+		lines = append(lines, "Pickup code: "+code)
+		lines = append(lines, "Share this code only when the order is being collected.")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (s *Service) orderTransitionNotificationMessageTx(tx *gorm.DB, organizationID, orderID uuid.UUID, status string) string {
+	var order Order
+	if err := tx.Where("organization_id = ? AND id = ?", organizationID, orderID).First(&order).Error; err != nil {
+		return "Order " + orderID.String() + " is now " + status + "."
+	}
+	lines := []string{"Order " + order.OrderNumber + " is now " + status + "."}
+	if status == OrderReady {
+		if code := s.ensureHandoverCodeTx(tx, organizationID, order.ID); code != "" {
+			lines = append(lines, "Pickup code: "+code)
+			lines = append(lines, "Give this code to the store team when collecting the order.")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (s *Service) ensureHandoverCodeTx(tx *gorm.DB, organizationID, orderID uuid.UUID) string {
+	var fulfilment Fulfilment
+	if err := tx.Where("organization_id = ? AND order_id = ?", organizationID, orderID).First(&fulfilment).Error; err != nil {
+		return ""
+	}
+	if fulfilment.Type != FulfilmentPickup && fulfilment.Type != FulfilmentCustomerRider {
+		return ""
+	}
+	metadata := jsonMap(fulfilment.Metadata)
+	if code := stringFromAny(metadata["handover_code"]); code != "" {
+		return code
+	}
+	code := handoverCode()
+	metadata["handover_code"] = code
+	metadata["handover_code_status"] = "active"
+	_ = tx.Model(&fulfilment).Updates(map[string]any{"metadata": jsonValue(metadata), "updated_at": s.now()}).Error
+	return code
+}
+
+func (s *Service) syncFulfilmentForOrderTransitionTx(tx *gorm.DB, actor auth.CurrentUser, orderID uuid.UUID, orderStatus, idempotencyKey, source string) error {
+	targetStatus := fulfilmentStatusForOrderStatus(orderStatus)
+	if targetStatus == "" {
+		return nil
+	}
+	var fulfilment Fulfilment
+	if err := tx.Where("organization_id = ? AND order_id = ?", actor.OrganizationID, orderID).First(&fulfilment).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil
+		}
+		return err
+	}
+	if fulfilment.Status == targetStatus {
+		return nil
+	}
+	if !canFulfilmentTransition(fulfilment.Type, fulfilment.Status, targetStatus) {
+		return nil
+	}
+	previousStatus := fulfilment.Status
+	updates := map[string]any{"status": targetStatus, "updated_at": s.now()}
+	if targetStatus == "ready" {
+		metadata := jsonMap(fulfilment.Metadata)
+		if fulfilment.Type == FulfilmentPickup || fulfilment.Type == FulfilmentCustomerRider {
+			if stringFromAny(metadata["handover_code"]) == "" {
+				metadata["handover_code"] = handoverCode()
+				metadata["handover_code_status"] = "active"
+			}
+		}
+		updates["metadata"] = jsonValue(metadata)
+	}
+	if err := tx.Model(&fulfilment).Updates(updates).Error; err != nil {
+		return err
+	}
+	fulfilmentID := fulfilment.ID
+	linkedOrderID := orderID
+	return s.recordCommerceEventTx(tx, actor, commerceEventRecord{
+		EventType:      CommerceEventFulfilmentStatusChanged,
+		Source:         source,
+		ResourceType:   "fulfilment",
+		ResourceID:     fulfilment.ID,
+		OrderID:        &linkedOrderID,
+		FulfilmentID:   &fulfilmentID,
+		IdempotencyKey: "fulfilment.sync:" + fulfilment.ID.String() + ":" + orderStatus + ":" + idempotencyKey,
+		Metadata:       map[string]any{"from": previousStatus, "to": targetStatus, "order_status": orderStatus},
+	})
+}
+
+func fulfilmentStatusForOrderStatus(orderStatus string) string {
+	switch orderStatus {
+	case OrderReady:
+		return "ready"
+	case OrderOutForDelivery:
+		return "out_for_delivery"
+	case OrderCompleted:
+		return "completed"
+	default:
+		return ""
+	}
+}
+
+func handoverCode() string {
+	id := uuid.New()
+	value := int(id[0])<<16 | int(id[1])<<8 | int(id[2])
+	return fmt.Sprintf("%06d", value%1000000)
 }
 
 func (s *Service) restoreInventoryForOrderTx(tx *gorm.DB, organizationID, orderID uuid.UUID) error {
@@ -1737,10 +2065,10 @@ func mapNotFound(err error, message string) error {
 func canTransition(from, to string) bool {
 	allowed := map[string][]string{
 		OrderAwaitingPayment: {OrderPaid, OrderCancelled},
-		OrderPaid:            {OrderProcessing, OrderCancelled},
-		OrderProcessing:      {OrderReady, OrderCancelled},
-		OrderReady:           {OrderOutForDelivery, OrderCompleted, OrderCancelled},
-		OrderOutForDelivery:  {OrderCompleted, OrderCancelled},
+		OrderPaid:            {OrderProcessing},
+		OrderProcessing:      {OrderReady},
+		OrderReady:           {OrderOutForDelivery, OrderCompleted},
+		OrderOutForDelivery:  {OrderCompleted},
 	}
 	for _, candidate := range allowed[from] {
 		if candidate == to {

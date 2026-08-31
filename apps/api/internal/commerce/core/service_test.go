@@ -62,6 +62,8 @@ func newCommerceFixture(t *testing.T, inventory int) commerceFixture {
 		&Order{},
 		&OrderItem{},
 		&OrderEvent{},
+		&CommerceEvent{},
+		&ConversationOrderLink{},
 		&Payment{},
 		&PaymentWebhookEvent{},
 		&Fulfilment{},
@@ -154,6 +156,103 @@ func TestOrderCreationUsesAuthoritativePriceAndDecrementsInventory(t *testing.T)
 	}
 }
 
+func TestCreateOrderIgnoresClientSuppliedUnitPrice(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	override := int64(1)
+
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1, UnitPriceMinor: &override}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(order.Items) != 1 {
+		t.Fatalf("expected one order item, got %+v", order.Items)
+	}
+	if order.Items[0].UnitPriceMinor != fx.variant.PriceMinor || order.SubtotalMinor != fx.variant.PriceMinor {
+		t.Fatalf("expected database price %d, got item=%d subtotal=%d", fx.variant.PriceMinor, order.Items[0].UnitPriceMinor, order.SubtotalMinor)
+	}
+}
+
+func TestCreateOrderRecordsCommerceEvents(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+		IdempotencyKey: "commerce-event-order",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertCommerceEventCount(t, fx.db, fx.actor.OrganizationID, order.ID, CommerceEventOrderCreated, 1)
+	assertCommerceEventCount(t, fx.db, fx.actor.OrganizationID, order.ID, CommerceEventFulfilmentCreated, 1)
+}
+
+func TestPhaseGOrderOperationsProjectionRespectsStoreScope(t *testing.T) {
+	fx := newCommerceFixture(t, 10)
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{CustomerID: fx.customer.ID, StoreID: fx.store.ID, FulfilmentType: FulfilmentPickup, Items: []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}}, IdempotencyKey: "phase-g-operations"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := fx.service.GetOrderOperations(context.Background(), fx.actor, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Order.ID != order.ID || view.Fulfilment == nil || view.Fulfilment.Status != "pending" || len(view.Events) < 2 || len(view.NextActions) != 1 || view.NextActions[0].Key != "wait_for_payment" {
+		t.Fatalf("unexpected order operations projection: %+v", view)
+	}
+
+	otherStore, err := fx.service.CreateStore(context.Background(), fx.actor, StoreInput{Name: "Other Store", Code: "OTHER", Status: StatusActive, FulfilmentModes: []StoreFulfilmentModeInput{{Mode: FulfilmentPickup, Enabled: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeStaff := auth.CurrentUser{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Role: authz.StoreStaff}
+	if err := fx.db.Create(&organization.User{ID: storeStaff.ID, Email: "phase-g-store@example.com", Status: StatusActive}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Create(&StoreUserAssignment{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, StoreID: otherStore.ID, UserID: storeStaff.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.GetOrderOperations(context.Background(), storeStaff, order.ID); err == nil {
+		t.Fatal("expected a store-scoped operator to be denied another store's order")
+	}
+}
+
+func TestOrderOperationsDoesNotAdvertiseMutationsToReadOnlyRoles(t *testing.T) {
+	fx := newCommerceFixture(t, 10)
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{CustomerID: fx.customer.ID, StoreID: fx.store.ID, FulfilmentType: FulfilmentPickup, Items: []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}}, IdempotencyKey: "phase-i-read-only-actions"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Model(&Order{}).Where("id = ?", order.ID).Update("status", OrderPaid).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	adminView, err := fx.service.GetOrderOperations(context.Background(), fx.actor, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adminView.NextActions) != 1 || adminView.NextActions[0].TargetStatus != OrderProcessing {
+		t.Fatalf("expected administrator next action, got %+v", adminView.NextActions)
+	}
+
+	viewer := auth.CurrentUser{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Role: authz.Viewer}
+	viewerView, err := fx.service.GetOrderOperations(context.Background(), viewer, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(viewerView.NextActions) != 0 {
+		t.Fatalf("read-only user received mutation actions: %+v", viewerView.NextActions)
+	}
+}
+
 func TestOrderCreationRejectsInsufficientInventory(t *testing.T) {
 	fx := newCommerceFixture(t, 1)
 
@@ -173,6 +272,126 @@ func TestOrderCreationRejectsInsufficientInventory(t *testing.T) {
 	if inventory.OnHand != 1 {
 		t.Fatalf("inventory should remain unchanged, got %d", inventory.OnHand)
 	}
+}
+
+func TestPlatformGovernanceStoreStaffScope(t *testing.T) {
+	fx := newCommerceFixture(t, 10)
+	ctx := context.Background()
+
+	otherStore, err := fx.service.CreateStore(ctx, fx.actor, StoreInput{
+		Name: "Other Store",
+		Code: "OTHER",
+		FulfilmentModes: []StoreFulfilmentModeInput{
+			{Mode: FulfilmentPickup, Enabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.UpsertInventory(ctx, fx.actor, InventoryCreateInput{StoreID: otherStore.ID, VariantID: fx.variant.ID, OnHand: 10, ReorderThreshold: 1}); err != nil {
+		t.Fatal(err)
+	}
+	assignedOrder, err := fx.service.CreateOrder(ctx, fx.actor, OrderInput{CustomerID: fx.customer.ID, StoreID: fx.store.ID, FulfilmentType: FulfilmentPickup, Items: []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}}, IdempotencyKey: "assigned-order"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unassignedOrder, err := fx.service.CreateOrder(ctx, fx.actor, OrderInput{CustomerID: fx.customer.ID, StoreID: otherStore.ID, FulfilmentType: FulfilmentPickup, Items: []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}}, IdempotencyKey: "unassigned-order"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	staffID := uuid.New()
+	staff := auth.CurrentUser{ID: staffID, OrganizationID: fx.actor.OrganizationID, Role: authz.StoreStaff}
+	if err := fx.db.Create(&StoreUserAssignment{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, StoreID: fx.store.ID, UserID: staffID, Role: authz.StoreStaff.String()}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	stores, err := fx.service.ListStores(ctx, staff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stores) != 1 || stores[0].ID != fx.store.ID {
+		t.Fatalf("store staff saw stores %+v, want only assigned store", stores)
+	}
+	if _, err := fx.service.GetStore(ctx, staff, otherStore.ID); !isNotFound(err) {
+		t.Fatalf("expected unassigned store to be hidden, got %v", err)
+	}
+
+	inventory, err := fx.service.ListInventory(ctx, staff, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory) != 1 || inventory[0].StoreID != fx.store.ID {
+		t.Fatalf("store staff saw inventory %+v, want only assigned store inventory", inventory)
+	}
+	if _, err := fx.service.CheckInventory(ctx, staff, otherStore.ID, fx.variant.ID, 1); !isNotFound(err) {
+		t.Fatalf("expected unassigned inventory to be hidden, got %v", err)
+	}
+
+	orders, err := fx.service.ListOrders(ctx, staff, OrderFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orders) != 1 || orders[0].ID != assignedOrder.ID {
+		t.Fatalf("store staff saw orders %+v, want only assigned order %s", orders, assignedOrder.ID)
+	}
+	if _, err := fx.service.GetOrder(ctx, staff, unassignedOrder.ID); !isNotFound(err) {
+		t.Fatalf("expected unassigned order to be hidden, got %v", err)
+	}
+}
+
+func TestPlatformGovernanceTenantIsolation(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	otherActor := auth.CurrentUser{ID: uuid.New(), OrganizationID: uuid.New(), Role: authz.MerchantAdmin}
+
+	if _, err := fx.service.GetStore(context.Background(), otherActor, fx.store.ID); !isNotFound(err) {
+		t.Fatalf("expected cross-tenant store lookup to be hidden, got %v", err)
+	}
+	if _, err := fx.service.GetProduct(context.Background(), otherActor, fx.product.ID); !isNotFound(err) {
+		t.Fatalf("expected cross-tenant product lookup to be hidden, got %v", err)
+	}
+	if _, err := fx.service.GetOrder(context.Background(), otherActor, uuid.New()); err == nil {
+		t.Fatal("expected cross-tenant order lookup with unknown order to fail")
+	}
+}
+
+func TestPlatformGovernanceViewerCannotMutateAndDeniedIsAudited(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	viewer := auth.CurrentUser{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Role: authz.Viewer}
+
+	if _, err := fx.service.ListOrders(context.Background(), viewer, OrderFilter{}); err != nil {
+		t.Fatalf("viewer should read orders: %v", err)
+	}
+	if _, err := fx.service.UpdateInventory(context.Background(), viewer, uuid.New(), InventoryInput{Adjustment: intPtr(1)}); !isForbidden(err) {
+		t.Fatalf("expected viewer inventory mutation to be forbidden, got %v", err)
+	}
+	var count int64
+	if err := fx.db.Model(&organization.AuditLog{}).Where("organization_id = ? AND actor_user_id = ? AND action = ?", fx.actor.OrganizationID, viewer.ID, "authorization_denied").Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count == 0 {
+		t.Fatal("expected denied action to be audited")
+	}
+}
+
+func intPtr(value int) *int {
+	return &value
+}
+
+func isForbidden(err error) bool {
+	if err == nil {
+		return false
+	}
+	apiErr, ok := err.(httperror.APIError)
+	return ok && apiErr.StatusCode == 403
+}
+
+func isNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	apiErr, ok := err.(httperror.APIError)
+	return ok && apiErr.StatusCode == 404
 }
 
 func TestConcurrentCheckoutOnlyOneOrderConsumesSingleInventoryUnit(t *testing.T) {
@@ -359,6 +578,32 @@ func TestOrderCancellationRestoresInventory(t *testing.T) {
 	}
 }
 
+func TestPaidOrderCancellationRequiresManualReview(t *testing.T) {
+	fx := newCommerceFixture(t, 1)
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderPaid, IdempotencyKey: "mark-paid"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderCancelled, IdempotencyKey: "cancel-paid"}); err == nil {
+		t.Fatal("expected paid cancellation to require manual review")
+	}
+	var inventory InventoryLevel
+	if err := fx.db.Where("organization_id = ? AND store_id = ? AND variant_id = ?", fx.actor.OrganizationID, fx.store.ID, fx.variant.ID).First(&inventory).Error; err != nil {
+		t.Fatal(err)
+	}
+	if inventory.OnHand != 0 {
+		t.Fatalf("paid cancellation should not restore inventory automatically, got %d", inventory.OnHand)
+	}
+}
+
 func TestUpdateFulfilmentRejectsInvalidTransition(t *testing.T) {
 	fx := newCommerceFixture(t, 5)
 	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
@@ -410,6 +655,103 @@ func TestFulfilmentTransitionsForSupportedModes(t *testing.T) {
 	}
 }
 
+func TestOrderTransitionSynchronizesPickupFulfilment(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderPaid, IdempotencyKey: "mark-paid"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderProcessing, IdempotencyKey: "start-preparing"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderReady, IdempotencyKey: "mark-ready"}); err != nil {
+		t.Fatal(err)
+	}
+	fulfilment, err := fx.service.GetFulfilment(context.Background(), fx.actor, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fulfilment.Status != "ready" {
+		t.Fatalf("expected fulfilment ready, got %s", fulfilment.Status)
+	}
+	code := stringFromAny(jsonMap(fulfilment.Metadata)["handover_code"])
+	if len(code) != 6 {
+		t.Fatalf("expected six-digit handover code, got %q", code)
+	}
+	if _, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderCompleted, IdempotencyKey: "mark-collected"}); err != nil {
+		t.Fatal(err)
+	}
+	fulfilment, err = fx.service.GetFulfilment(context.Background(), fx.actor, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fulfilment.Status != "completed" {
+		t.Fatalf("expected fulfilment completed, got %s", fulfilment.Status)
+	}
+}
+
+func TestPaymentConfirmationNotificationIncludesPickupCode(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	fx.service.paymentProvider = namedPaymentProvider{name: "test", paid: true}
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payment, err := fx.service.InitializePayment(context.Background(), fx.actor, PaymentInput{OrderID: order.ID, Provider: "test", Email: "customer@example.com", IdempotencyKey: "payment"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.VerifyPayment(context.Background(), fx.actor, PaymentVerifyInput{Reference: payment.Reference}); err != nil {
+		t.Fatal(err)
+	}
+	var notification CommerceNotification
+	if err := fx.db.Where("organization_id = ? AND order_id = ? AND notification_type = ?", fx.actor.OrganizationID, order.ID, "payment_confirmed").Order("created_at DESC").First(&notification).Error; err != nil {
+		t.Fatal(err)
+	}
+	payload := jsonMap(notification.Payload)
+	message := stringFromAny(payload["message"])
+	if !strings.Contains(message, "Pickup code:") || !strings.Contains(message, "Share this code") {
+		t.Fatalf("expected pickup handover code in payment notification, got %q", message)
+	}
+	fulfilment, err := fx.service.GetFulfilment(context.Background(), fx.actor, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stringFromAny(jsonMap(fulfilment.Metadata)["handover_code"])) != 6 {
+		t.Fatalf("expected persisted six-digit handover code, got metadata %s", fulfilment.Metadata)
+	}
+}
+
+func TestUpdateFulfilmentRecordsStatusChangedEvent(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.UpdateFulfilment(context.Background(), fx.actor, order.ID, FulfilmentInput{Status: "ready", IdempotencyKey: "ready-once"}); err != nil {
+		t.Fatal(err)
+	}
+	assertCommerceEventCount(t, fx.db, fx.actor.OrganizationID, order.ID, CommerceEventFulfilmentStatusChanged, 1)
+}
+
 func TestPaymentInitializationIsIdempotent(t *testing.T) {
 	fx := newCommerceFixture(t, 5)
 	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
@@ -433,6 +775,50 @@ func TestPaymentInitializationIsIdempotent(t *testing.T) {
 	if first.ID != second.ID || first.Reference != second.Reference {
 		t.Fatalf("expected idempotent payment, got %+v and %+v", first, second)
 	}
+}
+
+func TestPaymentInitializationRequiresAwaitingPaymentOrder(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderPaid, IdempotencyKey: "payment-boundary-paid"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.InitializePayment(context.Background(), fx.actor, PaymentInput{OrderID: order.ID, Provider: "test", Email: "customer@example.com", IdempotencyKey: "late-payment"}); err == nil {
+		t.Fatal("expected payment initialization for paid order to be rejected")
+	}
+}
+
+func TestVerifyPaymentRecordsSinglePaymentConfirmedEvent(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	fx.service.paymentProvider = namedPaymentProvider{name: "test", paid: true, amountMinor: 420000, currency: "NGN"}
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payment, err := fx.service.InitializePayment(context.Background(), fx.actor, PaymentInput{OrderID: order.ID, Provider: "test", Email: "customer@example.com", IdempotencyKey: "verify-payment"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.VerifyPayment(context.Background(), fx.actor, PaymentVerifyInput{Reference: payment.Reference}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.VerifyPayment(context.Background(), fx.actor, PaymentVerifyInput{Reference: payment.Reference}); err != nil {
+		t.Fatal(err)
+	}
+	assertCommerceEventCount(t, fx.db, fx.actor.OrganizationID, order.ID, CommerceEventPaymentConfirmed, 1)
 }
 
 func TestTenantIsolationPreventsCrossOrganizationStoreAccess(t *testing.T) {
@@ -786,6 +1172,10 @@ func TestPaystackWebhookIsSignatureVerifiedAndIdempotent(t *testing.T) {
 	fx := newCommerceFixture(t, 5)
 	fx.service.paymentProvider = namedPaymentProvider{name: "paystack"}
 	fx.service.ConfigurePaymentWebhooks("paystack-secret")
+	channel := Channel{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Provider: "whatsapp", DisplayName: "WhatsApp", Status: "healthy", Config: "{}", SecretConfig: "{}"}
+	if err := fx.db.Create(&channel).Error; err != nil {
+		t.Fatal(err)
+	}
 	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
 		CustomerID:     fx.customer.ID,
 		StoreID:        fx.store.ID,
@@ -833,12 +1223,12 @@ func TestPaystackWebhookIsSignatureVerifiedAndIdempotent(t *testing.T) {
 	if eventCount != 1 {
 		t.Fatalf("expected one webhook event, got %d", eventCount)
 	}
-	var notifications int64
-	if err := fx.db.Model(&CommerceNotification{}).Where("organization_id = ? AND order_id = ? AND notification_type = ?", fx.actor.OrganizationID, order.ID, "payment_confirmed").Count(&notifications).Error; err != nil {
+	var notification CommerceNotification
+	if err := fx.db.Where("organization_id = ? AND order_id = ? AND notification_type = ?", fx.actor.OrganizationID, order.ID, "payment_confirmed").First(&notification).Error; err != nil {
 		t.Fatal(err)
 	}
-	if notifications != 1 {
-		t.Fatalf("expected one payment notification, got %d", notifications)
+	if notification.ChannelID == nil || *notification.ChannelID != channel.ID {
+		t.Fatalf("expected payment notification to use healthy WhatsApp channel, got %+v", notification.ChannelID)
 	}
 }
 
@@ -1494,5 +1884,16 @@ func TestChannelStatusValuesMatchTheSchemaConstraint(t *testing.T) {
 	}
 	if strings.Contains(constraint, "'"+StatusInactive+"'") {
 		t.Fatal("schema now accepts inactive; ChannelStatusDisabled may be redundant")
+	}
+}
+
+func assertCommerceEventCount(t *testing.T, db *gorm.DB, organizationID, orderID uuid.UUID, eventType string, want int64) {
+	t.Helper()
+	var count int64
+	if err := db.Model(&CommerceEvent{}).Where("organization_id = ? AND order_id = ? AND event_type = ?", organizationID, orderID, eventType).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != want {
+		t.Fatalf("expected %d %s commerce events, got %d", want, eventType, count)
 	}
 }
