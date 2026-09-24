@@ -39,6 +39,10 @@ func (s *AdapterChannelSender) Send(ctx context.Context, channel core.Channel, r
 		}
 	}
 	command := ChannelOutboundCommand(channel.Provider, channel.ID, nil, recipient, recipient, message, idempotencyKey)
+	if command.Metadata == nil {
+		command.Metadata = map[string]any{}
+	}
+	command.Metadata["organization_id"] = channel.OrganizationID.String()
 	result, err := s.sender.Send(ctx, command)
 	return ProviderSendResult{ProviderMessageID: result.ProviderMessageID, Response: result.ResponseMetadata}, err
 }

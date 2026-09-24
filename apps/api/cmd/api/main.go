@@ -75,6 +75,7 @@ func main() {
 		}
 	}
 	channelSecretResolver := channelplatform.NewDatabaseSecretResolver(db, channelSecretStore)
+	metaService := metaadapter.NewService(db, channelService, channelSecretResolver)
 	oauthService := channelplatform.NewOAuthService(db, channelService, channelSecretStore, channelSecretResolver)
 	for _, provider := range []string{metaadapter.ProviderInstagram, metaadapter.ProviderFacebook} {
 		client := metaadapter.NewOAuthClient(metaadapter.OAuthConfig{
@@ -97,6 +98,8 @@ func main() {
 		WebhookVerifyToken: cfg.Channels.MetaWebhookVerifyToken,
 	}, whatsappadapter.NewMetaGraphClient(cfg.Channels.WhatsAppGraphBaseURL, cfg.Channels.MetaAppID, cfg.Channels.MetaAppSecret, cfg.Channels.MetaGraphAPIVersion, nil))
 	whatsAppAdapter := whatsappadapter.NewAdapter(whatsAppService, channelService, cfg.Channels.WhatsAppGraphBaseURL, nil, cfg.Channels.WhatsAppSignatureBypass)
+	instagramAdapter := metaadapter.NewMessagingAdapter(metaadapter.ProviderInstagram, metaService, channelService, cfg.Channels.InstagramGraphBaseURL, cfg.Channels.MetaGraphAPIVersion, cfg.Channels.MetaAppSecret, nil)
+	facebookAdapter := metaadapter.NewMessagingAdapter(metaadapter.ProviderFacebook, metaService, channelService, cfg.Channels.WhatsAppGraphBaseURL, cfg.Channels.MetaGraphAPIVersion, cfg.Channels.MetaAppSecret, nil)
 	commerceService.ConfigurePaymentWebhooks(cfg.Payment.PaystackSecret)
 	if key, err := core.DecodePaymentSecretKey(cfg.Payment.SecretEncryptionKey); err != nil {
 		log.Error("invalid payment secret encryption key", "error", err)
@@ -123,6 +126,8 @@ func main() {
 	runtimeService := runtimeengine.NewService(db, commerceService, log)
 	runtimeService.ConfigureJobs(jobService)
 	runtimeService.RegisterChannelSender("whatsapp", runtimeengine.NewCapabilityAwareAdapterChannelSender(whatsAppAdapter, channelService))
+	runtimeService.RegisterChannelSender("instagram", runtimeengine.NewCapabilityAwareAdapterChannelSender(instagramAdapter, channelService))
+	runtimeService.RegisterChannelSender("facebook", runtimeengine.NewCapabilityAwareAdapterChannelSender(facebookAdapter, channelService))
 	aiModel := cfg.AI.Model
 	if aiModel == "" {
 		aiModel = cfg.AI.OllamaChatModel
@@ -241,6 +246,7 @@ func main() {
 		Commerce:     core.NewHandler(commerceService, tokenManager),
 		Channels:     channelplatform.NewHandler(channelService, oauthService),
 		WhatsApp:     whatsappadapter.NewHandler(whatsAppService, channelService, whatsAppAdapter, runtimeService),
+		Meta:         metaadapter.NewHandler(metaService, channelService, runtimeService, cfg.Channels.MetaWebhookVerifyToken, instagramAdapter, facebookAdapter),
 		Bot:          bot.NewHandler(botService),
 		Runtime:      runtimeengine.NewHandler(runtimeService),
 		Field:        fieldservice.NewHandler(fieldService),

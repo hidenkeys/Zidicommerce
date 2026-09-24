@@ -10,6 +10,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/channelplatform"
+	metaadapter "github.com/hidenkeys/zidicommerce/apps/api/internal/channelplatform/meta"
 	whatsappadapter "github.com/hidenkeys/zidicommerce/apps/api/internal/channelplatform/whatsapp"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/config"
@@ -29,6 +30,7 @@ type Dependencies struct {
 	Commerce     *core.Handler
 	Channels     *channelplatform.Handler
 	WhatsApp     *whatsappadapter.Handler
+	Meta         *metaadapter.Handler
 	Bot          *bot.Handler
 	Runtime      *runtimeengine.Handler
 	Field        *fieldservice.Handler
@@ -58,6 +60,9 @@ func New(deps Dependencies) *fiber.App {
 		deps.WhatsApp.RegisterPublic(v1)
 	} else {
 		deps.Runtime.RegisterPublic(v1)
+	}
+	if deps.Meta != nil {
+		deps.Meta.RegisterPublic(v1)
 	}
 
 	protected := v1.Group("", auth.Middleware(deps.TokenManager))
