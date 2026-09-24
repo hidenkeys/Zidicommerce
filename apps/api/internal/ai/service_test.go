@@ -130,7 +130,7 @@ func TestMessageExecutesModelSelectedReadOnlyTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&core.Channel{}, &core.Customer{}, &core.Store{}, &core.StoreHour{}, &core.StoreFulfilmentMode{}, &core.Category{}, &core.Product{}, &core.Variant{}, &core.ProductImage{}, &core.InventoryLevel{}, &bot.Bot{}, &bot.CommerceWorkflowConfiguration{}, &bot.BotVersion{}, &bot.FAQ{}, &bot.KnowledgeEntry{}, &bot.DocumentSource{}, &bot.DocumentChunk{}, &runtime.ConversationSession{}, &core.ConversationOrderLink{}, &runtime.ConversationMessage{}); err != nil {
+	if err := db.AutoMigrate(&core.Channel{}, &core.Customer{}, &core.Store{}, &core.StoreHour{}, &core.StoreFulfilmentMode{}, &core.Category{}, &core.Product{}, &core.Variant{}, &core.ProductImage{}, &core.InventoryLevel{}, &bot.Bot{}, &bot.CommerceWorkflowConfiguration{}, &bot.BotVersion{}, &bot.FAQ{}, &bot.KnowledgeEntry{}, &bot.DocumentSource{}, &bot.DocumentChunk{}, &runtime.ConversationSession{}, &core.ConversationOrderLink{}, &runtime.ConversationMessage{}, &runtime.SupportHandoff{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 	commerce := core.NewService(db, core.SafeTestProvider{})

@@ -102,6 +102,7 @@ func newAIRegressionFixture(t *testing.T, chat provider.ChatProvider) aiRegressi
 		&bot.DocumentChunk{},
 		&runtime.ConversationSession{},
 		&runtime.ConversationMessage{},
+		&runtime.SupportHandoff{},
 	); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}

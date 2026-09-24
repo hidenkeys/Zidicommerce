@@ -40,7 +40,7 @@ func newPhaseBFixture(t *testing.T, replies ...provider.Message) phaseBFixture {
 		&core.Channel{}, &core.Customer{}, &core.Store{}, &core.StoreHour{}, &core.StoreFulfilmentMode{},
 		&core.Category{}, &core.Product{}, &core.Variant{}, &core.ProductImage{}, &core.InventoryLevel{},
 		&core.Order{}, &core.OrderItem{}, &core.CommerceEvent{}, &core.ConversationOrderLink{}, &bot.FAQ{}, &bot.KnowledgeEntry{}, &bot.DocumentSource{}, &bot.DocumentChunk{}, &bot.Bot{}, &bot.CommerceWorkflowConfiguration{}, &bot.BotVersion{},
-		&runtime.ConversationSession{}, &runtime.ConversationMessage{},
+		&runtime.ConversationSession{}, &runtime.ConversationMessage{}, &runtime.SupportHandoff{},
 	); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
