@@ -92,6 +92,11 @@ It intentionally does not include LLM orchestration or business-specific bot log
 
 See [docs/merchant-deployment.md](docs/merchant-deployment.md) for onboarding, WhatsApp, payment, bot, and local testing guidance.
 
+Development and feature workflow:
+
+- [docs/development.md](docs/development.md)
+- [docs/git-workflow.md](docs/git-workflow.md)
+
 Operator training (what every Admin module does, and how to run a merchant):
 
 - [docs/operator-guide.md](docs/operator-guide.md)

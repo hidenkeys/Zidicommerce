@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3010",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build --configLoader runner",
+    "check": "tsc --noEmit && vite build --configLoader runner --outDir /tmp/zidicommerce-field-dist --emptyOutDir",
     "preview": "vite preview --host 0.0.0.0 --port 3010"
   },
   "dependencies": {

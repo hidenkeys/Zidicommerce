@@ -13,7 +13,9 @@
     "dev:field": "npm --workspace apps/field run dev",
     "build:admin": "npm --workspace apps/admin run build",
     "build:field": "npm --workspace apps/field run build",
-    "test:api": "cd apps/api && go test ./..."
+    "check:admin": "npm --workspace apps/admin run check",
+    "check:field": "npm --workspace apps/field run check",
+    "test:api": "cd apps/api && GOCACHE=/tmp/zidicommerce-go-cache AI_PHASEC_ARTIFACT_DIR=/tmp/zidicommerce-ai-evaluations go test ./...",
+    "check": "npm run test:api && npm run check:admin && npm run check:field"
   }
 }
-

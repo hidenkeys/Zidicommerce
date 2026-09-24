@@ -80,6 +80,14 @@ VITE_API_BASE_URL=http://localhost:8080/v1
 
 ## Tests
 
+Run the full local feature check from the repository root before committing:
+
+```bash
+npm run check
+```
+
+This runs API tests and builds both frontend apps. It is the same baseline enforced by GitHub CI.
+
 API tests:
 
 ```bash
@@ -243,6 +251,10 @@ Runtime responses are structured:
 ```
 
 See `docs/runtime.md` for session lifecycle, version pinning, channel abstraction, idempotency, and error handling.
+
+## Git Workflow
+
+Use one branch per feature, run `npm run check`, commit the finished work, then push the branch. See [ZidiCommerce Git Workflow](git-workflow.md) for the branch, commit, and deploy discipline this repository follows.
 
 ## Phase Guardrails
 

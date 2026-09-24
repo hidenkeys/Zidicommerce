@@ -10,3 +10,9 @@ coverage/
 
 apps/api/zidicommerce-api
 apps/api/coverage.out
+
+# Generated AI evaluation artifacts. Keep curated fixtures only when intentionally reviewed.
+apps/api/ai-evaluations/**/*.json
+
+# Local Railway links are machine-specific.
+.railway/
