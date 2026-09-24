@@ -81,6 +81,10 @@ Examples include `Start preparing`, `Mark ready`, `Hand to rider`, `Mark collect
 
 Store managers and staff only see orders, inventory, and operations for assigned stores. Support roles can work conversations without receiving assistant, payment configuration, or unrelated commerce permissions.
 
+Fulfilment status writes do not form a second order state machine. A direct `PATCH /v1/fulfilment/:order_id` status change is mapped back through the authoritative order transition service and its permissions, idempotency, timeline, notifications, and commerce events. Consequently, an awaiting-payment order cannot be moved to ready or completed through the fulfilment endpoint. Recipient, address, and other non-status fulfilment metadata can still be maintained through that endpoint.
+
+For pilot acceptance, use a genuine provider test-mode checkout and the signed Paystack webhook verification boundary. Select the resulting exact paid pilot order, then use the deterministic operations sequence: `paid -> processing -> ready -> completed` for pickup/customer-rider, or include `out_for_delivery` for merchant-rider. The Phase Q verifier checks that payment is `paid` with a verification timestamp before it sends any transition and confirms that both order and fulfilment finish consistently with committed event evidence.
+
 ## Handoff and Idempotency
 
 Phase E handoff rules remain unchanged. Human-requested or human-assigned sessions pause AI. Payment projection does not override human ownership.

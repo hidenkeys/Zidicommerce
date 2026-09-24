@@ -576,6 +576,13 @@ func TestOrderCancellationRestoresInventory(t *testing.T) {
 	if inventory.OnHand != 1 {
 		t.Fatalf("expected cancellation to restore inventory to 1, got %d", inventory.OnHand)
 	}
+	fulfilment, err := fx.service.GetFulfilment(context.Background(), fx.actor, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fulfilment.Status != "cancelled" {
+		t.Fatalf("expected cancellation to synchronize fulfilment, got %s", fulfilment.Status)
+	}
 }
 
 func TestPaidOrderCancellationRequiresManualReview(t *testing.T) {
@@ -642,6 +649,12 @@ func TestFulfilmentTransitionsForSupportedModes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if _, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderPaid, IdempotencyKey: "verified-payment"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderProcessing, IdempotencyKey: "start-processing"}); err != nil {
+				t.Fatal(err)
+			}
 			for _, status := range tc.transitions {
 				fulfilment, err := fx.service.UpdateFulfilment(context.Background(), fx.actor, order.ID, FulfilmentInput{Status: status})
 				if err != nil {
@@ -652,6 +665,33 @@ func TestFulfilmentTransitionsForSupportedModes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestUpdateFulfilmentCannotBypassVerifiedPayment(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{
+		CustomerID:     fx.customer.ID,
+		StoreID:        fx.store.ID,
+		FulfilmentType: FulfilmentPickup,
+		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.UpdateFulfilment(context.Background(), fx.actor, order.ID, FulfilmentInput{Status: "ready", IdempotencyKey: "unsafe-ready"}); err == nil {
+		t.Fatal("expected unpaid order fulfilment progression to be rejected")
+	}
+	storedOrder, err := fx.service.GetOrder(context.Background(), fx.actor, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fulfilment, err := fx.service.GetFulfilment(context.Background(), fx.actor, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedOrder.Status != OrderAwaitingPayment || fulfilment.Status != "pending" {
+		t.Fatalf("unpaid progression changed authoritative state: order=%s fulfilment=%s", storedOrder.Status, fulfilment.Status)
 	}
 }
 
@@ -744,6 +784,12 @@ func TestUpdateFulfilmentRecordsStatusChangedEvent(t *testing.T) {
 		Items:          []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderPaid, IdempotencyKey: "verified-payment"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.TransitionOrder(context.Background(), fx.actor, order.ID, TransitionInput{Status: OrderProcessing, IdempotencyKey: "start-processing"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fx.service.UpdateFulfilment(context.Background(), fx.actor, order.ID, FulfilmentInput{Status: "ready", IdempotencyKey: "ready-once"}); err != nil {

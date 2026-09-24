@@ -1382,12 +1382,35 @@ func (s *Service) UpdateFulfilment(ctx context.Context, actor auth.CurrentUser, 
 	if err := s.authorize(ctx, actor, authz.PermissionOrdersManage, "order", &orderID); err != nil {
 		return Fulfilment{}, err
 	}
+	order, err := s.GetOrder(ctx, actor, orderID)
+	if err != nil {
+		return Fulfilment{}, err
+	}
 	fulfilment, err := s.GetFulfilment(ctx, actor, orderID)
 	if err != nil {
 		return Fulfilment{}, err
 	}
 	if input.Status != "" && input.Status != fulfilment.Status && !canFulfilmentTransition(fulfilment.Type, fulfilment.Status, input.Status) {
 		return Fulfilment{}, httperror.BadRequest("Invalid fulfilment status transition")
+	}
+	if input.Status != "" && input.Status != fulfilment.Status {
+		targetOrderStatus := orderStatusForFulfilmentStatus(input.Status)
+		if targetOrderStatus == "" {
+			return Fulfilment{}, httperror.BadRequest("Invalid fulfilment status transition")
+		}
+		if order.Status != targetOrderStatus {
+			idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
+			if idempotencyKey == "" {
+				idempotencyKey = "fulfilment:" + fulfilment.ID.String() + ":" + input.Status
+			}
+			if _, err := s.TransitionOrder(ctx, actor, orderID, TransitionInput{Status: targetOrderStatus, IdempotencyKey: idempotencyKey, Source: input.Source}); err != nil {
+				return Fulfilment{}, err
+			}
+			fulfilment, err = s.GetFulfilment(ctx, actor, orderID)
+			if err != nil {
+				return Fulfilment{}, err
+			}
+		}
 	}
 	previousStatus := fulfilment.Status
 	updates := map[string]any{"updated_at": s.now()}
@@ -2018,6 +2041,23 @@ func fulfilmentStatusForOrderStatus(orderStatus string) string {
 		return "out_for_delivery"
 	case OrderCompleted:
 		return "completed"
+	case OrderCancelled:
+		return "cancelled"
+	default:
+		return ""
+	}
+}
+
+func orderStatusForFulfilmentStatus(fulfilmentStatus string) string {
+	switch fulfilmentStatus {
+	case "ready":
+		return OrderReady
+	case "out_for_delivery":
+		return OrderOutForDelivery
+	case "completed":
+		return OrderCompleted
+	case "cancelled":
+		return OrderCancelled
 	default:
 		return ""
 	}
