@@ -43,7 +43,7 @@ func newWhatsAppFixture(t *testing.T) whatsappFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&organization.Organization{}, &organization.AuditLog{}, &channelplatform.ChannelConnection{}, &channelplatform.ProviderAccount{}, &channelplatform.ChannelIdentity{}, &channelplatform.CredentialReference{}, &channelplatform.HealthCheck{}, &channelplatform.ProviderEvent{}, &channelplatform.MetricDaily{}, &channelplatform.ProviderSecret{}, &Configuration{}, &MetaSignupAttempt{}, &ContactState{}, &MessageTemplate{}, &PolicyDecisionRecord{}, &OperationalMetricDaily{}); err != nil {
+	if err := db.AutoMigrate(&organization.Organization{}, &organization.AuditLog{}, &channelplatform.ChannelConnection{}, &channelplatform.ChannelCapability{}, &channelplatform.ProviderAccount{}, &channelplatform.ChannelIdentity{}, &channelplatform.CredentialReference{}, &channelplatform.HealthCheck{}, &channelplatform.ProviderEvent{}, &channelplatform.MetricDaily{}, &channelplatform.ProviderSecret{}, &Configuration{}, &MetaSignupAttempt{}, &ContactState{}, &MessageTemplate{}, &PolicyDecisionRecord{}, &OperationalMetricDaily{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{

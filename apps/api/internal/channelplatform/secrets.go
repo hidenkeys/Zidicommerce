@@ -113,6 +113,19 @@ func (s *EncryptedSecretStore) Save(ctx context.Context, organizationID, connect
 	return "dbenc://" + stored.ID.String(), nil
 }
 
+func (s *EncryptedSecretStore) Delete(ctx context.Context, scope SecretScope) error {
+	reference := strings.TrimSpace(scope.Reference)
+	scheme, value, found := strings.Cut(reference, "://")
+	if !found || strings.ToLower(scheme) != "dbenc" {
+		return nil
+	}
+	id, err := uuid.Parse(value)
+	if err != nil {
+		return errors.New("invalid encrypted channel secret reference")
+	}
+	return s.db.WithContext(ctx).Where("id = ? AND organization_id = ? AND channel_connection_id = ? AND credential_type = ?", id, scope.OrganizationID, scope.ConnectionID, normalizeKey(scope.CredentialType)).Delete(&ProviderSecret{}).Error
+}
+
 func (s *EncryptedSecretStore) resolve(ctx context.Context, scope SecretScope, id uuid.UUID) (string, error) {
 	var record ProviderSecret
 	if err := s.db.WithContext(ctx).Where("id = ? AND organization_id = ? AND channel_connection_id = ? AND credential_type = ?", id, scope.OrganizationID, scope.ConnectionID, normalizeKey(scope.CredentialType)).First(&record).Error; err != nil {

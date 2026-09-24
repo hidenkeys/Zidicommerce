@@ -74,6 +74,7 @@ func main() {
 		}
 	}
 	channelSecretResolver := channelplatform.NewDatabaseSecretResolver(db, channelSecretStore)
+	oauthService := channelplatform.NewOAuthService(db, channelService, channelSecretStore, channelSecretResolver)
 	whatsAppService := whatsappadapter.NewService(db, channelService, channelSecretResolver, channelSecretStore)
 	whatsAppService.ConfigureWebhookPublicBaseURL(cfg.Channels.WhatsAppWebhookPublicBaseURL)
 	whatsAppService.ConfigureEmbeddedSignup(whatsappadapter.EmbeddedSignupConfig{
@@ -225,7 +226,7 @@ func main() {
 		AuthService:  auth.NewService(userRepo, tokenManager),
 		OrgHandler:   organization.NewHandler(orgRepo),
 		Commerce:     core.NewHandler(commerceService, tokenManager),
-		Channels:     channelplatform.NewHandler(channelService),
+		Channels:     channelplatform.NewHandler(channelService, oauthService),
 		WhatsApp:     whatsappadapter.NewHandler(whatsAppService, channelService, whatsAppAdapter, runtimeService),
 		Bot:          bot.NewHandler(botService),
 		Runtime:      runtimeengine.NewHandler(runtimeService),

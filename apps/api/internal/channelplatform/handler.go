@@ -14,10 +14,15 @@ import (
 
 type Handler struct {
 	service *Service
+	oauth   *OAuthService
 }
 
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(service *Service, oauth ...*OAuthService) *Handler {
+	handler := &Handler{service: service}
+	if len(oauth) > 0 {
+		handler.oauth = oauth[0]
+	}
+	return handler
 }
 
 func (h *Handler) Register(router fiber.Router) {
@@ -32,6 +37,15 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Get("/channel-platform/connections/:id/events", auth.RequirePermission(authz.PermissionChannelsView), h.listEvents)
 	router.Get("/channel-platform/connections/:id/credentials", auth.RequirePermission(authz.PermissionChannelsView), h.listCredentials)
 	router.Post("/channel-platform/connections/:id/credentials", auth.RequirePermission(authz.PermissionChannelsManage), h.upsertCredential)
+	if h.oauth != nil {
+		router.Post("/channel-platform/connections/:id/oauth/start", auth.RequirePermission(authz.PermissionChannelsManage), h.startOAuth)
+		router.Post("/channel-platform/connections/:id/oauth/callback", auth.RequirePermission(authz.PermissionChannelsManage), h.completeOAuthCallback)
+		router.Get("/channel-platform/connections/:id/oauth/assets", auth.RequirePermission(authz.PermissionChannelsView), h.listOAuthAssets)
+		router.Post("/channel-platform/connections/:id/oauth/assets/:asset_id/select", auth.RequirePermission(authz.PermissionChannelsManage), h.selectOAuthAsset)
+		router.Post("/channel-platform/connections/:id/oauth/cancel", auth.RequirePermission(authz.PermissionChannelsManage), h.cancelOAuth)
+		router.Post("/channel-platform/connections/:id/oauth/refresh", auth.RequirePermission(authz.PermissionChannelsManage), h.refreshOAuth)
+		router.Post("/channel-platform/connections/:id/oauth/disconnect", auth.RequirePermission(authz.PermissionChannelsManage), h.disconnectOAuth)
+	}
 }
 
 func (h *Handler) listProviders(c *fiber.Ctx) error {
@@ -138,6 +152,89 @@ func (h *Handler) upsertCredential(c *fiber.Ctx) error {
 		return err
 	}
 	data, err := h.service.UpsertCredentialReference(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) startOAuth(c *fiber.Ctx) error {
+	id, err := connectionID(c)
+	if err != nil {
+		return err
+	}
+	var input OAuthStartInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.oauth.Start(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) completeOAuthCallback(c *fiber.Ctx) error {
+	id, err := connectionID(c)
+	if err != nil {
+		return err
+	}
+	var input OAuthCallbackInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.oauth.CompleteCallback(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) listOAuthAssets(c *fiber.Ctx) error {
+	id, err := connectionID(c)
+	if err != nil {
+		return err
+	}
+	data, err := h.oauth.ListAssets(c.UserContext(), currentUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) selectOAuthAsset(c *fiber.Ctx) error {
+	id, err := connectionID(c)
+	if err != nil {
+		return err
+	}
+	assetID, err := uuid.Parse(c.Params("asset_id"))
+	if err != nil {
+		return httperror.BadRequest("Invalid provider asset ID")
+	}
+	var input OAuthAssetSelectionInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.oauth.SelectAsset(c.UserContext(), currentUser(c), id, assetID, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) cancelOAuth(c *fiber.Ctx) error {
+	id, err := connectionID(c)
+	if err != nil {
+		return err
+	}
+	var input OAuthCancelInput
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	data, err := h.oauth.Cancel(c.UserContext(), currentUser(c), id, input)
+	return respond(c, data, err)
+}
+
+func (h *Handler) refreshOAuth(c *fiber.Ctx) error {
+	id, err := connectionID(c)
+	if err != nil {
+		return err
+	}
+	data, err := h.oauth.Refresh(c.UserContext(), currentUser(c), id)
+	return respond(c, data, err)
+}
+
+func (h *Handler) disconnectOAuth(c *fiber.Ctx) error {
+	id, err := connectionID(c)
+	if err != nil {
+		return err
+	}
+	data, err := h.oauth.Disconnect(c.UserContext(), currentUser(c), id)
 	return respond(c, data, err)
 }
 
