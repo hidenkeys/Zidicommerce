@@ -13,6 +13,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/channelplatform"
+	metaadapter "github.com/hidenkeys/zidicommerce/apps/api/internal/channelplatform/meta"
 	whatsappadapter "github.com/hidenkeys/zidicommerce/apps/api/internal/channelplatform/whatsapp"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/config"
@@ -75,6 +76,18 @@ func main() {
 	}
 	channelSecretResolver := channelplatform.NewDatabaseSecretResolver(db, channelSecretStore)
 	oauthService := channelplatform.NewOAuthService(db, channelService, channelSecretStore, channelSecretResolver)
+	for _, provider := range []string{metaadapter.ProviderInstagram, metaadapter.ProviderFacebook} {
+		client := metaadapter.NewOAuthClient(metaadapter.OAuthConfig{
+			Provider: provider, AppID: cfg.Channels.MetaAppID, AppSecret: cfg.Channels.MetaAppSecret,
+			GraphVersion: cfg.Channels.MetaGraphAPIVersion, AdvancedAccess: cfg.Channels.MetaAdvancedAccess,
+			FacebookOAuthBaseURL: cfg.Channels.FacebookOAuthBaseURL, FacebookGraphBaseURL: cfg.Channels.WhatsAppGraphBaseURL,
+			InstagramOAuthBaseURL: cfg.Channels.InstagramOAuthBaseURL, InstagramAPIOAuthBaseURL: cfg.Channels.InstagramAPIOAuthBaseURL,
+			InstagramGraphBaseURL: cfg.Channels.InstagramGraphBaseURL,
+		}, nil)
+		if client.Enabled() {
+			oauthService.RegisterClient(client)
+		}
+	}
 	whatsAppService := whatsappadapter.NewService(db, channelService, channelSecretResolver, channelSecretStore)
 	whatsAppService.ConfigureWebhookPublicBaseURL(cfg.Channels.WhatsAppWebhookPublicBaseURL)
 	whatsAppService.ConfigureEmbeddedSignup(whatsappadapter.EmbeddedSignupConfig{

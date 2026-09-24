@@ -15,15 +15,15 @@ import (
 )
 
 type fakeOAuthClient struct {
-	authorization OAuthAuthorizationRequest
-	exchange      OAuthCodeExchangeRequest
-	grant         OAuthTokenGrant
-	refreshGrant  OAuthTokenGrant
-	assets        []OAuthAsset
-	connected     OAuthAsset
-	revokedToken  string
-	refreshToken  string
-	exchangeErr   error
+	authorization  OAuthAuthorizationRequest
+	exchange       OAuthCodeExchangeRequest
+	grant          OAuthTokenGrant
+	refreshGrant   OAuthTokenGrant
+	assets         []OAuthAsset
+	connected      OAuthAsset
+	revokedToken   string
+	refreshRequest OAuthRefreshRequest
+	exchangeErr    error
 }
 
 func (f *fakeOAuthClient) Provider() string { return "instagram" }
@@ -47,18 +47,18 @@ func (f *fakeOAuthClient) DiscoverAssets(context.Context, string) ([]OAuthAsset,
 	return f.assets, nil
 }
 
-func (f *fakeOAuthClient) ConnectAsset(_ context.Context, _ string, asset OAuthAsset) error {
+func (f *fakeOAuthClient) ConnectAsset(_ context.Context, _ string, asset OAuthAsset) (OAuthTokenGrant, error) {
 	f.connected = asset
-	return nil
+	return OAuthTokenGrant{}, nil
 }
 
-func (f *fakeOAuthClient) Refresh(_ context.Context, token string) (OAuthTokenGrant, error) {
-	f.refreshToken = token
+func (f *fakeOAuthClient) Refresh(_ context.Context, request OAuthRefreshRequest) (OAuthTokenGrant, error) {
+	f.refreshRequest = request
 	return f.refreshGrant, nil
 }
 
-func (f *fakeOAuthClient) Revoke(_ context.Context, token string) error {
-	f.revokedToken = token
+func (f *fakeOAuthClient) Revoke(_ context.Context, request OAuthRevokeRequest) error {
+	f.revokedToken = request.AccessToken
 	return nil
 }
 
@@ -252,7 +252,7 @@ func TestOAuthCancelRefreshAndDisconnectLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if refreshed.Status != CredentialPresent || fx.client.refreshToken != "provider-refresh-token" {
+	if refreshed.Status != CredentialPresent || fx.client.refreshRequest.RefreshToken != "provider-refresh-token" || fx.client.refreshRequest.Asset == nil || fx.client.refreshRequest.Asset.ProviderAssetID != "ig-asset-1" {
 		t.Fatalf("refresh did not use the stored refresh token: %+v", refreshed)
 	}
 	accessToken, err := fx.oauth.resolveOAuthCredential(context.Background(), fx.actor.OrganizationID, connection.ID, OAuthCredentialAccessToken)

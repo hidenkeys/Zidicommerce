@@ -94,6 +94,12 @@ func TestWhatsAppSignatureBypassDefaultsToFalse(t *testing.T) {
 	if cfg.Channels.WhatsAppGraphBaseURL != "https://graph.facebook.com" {
 		t.Fatalf("unexpected default Graph API URL %q", cfg.Channels.WhatsAppGraphBaseURL)
 	}
+	if cfg.Channels.MetaAdvancedAccess {
+		t.Fatal("Meta Advanced Access must default to false until App Review is confirmed")
+	}
+	if cfg.Channels.InstagramOAuthBaseURL != "https://www.instagram.com" || cfg.Channels.InstagramAPIOAuthBaseURL != "https://api.instagram.com" || cfg.Channels.InstagramGraphBaseURL != "https://graph.instagram.com" {
+		t.Fatalf("unexpected Instagram provider endpoints: %+v", cfg.Channels)
+	}
 }
 
 func TestWhatsAppSignatureBypassIsRejectedInProduction(t *testing.T) {

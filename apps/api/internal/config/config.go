@@ -93,6 +93,11 @@ type ChannelConfig struct {
 	MetaEmbeddedConfigurationID  string
 	MetaGraphAPIVersion          string
 	MetaWebhookVerifyToken       string
+	MetaAdvancedAccess           bool
+	FacebookOAuthBaseURL         string
+	InstagramOAuthBaseURL        string
+	InstagramAPIOAuthBaseURL     string
+	InstagramGraphBaseURL        string
 }
 
 type EmailConfig struct {
@@ -170,6 +175,11 @@ func Load() (Config, error) {
 			MetaEmbeddedConfigurationID:  strings.TrimSpace(os.Getenv("META_EMBEDDED_SIGNUP_CONFIGURATION_ID")),
 			MetaGraphAPIVersion:          strings.TrimSpace(os.Getenv("META_GRAPH_API_VERSION")),
 			MetaWebhookVerifyToken:       strings.TrimSpace(os.Getenv("META_WEBHOOK_VERIFY_TOKEN")),
+			MetaAdvancedAccess:           boolEnv("META_ADVANCED_ACCESS", false),
+			FacebookOAuthBaseURL:         strings.TrimRight(getenv("FACEBOOK_OAUTH_BASE_URL", "https://www.facebook.com"), "/"),
+			InstagramOAuthBaseURL:        strings.TrimRight(getenv("INSTAGRAM_OAUTH_BASE_URL", "https://www.instagram.com"), "/"),
+			InstagramAPIOAuthBaseURL:     strings.TrimRight(getenv("INSTAGRAM_API_OAUTH_BASE_URL", "https://api.instagram.com"), "/"),
+			InstagramGraphBaseURL:        strings.TrimRight(getenv("INSTAGRAM_GRAPH_BASE_URL", "https://graph.instagram.com"), "/"),
 		},
 		Email: EmailConfig{
 			Mode:       getenv("EMAIL_MODE", "log"),

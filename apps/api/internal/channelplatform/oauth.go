@@ -90,6 +90,18 @@ type OAuthCodeExchangeRequest struct {
 	RedirectURI  string
 }
 
+type OAuthRefreshRequest struct {
+	AccessToken  string
+	RefreshToken string
+	Asset        *OAuthAsset
+}
+
+type OAuthRevokeRequest struct {
+	AccessToken  string
+	RefreshToken string
+	Asset        *OAuthAsset
+}
+
 type OAuthTokenGrant struct {
 	AccessToken      string
 	RefreshToken     string
@@ -115,9 +127,9 @@ type OAuthProviderClient interface {
 	AuthorizationURL(OAuthAuthorizationRequest) (string, error)
 	ExchangeCode(context.Context, OAuthCodeExchangeRequest) (OAuthTokenGrant, error)
 	DiscoverAssets(context.Context, string) ([]OAuthAsset, error)
-	ConnectAsset(context.Context, string, OAuthAsset) error
-	Refresh(context.Context, string) (OAuthTokenGrant, error)
-	Revoke(context.Context, string) error
+	ConnectAsset(context.Context, string, OAuthAsset) (OAuthTokenGrant, error)
+	Refresh(context.Context, OAuthRefreshRequest) (OAuthTokenGrant, error)
+	Revoke(context.Context, OAuthRevokeRequest) error
 }
 
 type OAuthService struct {
@@ -415,10 +427,20 @@ func (s *OAuthService) SelectAsset(ctx context.Context, actor auth.CurrentUser, 
 		return ConnectionDetail{}, httperror.BadRequest("OAuth onboarding is not configured for this provider")
 	}
 	providerAsset := OAuthAsset{ProviderAssetID: asset.ProviderAssetID, AssetType: asset.AssetType, DisplayName: asset.DisplayName, ExternalHandle: asset.ExternalHandle, Eligible: asset.Eligible, IneligibleReason: asset.IneligibleReason}
-	if err := client.ConnectAsset(ctx, accessToken, providerAsset); err != nil {
+	assetGrant, err := client.ConnectAsset(ctx, accessToken, providerAsset)
+	if err != nil {
 		return ConnectionDetail{}, httperror.BadRequest("Provider asset could not be connected")
 	}
 	now := s.now()
+	if strings.TrimSpace(assetGrant.AccessToken) != "" {
+		if len(assetGrant.GrantedScopes) == 0 {
+			assetGrant.GrantedScopes = stringList(session.GrantedScopes)
+		}
+		assetGrant.ReviewApproved = session.ReviewApproved
+		if err := s.storeOAuthGrant(ctx, actor, connection, assetGrant, now); err != nil {
+			return ConnectionDetail{}, errors.New("Provider asset authorization could not be stored securely")
+		}
+	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&OAuthAssetRecord{}).Where("organization_id = ? AND channel_connection_id = ?", actor.OrganizationID, connectionID).Updates(map[string]any{"selected": false, "selected_at": nil, "updated_at": now}).Error; err != nil {
 			return err
@@ -530,11 +552,19 @@ func (s *OAuthService) Refresh(ctx context.Context, actor auth.CurrentUser, conn
 	if client == nil || s.encrypted == nil || s.resolver == nil {
 		return OAuthRefreshView{}, httperror.BadRequest("OAuth refresh is not configured for this provider")
 	}
+	accessToken, err := s.resolveOAuthCredential(ctx, actor.OrganizationID, connectionID, OAuthCredentialAccessToken)
+	if err != nil {
+		return OAuthRefreshView{}, httperror.BadRequest("Provider authorization requires reconnection")
+	}
 	refreshToken, err := s.resolveOAuthCredential(ctx, actor.OrganizationID, connectionID, OAuthCredentialRefreshToken)
 	if err != nil {
 		return OAuthRefreshView{}, httperror.BadRequest("Provider authorization requires reconnection")
 	}
-	grant, err := client.Refresh(ctx, refreshToken)
+	asset, err := s.selectedOAuthAsset(ctx, actor.OrganizationID, connectionID)
+	if err != nil {
+		return OAuthRefreshView{}, httperror.BadRequest("Provider asset selection is incomplete")
+	}
+	grant, err := client.Refresh(ctx, OAuthRefreshRequest{AccessToken: accessToken, RefreshToken: refreshToken, Asset: &asset})
 	if err != nil || strings.TrimSpace(grant.AccessToken) == "" {
 		_ = s.markOAuthCredentials(ctx, actor, connectionID, CredentialRequiresReauthorization, "channel_oauth_refresh_failed")
 		return OAuthRefreshView{}, httperror.BadRequest("Provider authorization could not be refreshed; reconnect the channel")
@@ -559,8 +589,11 @@ func (s *OAuthService) Disconnect(ctx context.Context, actor auth.CurrentUser, c
 	if client == nil || s.encrypted == nil || s.resolver == nil {
 		return ConnectionDetail{}, httperror.BadRequest("OAuth disconnect is not configured for this provider")
 	}
-	if accessToken, resolveErr := s.resolveOAuthCredential(ctx, actor.OrganizationID, connectionID, OAuthCredentialAccessToken); resolveErr == nil {
-		if err := client.Revoke(ctx, accessToken); err != nil {
+	accessToken, _ := s.resolveOAuthCredential(ctx, actor.OrganizationID, connectionID, OAuthCredentialAccessToken)
+	refreshToken, _ := s.resolveOAuthCredential(ctx, actor.OrganizationID, connectionID, OAuthCredentialRefreshToken)
+	asset, _ := s.selectedOAuthAsset(ctx, actor.OrganizationID, connectionID)
+	if accessToken != "" || refreshToken != "" {
+		if err := client.Revoke(ctx, OAuthRevokeRequest{AccessToken: accessToken, RefreshToken: refreshToken, Asset: &asset}); err != nil {
 			return ConnectionDetail{}, httperror.BadRequest("Provider authorization could not be revoked")
 		}
 	}
@@ -656,6 +689,16 @@ func (s *OAuthService) resolveOAuthCredential(ctx context.Context, organizationI
 		return "", err
 	}
 	return s.resolver.Resolve(ctx, SecretScope{OrganizationID: organizationID, ConnectionID: connectionID, CredentialType: credentialType, Reference: credential.SecretRef})
+}
+
+func (s *OAuthService) selectedOAuthAsset(ctx context.Context, organizationID, connectionID uuid.UUID) (OAuthAsset, error) {
+	var record OAuthAssetRecord
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND channel_connection_id = ? AND selected = ?", organizationID, connectionID, true).First(&record).Error; err != nil {
+		return OAuthAsset{}, err
+	}
+	metadata := map[string]any{}
+	_ = jsonUnmarshalObject(record.Metadata, &metadata)
+	return OAuthAsset{ProviderAssetID: record.ProviderAssetID, AssetType: record.AssetType, DisplayName: record.DisplayName, ExternalHandle: record.ExternalHandle, Eligible: record.Eligible, IneligibleReason: record.IneligibleReason, Metadata: metadata}, nil
 }
 
 func (s *OAuthService) failSession(ctx context.Context, session OAuthSession, status, code string) error {
