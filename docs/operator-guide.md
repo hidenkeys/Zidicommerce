@@ -13,6 +13,13 @@ Related docs:
 - [Product experience, merchant workflows, and future channel UX](product-experience.md)
 - [Channel platform foundation](channel-platform.md)
 - [Meta WhatsApp connection](meta-whatsapp-connection.md)
+- [Staging deployment](staging-deployment.md)
+
+## Isolated staging
+
+The disposable Railway staging stack has its own project, API, Admin, PostgreSQL database, and secrets. Use it for release-candidate validation with synthetic data, Groq, and Paystack test mode. It has no Meta or WhatsApp credentials and must not be used for live messages. Follow [Staging deployment](staging-deployment.md) for URLs, smoke checks, reset policy, and the production boundary.
+
+The former isolated WhatsApp pilot is historical evidence, not the current test environment. Do not reuse its scripts, domains, database, or credentials for staging work.
 
 The conversation runtime is production-critical. Do not change action semantics, provider boundary handling, published snapshots, payment verification, inventory reservation, or customer isolation unless you fully understand the consequences.
 
@@ -534,5 +541,32 @@ Before each live scenario, obtain explicit approval. Use one scenario at a time:
 The controlled scenario pass confirmed that explicit `cancel order`, `cancel request`, `stop order`, and `end order` commands cancel the current commerce request without triggering WhatsApp opt-out. Exact `CANCEL` remains a Meta consent opt-out and exact `START` restores consent. After checkout, cancellation must use the persisted order ID; before checkout it clears the persisted cart. Order creation is idempotent per cart, while payment and cancellation are idempotent per order. Never scope these keys only to the long-lived WhatsApp conversation because that can return a previous checkout on a later order.
 
 The pilot passed Paystack test-mode payment acceptance through the merchant-scoped, write-only encrypted secret path. Two provider-hosted test checkouts produced signed webhooks and authoritative `paid` payment/order state. The first confirmation identified an `active`-only WhatsApp channel lookup that skipped healthy channel-platform connections; the deployed fix and regression test now cover usable connection states, and the second confirmation completed its notification job with a delivered WhatsApp outbound. Live-mode keys, charges, and promotion remain separate approval gates.
+
+### Repeatable Phase Q gap verification
+
+`scripts/phase-q-pilot-verify.sh` is retained only to explain how the retired isolated pilot was accepted. Do not run it against staging or production. Current staging verification uses `scripts/staging-smoke.sh`. The historical verifier reported `pass`, `fail`, `expected_safety_block`, `not_attempted`, `blocked_external_action`, `manually_verified`, or `sandbox_verified` so an unavailable provider action was not confused with an application defect.
+
+The following historical example is non-operational and must not be reused:
+
+```bash
+ZIDI_API_BASE_URL=https://pilot.example.test \
+ZIDI_API_TOKEN=... \
+PHASE_Q_PAYMENT_MODE=sandbox \
+PHASE_Q_UNPAID_ORDER_ID=... \
+PHASE_Q_UNPAID_SAFETY_CONFIRM=YES \
+PHASE_Q_PAID_ORDER_ID=... \
+PHASE_Q_FULFILMENT_CONFIRM=YES \
+PHASE_Q_SIGNATURE_NEGATIVE_CONFIRM=YES \
+PHASE_Q_AI_ENQUIRY_CONFIRM=YES \
+scripts/phase-q-pilot-verify.sh
+```
+
+Use only exact pilot order IDs selected through authenticated operator tooling. The script does not print those IDs, credentials, provider references, phone identities, or response bodies. `PHASE_Q_REPORT_FORMAT=json` emits machine-readable output.
+
+The accepted payment method is a genuine Paystack test-mode checkout followed by Paystack's signed webhook and provider verification. A customer statement, direct database update, unsigned event, or fulfilment mutation is never payment evidence. An unpaid fulfilment HTTP 400 is an expected safety result. After verified payment, operations must advance through `paid`, `processing`, `ready`, and the applicable completion path.
+
+WhatsApp setup and current health are related but distinct. A completed setup with valid credentials, provider identity, signed inbound evidence, and healthy connection should resolve to `healthy`. Invalid signatures remain counted security events and return HTTP 403, but a later attack does not erase durable evidence that valid signed webhooks have been observed.
+
+The 2026-08-31 isolated-pilot rerun passed health, authentication, seed availability, grounded enquiries, coherent WhatsApp setup, durable valid-signature evidence, the expected unpaid-order block, provider-verified test-mode payment, post-payment completion, and the unique invalid-signature probe. Fresh outbound and delivered provider events were recorded for the controlled fulfilment transitions. See [Phase Q Pilot Gap Verification](phase-q-pilot-verification.md).
 
 For rollback, redeploy the preceding isolated pilot image and select the previous published snapshot. Recheck health and fail-closed webhook behavior. Preserve aggregate provider evidence, do not export private contact data, and leave the original Bing Chun database untouched.
