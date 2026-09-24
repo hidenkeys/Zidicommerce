@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,21 +22,44 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+var organizationSlugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
 func (s *Service) OnboardOrganization(ctx context.Context, actor auth.CurrentUser, input OrganizationInput) (organization.Organization, organization.OrganizationMembership, error) {
 	if actor.ID == uuid.Nil {
 		return organization.Organization{}, organization.OrganizationMembership{}, httperror.Unauthorized("Authentication is required")
 	}
-	if actor.OrganizationID != uuid.Nil && actor.Role != authz.PlatformAdmin {
+	if actor.OrganizationID != uuid.Nil {
 		return organization.Organization{}, organization.OrganizationMembership{}, httperror.BadRequest("User already belongs to an organization")
 	}
 	input.normalize()
 	if input.Name == "" || input.Slug == "" {
 		return organization.Organization{}, organization.OrganizationMembership{}, httperror.BadRequest("Business name and slug are required")
 	}
+	if !organizationSlugPattern.MatchString(input.Slug) {
+		return organization.Organization{}, organization.OrganizationMembership{}, httperror.BadRequest("Workspace slug may contain lowercase letters, numbers, and single hyphens")
+	}
 
 	var org organization.Organization
 	var membership organization.OrganizationMembership
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var user organization.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", actor.ID).First(&user).Error; err != nil {
+			return mapNotFound(err, "User account not found")
+		}
+		var membershipCount int64
+		if err := tx.Model(&organization.OrganizationMembership{}).Where("user_id = ?", actor.ID).Count(&membershipCount).Error; err != nil {
+			return err
+		}
+		if user.OrganizationID != nil || membershipCount > 0 {
+			return httperror.BadRequest("User already belongs to an organization")
+		}
+		var slugCount int64
+		if err := tx.Model(&organization.Organization{}).Where("slug = ?", input.Slug).Count(&slugCount).Error; err != nil {
+			return err
+		}
+		if slugCount > 0 {
+			return httperror.Conflict("That workspace slug is already in use")
+		}
 		org = organization.Organization{
 			ID:              uuid.New(),
 			Name:            input.Name,
@@ -53,7 +77,7 @@ func (s *Service) OnboardOrganization(ctx context.Context, actor auth.CurrentUse
 			Metadata:        jsonObject(input.Metadata),
 		}
 		if err := tx.Create(&org).Error; err != nil {
-			return err
+			return mapOrganizationSlugConflict(err)
 		}
 		membership = organization.OrganizationMembership{
 			ID:             uuid.New(),
@@ -80,6 +104,17 @@ func (s *Service) OnboardOrganization(ctx context.Context, actor auth.CurrentUse
 		return s.auditTx(tx, &org.ID, &actor.ID, "member", &actor.ID, "member_joined", `{"role":"merchant_admin"}`)
 	})
 	return org, membership, err
+}
+
+func mapOrganizationSlugConflict(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "unique") && (strings.Contains(message, "organizations.slug") || strings.Contains(message, "organizations_slug")) {
+		return httperror.Conflict("That workspace slug is already in use")
+	}
+	return err
 }
 
 func (s *Service) UpdateOnboardingState(ctx context.Context, actor auth.CurrentUser, state string) (organization.Organization, error) {

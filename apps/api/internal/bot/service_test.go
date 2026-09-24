@@ -30,6 +30,15 @@ type testWhatsAppConfiguration struct {
 
 func (testWhatsAppConfiguration) TableName() string { return "channel_whatsapp_configs" }
 
+type testChannelConnection struct {
+	ID             uuid.UUID `gorm:"type:uuid;primaryKey"`
+	OrganizationID uuid.UUID `gorm:"type:uuid;index"`
+	Provider       string
+	Status         string
+}
+
+func (testChannelConnection) TableName() string { return "channel_connections" }
+
 func newBotFixture(t *testing.T) botFixture {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
@@ -46,6 +55,7 @@ func newBotFixture(t *testing.T) botFixture {
 		&core.Variant{},
 		&core.InventoryLevel{},
 		&core.Channel{},
+		&testChannelConnection{},
 		&core.PaymentConfiguration{},
 		&core.PaymentProviderSecret{},
 		&Bot{},
@@ -119,6 +129,9 @@ func TestSetupStatusIsTenantScopedAndRecognizesStructuredKnowledge(t *testing.T)
 	if err := fx.db.Create(&KnowledgeEntry{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Kind: "policy", Category: "returns", Title: "Returns", Answer: "Returns are accepted within seven days.", Status: core.StatusActive}).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := fx.db.Create(&testChannelConnection{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Provider: "whatsapp", Status: "healthy"}).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	status, err := fx.service.GetSetupStatus(context.Background(), fx.actor)
 	if err != nil {
@@ -139,6 +152,9 @@ func TestSetupStatusIsTenantScopedAndRecognizesStructuredKnowledge(t *testing.T)
 	}
 	if items["whatsapp"].Required || status.RequiredCount == 0 {
 		t.Fatal("customer channel should be non-blocking")
+	}
+	if !items["whatsapp"].Complete {
+		t.Fatal("a healthy channel-platform connection should satisfy channel readiness")
 	}
 
 	staff := auth.CurrentUser{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Role: authz.StoreStaff}

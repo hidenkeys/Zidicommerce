@@ -907,6 +907,41 @@ func TestOnboardOrganizationCreatesMerchantAdminMembership(t *testing.T) {
 	}
 }
 
+func TestOnboardOrganizationRejectsSecondWorkspaceFromStaleToken(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	userID := uuid.New()
+	if err := fx.db.Create(&organization.User{ID: userID, Email: "repeat@example.com", PasswordHash: "hash", Role: authz.Viewer, Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	actor := auth.CurrentUser{ID: userID, Role: authz.Viewer}
+	if _, _, err := fx.service.OnboardOrganization(context.Background(), actor, OrganizationInput{Name: "First Workspace", Slug: "first-workspace"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fx.service.OnboardOrganization(context.Background(), actor, OrganizationInput{Name: "Second Workspace", Slug: "second-workspace"}); err == nil {
+		t.Fatal("expected a stale pre-organization token to be rejected")
+	}
+	var owned int64
+	if err := fx.db.Model(&organization.OrganizationMembership{}).Where("user_id = ? AND is_owner = ?", userID, true).Count(&owned).Error; err != nil {
+		t.Fatal(err)
+	}
+	if owned != 1 {
+		t.Fatalf("expected one owned workspace, got %d", owned)
+	}
+}
+
+func TestOnboardOrganizationReportsDuplicateSlug(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	userID := uuid.New()
+	if err := fx.db.Create(&organization.User{ID: userID, Email: "slug@example.com", PasswordHash: "hash", Role: authz.Viewer, Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := fx.service.OnboardOrganization(context.Background(), auth.CurrentUser{ID: userID, Role: authz.Viewer}, OrganizationInput{Name: "Duplicate", Slug: "test-merchant"})
+	apiErr, ok := err.(httperror.APIError)
+	if !ok || apiErr.StatusCode != 409 {
+		t.Fatalf("expected a slug conflict, got %#v", err)
+	}
+}
+
 func TestInvitationAcceptanceIsSingleUse(t *testing.T) {
 	fx := newCommerceFixture(t, 5)
 	invitation, token, err := fx.service.InviteMember(context.Background(), fx.actor, InviteInput{

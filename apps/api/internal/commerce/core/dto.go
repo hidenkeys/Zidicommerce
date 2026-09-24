@@ -25,10 +25,13 @@ type OrganizationInput struct {
 func (i *OrganizationInput) normalize() {
 	i.Name = strings.TrimSpace(i.Name)
 	i.Slug = strings.ToLower(strings.TrimSpace(i.Slug))
+	i.Country = strings.ToUpper(strings.TrimSpace(i.Country))
 	i.Currency = strings.ToUpper(strings.TrimSpace(i.Currency))
 	i.Timezone = strings.TrimSpace(i.Timezone)
 	i.Status = strings.ToLower(strings.TrimSpace(i.Status))
+	i.ContactName = strings.TrimSpace(i.ContactName)
 	i.ContactEmail = strings.ToLower(strings.TrimSpace(i.ContactEmail))
+	i.ContactPhone = strings.TrimSpace(i.ContactPhone)
 }
 
 type InviteInput struct {

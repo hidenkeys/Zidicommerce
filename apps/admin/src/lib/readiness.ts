@@ -23,7 +23,7 @@ export const readinessSections = [
   { key: "selling", title: "Selling", description: "Products, stock, and payment collection." },
   { key: "customer_service", title: "Customer service", description: "What the assistant knows and is allowed to do." },
   { key: "operations", title: "Team", description: "Who handles store and customer work." },
-  { key: "channels", title: "Customer channels", description: "Reserved for external customer channel connections." },
+  { key: "channels", title: "Customer channels", description: "Connect and monitor the channels customers use to reach the business." },
 ];
 
 export function merchantReadinessItems(status: SetupStatus | null) {

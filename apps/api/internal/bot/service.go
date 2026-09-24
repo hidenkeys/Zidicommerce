@@ -1131,6 +1131,8 @@ func (s *Service) GetSetupStatus(ctx context.Context, actor auth.CurrentUser) (B
 		strings.TrimSpace(org.Currency) != "" && strings.TrimSpace(org.Timezone) != ""
 	knowledgeReady := count(&FAQ{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0 ||
 		count(&KnowledgeEntry{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0
+	channelReady := count(&core.Channel{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0 ||
+		count(&channelConnectionModel{}, "organization_id = ? AND provider = ? AND status IN ?", orgID, "whatsapp", []string{"connected", "healthy"}) > 0
 	items := []ChecklistItem{
 		{Key: "organization", Label: "Business profile", Complete: organizationReady, Required: true, Group: "business", Description: "Add the business name, country, currency, and timezone used by orders and receipts."},
 		{Key: "stores", Label: "Store", Complete: count(&core.Store{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0, Required: true, Group: "business", Description: "Add at least one active location where orders can be prepared or collected."},
@@ -1140,7 +1142,7 @@ func (s *Service) GetSetupStatus(ctx context.Context, actor auth.CurrentUser) (B
 		{Key: "faqs", Label: "Business knowledge", Complete: knowledgeReady, Required: true, Group: "customer_service", Description: "Publish at least one active policy, FAQ, or business-information entry."},
 		{Key: "bot", Label: "Assistant", Complete: count(&Bot{}, "organization_id = ? AND published_version_id IS NOT NULL AND status = ?", orgID, BotStatusActive) > 0, Required: true, Group: "customer_service", Description: "Publish the assistant after reviewing its capabilities and test conversation."},
 		{Key: "team", Label: "Team", Complete: count(&organization.OrganizationMembership{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 1, Group: "operations", Description: "Optional: invite staff and assign stores so daily work reaches the right people."},
-		{Key: "whatsapp", Label: "Customer channel", Complete: count(&core.Channel{}, "organization_id = ? AND status = ?", orgID, core.StatusActive) > 0, Group: "channels", Description: "Optional for this phase: external channel connections will plug into this readiness step later."},
+		{Key: "whatsapp", Label: "Customer channel", Complete: channelReady, Group: "channels", Description: "Optional: connect a healthy WhatsApp channel when the business is ready to receive customer messages."},
 		{Key: "database", Label: "Data service", Complete: true, Group: "system", Description: "The organization data service is available."},
 		{Key: "worker", Label: "Notifications", Complete: count(&core.CommerceNotification{}, "organization_id = ? AND status IN ?", orgID, []string{"queued", "retry_pending", "failed"}) == 0, Group: "operations", Description: "No commerce notifications currently require an operator retry."},
 		{Key: "outbound", Label: "Outbound messages", Complete: count(&runtimeOutboundModel{}, "organization_id = ? AND status IN ?", orgID, []string{"queued", "retry_pending", "failed"}) == 0, Group: "operations", Description: "No customer messages are currently waiting for an operator retry."},
@@ -1173,6 +1175,10 @@ func (runtimeOutboundModel) TableName() string { return "channel_outbound_messag
 type runtimeSupportHandoffModel struct{}
 
 func (runtimeSupportHandoffModel) TableName() string { return "support_handoffs" }
+
+type channelConnectionModel struct{}
+
+func (channelConnectionModel) TableName() string { return "channel_connections" }
 
 func (s *Service) ensureEditable(ctx context.Context, actor auth.CurrentUser, versionID uuid.UUID) error {
 	if !canManageBots(actor.Role) {

@@ -1,6 +1,6 @@
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
-import { UNAUTHORIZED_EVENT, apiGet, clearStoredToken, getStoredToken } from "./api/client";
+import { UNAUTHORIZED_EVENT, apiGet, clearStoredToken, getStoredToken, setStoredToken } from "./api/client";
 import { ZidiCommerceLogo } from "./components/brand/ZidiCommerceLogo";
 
 export type AuthUser = {
@@ -12,8 +12,15 @@ export type AuthUser = {
 
 type AuthContextValue = {
   user: AuthUser;
+  activateSession: (accessToken: string) => Promise<void>;
   logout: () => void;
 };
+
+const nilOrganizationID = "00000000-0000-0000-0000-000000000000";
+
+export function hasOrganization(user: AuthUser) {
+  return Boolean(user.organization_id && user.organization_id !== nilOrganizationID);
+}
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -90,6 +97,17 @@ export function RequireAuth() {
     if (!user) return null;
     return {
       user,
+      activateSession: async (accessToken: string) => {
+        setStoredToken(accessToken);
+        try {
+          const response = await apiGet<AuthUser>("/auth/me");
+          setUser(response.data);
+        } catch (error) {
+          clearStoredToken();
+          setUser(null);
+          throw error;
+        }
+      },
       logout: () => {
         clearStoredToken();
         setUser(null);
@@ -109,6 +127,10 @@ export function RequireAuth() {
 
   if (!value) {
     return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+
+  if (!hasOrganization(value.user) && location.pathname !== "/setup") {
+    return <Navigate to="/setup" replace />;
   }
 
   return (

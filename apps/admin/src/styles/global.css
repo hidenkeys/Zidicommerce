@@ -1896,6 +1896,20 @@ pre {
   grid-column: 1 / -1;
 }
 
+.workspace-onboarding-form {
+  max-width: 880px;
+}
+
+.workspace-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.workspace-fields label {
+  min-width: 0;
+}
+
 .two-column {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -4028,6 +4042,7 @@ tr.selected-row {
   .metrics,
   .split,
   .form-grid,
+  .workspace-fields,
   .resource-form,
   .conversation-commerce-context,
   .attention-queue {

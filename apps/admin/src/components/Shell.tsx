@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { Bot, Boxes, Building2, ClipboardCheck, CreditCard, FileClock, Home, LifeBuoy, LogOut, Menu, MessageSquareText, PackageSearch, Settings, ShieldCheck, ShoppingBag, Sparkles, Store, Users, X, type LucideIcon } from "lucide-react";
 import { apiGet } from "../api/client";
-import { useAuth } from "../auth";
+import { hasOrganization, useAuth } from "../auth";
 import { roleLabel } from "../lib/format";
 import { hasPermission, type Permission } from "../lib/permissions";
 import { ZidiCommerceLogo } from "./brand/ZidiCommerceLogo";
@@ -115,6 +115,7 @@ function pageMeta(pathname: string) {
 
 export function Shell() {
   const { user, logout } = useAuth();
+  const organizationReady = hasOrganization(user);
   const location = useLocation();
   const [fieldService, setFieldService] = useState(false);
   const [organizationName, setOrganizationName] = useState("");
@@ -126,9 +127,9 @@ export function Shell() {
       setFieldService(metadata.includes("field_service") || metadata.includes("handyman"));
       setOrganizationName(String(response.data.name ?? ""));
     }).catch(() => undefined);
-  }, []);
+  }, [user.organization_id]);
   useEffect(() => setMobileOpen(false), [location.pathname]);
-  const visibleGroups = groups
+  const visibleGroups = (organizationReady ? groups : [])
     .filter((group) => !group.roles || group.roles.includes(user.role))
     .filter((group) => !fieldService || group.label !== "Commerce")
     .map((group) => ({ ...group, items: group.items.filter((item) => (!item.roles || item.roles.includes(user.role)) && (!item.permission || hasPermission(user.role, item.permission))) }))
@@ -143,7 +144,7 @@ export function Shell() {
       {mobileOpen ? <button className="sidebar-scrim" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} /> : null}
       <aside className={mobileOpen ? "sidebar open" : "sidebar"} aria-label="Primary navigation">
         <div className="brand">
-          <ZidiCommerceLogo tone="light" subtitle={organizationName || "Merchant workspace"} />
+          <ZidiCommerceLogo tone="light" subtitle={organizationName || (organizationReady ? "Merchant workspace" : "Workspace setup")} />
           <IconButton className="sidebar-close" label="Close navigation" icon={X} onClick={() => setMobileOpen(false)} />
         </div>
 
@@ -171,7 +172,7 @@ export function Shell() {
             </div>
           </div>
           <div className="topbar-actions">
-            <div className="user-summary"><span>{String(user.email || roleLabel(user.role)).slice(0, 1).toUpperCase()}</span><div><strong>{user.email || "Signed in"}</strong><small>{roleLabel(user.role)}</small></div></div>
+            <div className="user-summary"><span>{String(user.email || roleLabel(user.role)).slice(0, 1).toUpperCase()}</span><div><strong>{user.email || "Signed in"}</strong><small>{organizationReady ? roleLabel(user.role) : "Account setup"}</small></div></div>
             <IconButton label="Log out" icon={LogOut} onClick={logout} />
           </div>
         </header>
