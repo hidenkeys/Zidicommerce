@@ -122,6 +122,9 @@ func (s *Service) CreateConnection(ctx context.Context, actor auth.CurrentUser, 
 		if err := tx.Create(&connection).Error; err != nil {
 			return err
 		}
+		if err := s.seedConnectionCapabilities(tx, connection); err != nil {
+			return err
+		}
 		return auditTx(tx, &actor.OrganizationID, &actor.ID, "channel_connection", &connection.ID, "channel_connection_created", map[string]any{"provider": provider, "ownership_model": ownership, "environment": environment})
 	}); err != nil {
 		return ConnectionView{}, err
@@ -485,7 +488,20 @@ func (s *Service) IncrementMetric(ctx context.Context, input MetricInput) (Metri
 }
 
 func (s *Service) connectionView(ctx context.Context, connection ChannelConnection) (ConnectionView, error) {
-	view := ConnectionView{ChannelConnection: connection, Capabilities: stringList(connection.Capabilities), HealthStatus: "not_checked", CredentialStatus: CredentialMissing}
+	capabilityStates, err := s.capabilityViews(ctx, connection.OrganizationID, connection.ID)
+	if err != nil {
+		return ConnectionView{}, err
+	}
+	enabled := []string{}
+	for _, capability := range capabilityStates {
+		if capability.Status == CapabilityAvailable {
+			enabled = append(enabled, capability.Capability)
+		}
+	}
+	if len(capabilityStates) == 0 {
+		enabled = stringList(connection.Capabilities)
+	}
+	view := ConnectionView{ChannelConnection: connection, Capabilities: enabled, CapabilityStates: capabilityStates, HealthStatus: "not_checked", CredentialStatus: CredentialMissing}
 	var latest HealthCheck
 	if err := s.db.WithContext(ctx).Where("organization_id = ? AND channel_connection_id = ?", connection.OrganizationID, connection.ID).Order("checked_at DESC").First(&latest).Error; err == nil {
 		view.HealthStatus = latest.Status
@@ -643,11 +659,13 @@ func normalizeCapabilities(values []string, provider string) ([]string, error) {
 	if len(values) == 0 {
 		switch provider {
 		case "whatsapp":
-			values = []string{"inbound_messages", "outbound_messages", "media", "templates", "delivery_receipts"}
+			values = []string{"inbound_text", "outbound_text", "inbound_media", "outbound_media", "interactive_messages", "templates", "read_receipts", "delivery_receipts", "commerce_actions", "human_handoff"}
 		case "instagram":
-			values = []string{"inbound_messages", "outbound_messages", "media"}
+			values = []string{}
+		case "facebook", "tiktok":
+			values = []string{}
 		case "web":
-			values = []string{"inbound_messages", "outbound_messages", "media", "analytics"}
+			values = []string{"inbound_text", "outbound_text", "inbound_media", "outbound_media"}
 		}
 	}
 	known := map[string]bool{}

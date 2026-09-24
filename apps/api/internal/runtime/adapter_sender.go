@@ -2,13 +2,24 @@ package runtime
 
 import (
 	"context"
+	"strings"
 
+	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/channelplatform"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 )
 
 type AdapterChannelSender struct {
-	sender channelplatform.OutboundSender
+	sender  channelplatform.OutboundSender
+	checker interface {
+		RequireCapability(context.Context, uuid.UUID, uuid.UUID, string) error
+	}
+}
+
+func NewCapabilityAwareAdapterChannelSender(sender channelplatform.OutboundSender, checker interface {
+	RequireCapability(context.Context, uuid.UUID, uuid.UUID, string) error
+}) *AdapterChannelSender {
+	return &AdapterChannelSender{sender: sender, checker: checker}
 }
 
 func NewAdapterChannelSender(sender channelplatform.OutboundSender) *AdapterChannelSender {
@@ -16,6 +27,17 @@ func NewAdapterChannelSender(sender channelplatform.OutboundSender) *AdapterChan
 }
 
 func (s *AdapterChannelSender) Send(ctx context.Context, channel core.Channel, recipient string, message OutboundMessage, _ map[string]any, idempotencyKey string) (ProviderSendResult, error) {
+	if s.checker != nil {
+		capability := "outbound_text"
+		if strings.TrimSpace(message.MediaURL) != "" {
+			capability = "outbound_media"
+		} else if len(message.Options) > 0 {
+			capability = "interactive_messages"
+		}
+		if err := s.checker.RequireCapability(ctx, channel.OrganizationID, channel.ID, capability); err != nil {
+			return ProviderSendResult{}, err
+		}
+	}
 	command := ChannelOutboundCommand(channel.Provider, channel.ID, nil, recipient, recipient, message, idempotencyKey)
 	result, err := s.sender.Send(ctx, command)
 	return ProviderSendResult{ProviderMessageID: result.ProviderMessageID, Response: result.ResponseMetadata}, err

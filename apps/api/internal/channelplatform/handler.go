@@ -21,6 +21,7 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) Register(router fiber.Router) {
+	router.Get("/channel-platform/providers", auth.RequirePermission(authz.PermissionChannelsView), h.listProviders)
 	router.Get("/channel-platform/connections", auth.RequirePermission(authz.PermissionChannelsView), h.listConnections)
 	router.Post("/channel-platform/connections", auth.RequirePermission(authz.PermissionChannelsManage), h.createConnection)
 	router.Get("/channel-platform/connections/:id", auth.RequirePermission(authz.PermissionChannelsView), h.getConnection)
@@ -31,6 +32,10 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Get("/channel-platform/connections/:id/events", auth.RequirePermission(authz.PermissionChannelsView), h.listEvents)
 	router.Get("/channel-platform/connections/:id/credentials", auth.RequirePermission(authz.PermissionChannelsView), h.listCredentials)
 	router.Post("/channel-platform/connections/:id/credentials", auth.RequirePermission(authz.PermissionChannelsManage), h.upsertCredential)
+}
+
+func (h *Handler) listProviders(c *fiber.Ctx) error {
+	return c.JSON(fiber.Map{"data": ProviderCatalog()})
 }
 
 func (h *Handler) listConnections(c *fiber.Ctx) error {

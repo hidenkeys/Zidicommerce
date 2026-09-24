@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -129,6 +130,30 @@ func TestAdapterChannelSenderMapsGenericRuntimeMessage(t *testing.T) {
 	if result.ProviderMessageID != "provider-1" || parent.command.Body != "Choose" || parent.command.IdempotencyKey != "delivery-1" || len(parent.command.Actions) != 1 || parent.command.Actions[0].ID != "buy" {
 		t.Fatalf("runtime sender lost provider-neutral command data: result=%+v command=%+v", result, parent.command)
 	}
+}
+
+func TestCapabilityAwareSenderBlocksUnsupportedMessageBeforeProviderCall(t *testing.T) {
+	parent := &recordingOutboundSender{}
+	checker := &recordingCapabilityChecker{err: errors.New("capability unavailable")}
+	sender := NewCapabilityAwareAdapterChannelSender(parent, checker)
+	channel := core.Channel{ID: uuid.New(), OrganizationID: uuid.New(), Provider: "tiktok"}
+	_, err := sender.Send(context.Background(), channel, "customer", OutboundMessage{Type: MessageText, Text: "Hello"}, nil, "delivery-unsupported")
+	if err == nil || checker.capability != "outbound_text" {
+		t.Fatalf("expected outbound text capability rejection, capability=%q err=%v", checker.capability, err)
+	}
+	if parent.command.ChannelConnectionID != uuid.Nil {
+		t.Fatal("provider sender must not be called for an unsupported capability")
+	}
+}
+
+type recordingCapabilityChecker struct {
+	capability string
+	err        error
+}
+
+func (c *recordingCapabilityChecker) RequireCapability(_ context.Context, _, _ uuid.UUID, capability string) error {
+	c.capability = capability
+	return c.err
 }
 
 type recordingOutboundSender struct {

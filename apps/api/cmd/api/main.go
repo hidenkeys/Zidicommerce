@@ -108,7 +108,7 @@ func main() {
 	botService.ConfigureJobs(jobService)
 	runtimeService := runtimeengine.NewService(db, commerceService, log)
 	runtimeService.ConfigureJobs(jobService)
-	runtimeService.RegisterChannelSender("whatsapp", runtimeengine.NewAdapterChannelSender(whatsAppAdapter))
+	runtimeService.RegisterChannelSender("whatsapp", runtimeengine.NewCapabilityAwareAdapterChannelSender(whatsAppAdapter, channelService))
 	aiModel := cfg.AI.Model
 	if aiModel == "" {
 		aiModel = cfg.AI.OllamaChatModel

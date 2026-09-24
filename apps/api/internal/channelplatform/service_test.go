@@ -32,6 +32,7 @@ func newChannelFixture(t *testing.T) channelFixture {
 		&organization.Organization{},
 		&organization.AuditLog{},
 		&ChannelConnection{},
+		&ChannelCapability{},
 		&ProviderAccount{},
 		&ChannelIdentity{},
 		&CredentialReference{},

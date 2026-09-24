@@ -36,13 +36,32 @@ const (
 )
 
 var KnownCapabilities = []string{
-	"inbound_messages",
-	"outbound_messages",
-	"media",
+	"oauth_onboarding",
+	"inbound_text",
+	"outbound_text",
+	"inbound_media",
+	"outbound_media",
+	"interactive_messages",
 	"templates",
+	"message_reactions",
+	"read_receipts",
 	"delivery_receipts",
-	"analytics",
+	"comments",
+	"content_publishing",
+	"profile_read",
+	"commerce_actions",
+	"human_handoff",
 }
+
+const (
+	CapabilityAvailable                = "available"
+	CapabilitySetupRequired            = "setup_required"
+	CapabilityAwaitingPermissionReview = "awaiting_permission_review"
+	CapabilityMissingPermission        = "missing_permission"
+	CapabilityRestricted               = "restricted"
+	CapabilityUnsupported              = "unsupported_by_provider"
+	CapabilityUnverified               = "unverified"
+)
 
 // ChannelConnection intentionally maps to the existing channels table so
 // conversation and outbound-message foreign keys remain stable.
@@ -63,6 +82,23 @@ type ChannelConnection struct {
 }
 
 func (ChannelConnection) TableName() string { return "channels" }
+
+type ChannelCapability struct {
+	ID             uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	OrganizationID uuid.UUID  `gorm:"type:uuid;index;uniqueIndex:idx_channel_capability" json:"organization_id"`
+	ConnectionID   uuid.UUID  `gorm:"column:channel_connection_id;type:uuid;index;uniqueIndex:idx_channel_capability" json:"channel_connection_id"`
+	Provider       string     `json:"provider"`
+	Capability     string     `gorm:"uniqueIndex:idx_channel_capability" json:"capability"`
+	Status         string     `json:"status"`
+	Reason         string     `json:"reason"`
+	RequiredScopes string     `json:"-"`
+	GrantedScopes  string     `json:"-"`
+	VerifiedAt     *time.Time `json:"verified_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+func (ChannelCapability) TableName() string { return "channel_capabilities" }
 
 type ProviderAccount struct {
 	ID                uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`

@@ -48,10 +48,34 @@ type CredentialReferenceView struct {
 
 type ConnectionView struct {
 	ChannelConnection
-	Capabilities     []string `json:"capabilities"`
-	HealthStatus     string   `json:"health_status"`
-	CredentialStatus string   `json:"credential_status"`
-	IdentityCount    int      `json:"identity_count"`
+	Capabilities     []string         `json:"capabilities"`
+	CapabilityStates []CapabilityView `json:"capability_states"`
+	HealthStatus     string           `json:"health_status"`
+	CredentialStatus string           `json:"credential_status"`
+	IdentityCount    int              `json:"identity_count"`
+}
+
+type CapabilityView struct {
+	Capability     string     `json:"capability"`
+	Status         string     `json:"status"`
+	Reason         string     `json:"reason,omitempty"`
+	RequiredScopes []string   `json:"required_scopes"`
+	GrantedScopes  []string   `json:"granted_scopes"`
+	MissingScopes  []string   `json:"missing_scopes"`
+	VerifiedAt     *time.Time `json:"verified_at,omitempty"`
+}
+
+type ProviderCapabilityView struct {
+	Capability     string   `json:"capability"`
+	Support        string   `json:"support"`
+	RequiredScopes []string `json:"required_scopes"`
+	Reason         string   `json:"reason,omitempty"`
+}
+
+type ProviderDefinitionView struct {
+	Provider     string                   `json:"provider"`
+	DisplayName  string                   `json:"display_name"`
+	Capabilities []ProviderCapabilityView `json:"capabilities"`
 }
 
 type ConnectionDetail struct {
