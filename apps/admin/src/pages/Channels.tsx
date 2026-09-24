@@ -1,8 +1,9 @@
 import { FormEvent, useEffect, useState, type ComponentType } from "react";
-import { Activity, Archive, Camera, Check, Clipboard, Globe2, Headphones, KeyRound, Link2, MessageCircle, Pencil, Plus, RefreshCw, Send, ShieldCheck, Unplug, X, type LucideProps } from "lucide-react";
+import { Activity, Archive, Camera, Check, Clipboard, Headphones, KeyRound, Link2, MessageCircle, MessageSquareText, Music2, Pencil, Plus, RefreshCw, Send, ShieldCheck, Unplug, X, type LucideProps } from "lucide-react";
 import { API_BASE_URL, apiDelete, apiGet, apiPatch, apiPost } from "../api/client";
 import { useAuth } from "../auth";
 import { Badge, Button, Card, ConfirmButton, EmptyState, Flash, FormGrid, IconButton, LoadingState, Metric, Modal, Page, SectionHeader } from "../components/ui";
+import { OAuthChannelPanel, oauthConnectionFromSession, type ChannelCapabilityState, type OAuthChannelDetail } from "../components/channels/OAuthChannelPanel";
 import { humanStatus, maskPhone, relativeTime } from "../lib/format";
 import { launchMetaEmbeddedSignup, type MetaSignupLaunch } from "../lib/metaEmbeddedSignup";
 import { hasPermission } from "../lib/permissions";
@@ -15,6 +16,7 @@ type ChannelConnection = {
   ownership_model: string;
   environment: string;
   capabilities: string[];
+  capability_states: ChannelCapabilityState[];
   health_status: string;
   credential_status: string;
   identity_count: number;
@@ -30,6 +32,8 @@ type HealthSummary = { status: string; last_check?: HealthCheck; healthy_count: 
 type MetricsSummary = { inbound_count: number; outbound_count: number; failed_outbound_count: number; delivered_count: number; conversations_started: number; conversations_human_handled: number; conversations_ai_handled: number; average_response_ms: number; provider_error_count: number; days: number };
 type ProviderEvent = { id: string; event_type: string; normalized_status: string; received_at: string; processing_error?: string };
 type ConnectionDetail = { connection: ChannelConnection; provider_accounts: ProviderAccount[]; identities: ChannelIdentity[]; credentials: Credential[]; health: HealthSummary; metrics: MetricsSummary };
+type ProviderCapability = { capability: string; support: string; required_scopes: string[]; reason?: string };
+type ProviderCatalogEntry = { provider: string; display_name: string; capabilities: ProviderCapability[] };
 type WhatsAppCredential = { credential_type: string; status: string; configured: boolean; resolvable: boolean; reference_type?: string; resolution_problem?: string };
 type WhatsAppChecklist = {
   phone_identity_configured: boolean;
@@ -108,13 +112,13 @@ type ProviderDefinition = {
   label: string;
   description: string;
   icon: ComponentType<LucideProps>;
-  meta: boolean;
 };
 
 const providers: ProviderDefinition[] = [
-  { key: "whatsapp", label: "WhatsApp", description: "Customer messaging, commerce conversations, and human support.", icon: MessageCircle, meta: true },
-  { key: "instagram", label: "Instagram", description: "Direct-message conversations connected to the same customer workspace.", icon: Camera, meta: true },
-  { key: "web", label: "Web chat", description: "A future website widget using the same conversation and assistant runtime.", icon: Globe2, meta: false },
+  { key: "whatsapp", label: "WhatsApp", description: "Customer messaging, commerce conversations, and human support.", icon: MessageCircle },
+  { key: "instagram", label: "Instagram", description: "Professional-account Direct messages through the shared Zidi conversation runtime.", icon: Camera },
+  { key: "facebook", label: "Facebook Messenger", description: "Customer conversations for an explicitly selected Facebook Page.", icon: MessageSquareText },
+  { key: "tiktok", label: "TikTok", description: "Official Login Kit profile connection. Customer messaging is unavailable.", icon: Music2 },
 ];
 
 const emptyWhatsAppForm: WhatsAppForm = {
@@ -146,6 +150,17 @@ function badgeTone(status: string): "neutral" | "success" | "warning" | "danger"
   return "neutral";
 }
 
+function providerAvailability(provider: ProviderDefinition, catalog?: ProviderCatalogEntry) {
+  if (provider.key === "whatsapp") return { label: "Available", tone: "success" as const };
+  if (provider.key === "tiktok") return { label: "Profile only", tone: "info" as const };
+  const requiresReview = catalog?.capabilities.some((capability) => capability.support === "review_required");
+  return requiresReview ? { label: "Review required", tone: "warning" as const } : { label: "Available", tone: "success" as const };
+}
+
+function providerLabel(provider: string) {
+  return providers.find((item) => item.key === provider)?.label || humanStatus(provider);
+}
+
 function ReadinessItem({ complete, label }: { complete: boolean; label: string }) {
   return <div className={complete ? "whatsapp-check complete" : "whatsapp-check"}>{complete ? <Check size={16} aria-hidden="true" /> : <X size={16} aria-hidden="true" />}<span>{label}</span></div>;
 }
@@ -154,7 +169,8 @@ export function ChannelsPage() {
   const { user } = useAuth();
   const canManage = hasPermission(user.role, "channels.manage");
   const [connections, setConnections] = useState<ChannelConnection[]>([]);
-  const [selectedID, setSelectedID] = useState("");
+  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
+  const [selectedID, setSelectedID] = useState(() => oauthConnectionFromSession());
   const [detail, setDetail] = useState<ConnectionDetail | null>(null);
   const [events, setEvents] = useState<ProviderEvent[]>([]);
   const [whatsApp, setWhatsApp] = useState<WhatsAppConfiguration | null>(null);
@@ -181,8 +197,12 @@ export function ChannelsPage() {
 
   async function loadConnections(preferredID?: string) {
     try {
-      const response = await apiGet<ChannelConnection[]>("/channel-platform/connections");
+      const [response, catalogResponse] = await Promise.all([
+        apiGet<ChannelConnection[]>("/channel-platform/connections"),
+        apiGet<ProviderCatalogEntry[]>("/channel-platform/providers"),
+      ]);
       setConnections(response.data);
+      setProviderCatalog(catalogResponse.data);
       const nextID = preferredID || selectedID || response.data[0]?.id || "";
       setSelectedID(nextID);
       setMessage("");
@@ -567,27 +587,28 @@ export function ChannelsPage() {
     <Page
       title="Channels"
       description="Customer touchpoints connected to Zidi's shared conversation and operations platform."
-      help="WhatsApp uses Meta's official authorization flow. Zidi manages the connection, messaging runtime, health, and activity after authorization."
+      help="Each provider keeps its own identity, permissions, credentials, health, and policy while sharing Zidi's conversations, AI, commerce, and handoff runtime."
       actions={canManage ? <Button icon={Plus} className="primary" onClick={() => beginCreate(providers[0])}>Add setup record</Button> : undefined}
     >
       <Flash message={message} />
       <Flash message={success} tone="success" />
 
-      <SectionHeader title="Channel availability" description="WhatsApp is available now. Instagram and web chat remain disabled." />
+      <SectionHeader title="Channel availability" description="Provider access, granted permissions, and account readiness determine which actions are enabled." />
       <div className="channel-provider-grid">
         {providers.map((provider) => {
           const Icon = provider.icon;
+          const catalog = providerCatalog.find((item) => item.provider === provider.key);
+          const availability = providerAvailability(provider, catalog);
           const providerConnections = connections.filter((connection) => connection.provider === provider.key && connection.status !== "archived");
           const best = providerConnections.find((connection) => ["active", "connected", "healthy"].includes(connection.status)) || providerConnections[0];
           return (
             <Card key={provider.key} className="channel-provider-card">
-              <div className="channel-provider-heading"><span className="channel-provider-icon"><Icon size={20} aria-hidden="true" /></span><Badge tone={best ? badgeTone(best.status) : "neutral"}>{best ? humanStatus(best.status) : "Not connected"}</Badge></div>
+              <div className="channel-provider-heading"><span className="channel-provider-icon"><Icon size={20} aria-hidden="true" /></span><span className="channel-provider-badges"><Badge tone={availability.tone}>{availability.label}</Badge><Badge tone={best ? badgeTone(best.status) : "neutral"}>{best ? humanStatus(best.status) : "Not connected"}</Badge></span></div>
               <h3>{provider.label}</h3>
               <p>{provider.description}</p>
-              <small>{providerConnections.length ? `${providerConnections.length} setup record${providerConnections.length === 1 ? "" : "s"}` : "No setup record"}</small>
+              <small>{catalog ? `${catalog.capabilities.filter((capability) => capability.support !== "unavailable").length} documented capabilities` : "Loading provider capabilities"}</small>
               <div className="channel-provider-actions">
-                {provider.key === "whatsapp" ? (best ? <Button icon={KeyRound} onClick={() => setSelectedID(best.id)}>Configure WhatsApp</Button> : canManage ? <Button icon={Plus} onClick={() => beginCreate(provider)}>Prepare WhatsApp</Button> : null) : canManage ? <Button icon={Plus} onClick={() => beginCreate(provider)}>Prepare setup</Button> : null}
-                {provider.key !== "whatsapp" ? <button type="button" disabled title="This provider adapter is not enabled">Provider unavailable</button> : null}
+                {best ? <Button icon={KeyRound} onClick={() => setSelectedID(best.id)}>{best.status === "connected" ? "Manage connection" : "Resume setup"}</Button> : canManage ? <Button icon={Plus} onClick={() => beginCreate(provider)}>Connect {provider.label}</Button> : null}
               </div>
             </Card>
           );
@@ -603,7 +624,7 @@ export function ChannelsPage() {
             <div className="channel-list-heading"><strong>{activeConnections.length} active setup record{activeConnections.length === 1 ? "" : "s"}</strong><span>{connections.length - activeConnections.length} archived</span></div>
             {connections.map((connection) => (
               <button key={connection.id} type="button" className={`channel-list-item ${selectedID === connection.id ? "selected" : ""}`} onClick={() => setSelectedID(connection.id)}>
-                <span><strong>{connection.display_name}</strong><small>{humanStatus(connection.provider)} · {humanStatus(connection.ownership_model)}</small></span>
+                <span><strong>{connection.display_name}</strong><small>{providerLabel(connection.provider)} · {humanStatus(connection.ownership_model)}</small></span>
                 <Badge tone={badgeTone(connection.status)}>{humanStatus(connection.status)}</Badge>
               </button>
             ))}
@@ -612,7 +633,7 @@ export function ChannelsPage() {
           <div className="channel-detail-stack">
             {detailLoading ? <Card><LoadingState label="Loading channel details" /></Card> : !detail || !selected ? <Card><EmptyState title="Select a connection" body="Review setup ownership, health, metrics, identities, and provider events." /></Card> : <>
               <Card>
-                <SectionHeader title={selected.display_name} description={`${humanStatus(selected.provider)} connection foundation`} action={<Button icon={RefreshCw} onClick={() => void loadDetail(selected.id)}>Refresh</Button>} />
+                <SectionHeader title={selected.display_name} description={`${providerLabel(selected.provider)} connection foundation`} action={<Button icon={RefreshCw} onClick={() => void loadDetail(selected.id)}>Refresh</Button>} />
                 <div className="channel-status-row">
                   <Badge tone={badgeTone(selected.status)}>{humanStatus(selected.status)}</Badge>
                   <Badge tone={badgeTone(selected.health_status)}>{humanStatus(selected.health_status)}</Badge>
@@ -624,7 +645,7 @@ export function ChannelsPage() {
                   <div><span>Identities</span><strong>{selected.identity_count}</strong></div>
                   <div><span>Last health check</span><strong>{selected.last_health_check_at ? relativeTime(selected.last_health_check_at) : "Not checked"}</strong></div>
                 </div>
-                <div className="capability-list">{selected.capabilities.length ? selected.capabilities.map((capability) => <Badge key={capability} tone="info">{humanStatus(capability)}</Badge>) : <span className="muted">No provider capabilities declared.</span>}</div>
+                <div className="capability-list">{selected.capabilities.length ? selected.capabilities.map((capability) => <Badge key={capability} tone="info">{humanStatus(capability).replace(/^Oauth\b/, "OAuth")}</Badge>) : selected.capability_states.length ? <span className="muted">{selected.capability_states.length} provider capabilities tracked; review their readiness below.</span> : <span className="muted">Capability records have not been initialized.</span>}</div>
               </Card>
 
               {selected.provider === "whatsapp" && whatsApp ? <Card className="whatsapp-setup-panel">
@@ -753,6 +774,27 @@ export function ChannelsPage() {
                   {selected.status === "disconnected" ? <Button icon={RefreshCw} loading={saving} onClick={() => void setConnectionStatus("connecting")}>Reconnect</Button> : ["connected", "healthy", "degraded", "requires_attention"].includes(selected.status) ? <Button icon={Unplug} loading={saving} onClick={() => void setConnectionStatus("disconnected")}>Disconnect</Button> : null}
                 </div> : null}
                 {!canManage ? <p className="read-only-note">WhatsApp onboarding is read-only for your role.</p> : null}
+              </Card> : null}
+
+              {["instagram", "facebook", "tiktok"].includes(selected.provider) ? <Card>
+                <OAuthChannelPanel
+                  detail={detail as OAuthChannelDetail}
+                  events={events}
+                  canManage={canManage}
+                  onChanged={async () => {
+                    await loadConnections(selected.id);
+                    await loadDetail(selected.id);
+                  }}
+                  onMessage={(value, succeeded) => {
+                    if (succeeded) {
+                      setMessage("");
+                      setSuccess(value);
+                    } else {
+                      setSuccess("");
+                      setMessage(value);
+                    }
+                  }}
+                />
               </Card> : null}
 
               <div className="metrics compact-metrics" id={selected.provider === "whatsapp" ? "whatsapp-analytics" : undefined}>

@@ -8,7 +8,7 @@
 /* Phase J channel platform */
 .channel-provider-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 28px;
 }
@@ -48,6 +48,13 @@
 
 .channel-provider-heading {
   justify-content: space-between;
+}
+
+.channel-provider-badges {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .channel-provider-icon {
@@ -224,6 +231,176 @@
 
 .channel-identity-list {
   display: grid;
+}
+
+.oauth-channel-panel,
+.oauth-assets,
+.oauth-capabilities {
+  display: grid;
+  gap: 16px;
+}
+
+.channel-limit-notice,
+.oauth-connect-row,
+.oauth-test-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+}
+
+.channel-limit-notice {
+  grid-template-columns: auto minmax(0, 1fr);
+  border-color: #f0c36a;
+  background: #fff9eb;
+  color: #7a4d00;
+}
+
+.channel-limit-notice > div,
+.oauth-connect-row > div,
+.oauth-test-row > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.channel-limit-notice span,
+.oauth-connect-row span,
+.oauth-test-row span {
+  color: var(--ink-subtle);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.oauth-progress {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.oauth-progress li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--ink-muted);
+}
+
+.oauth-progress li > span {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.oauth-progress li.complete {
+  color: var(--ink);
+}
+
+.oauth-progress li.complete > span {
+  border-color: #5c9a78;
+  background: #eaf6ef;
+  color: #17603a;
+}
+
+.oauth-progress small {
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
+.oauth-asset-list,
+.oauth-capabilities {
+  border-top: 1px solid var(--line);
+}
+
+.oauth-asset-row,
+.oauth-capability-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.oauth-asset-row > span,
+.oauth-capability-row > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.oauth-asset-row small,
+.oauth-capability-row small {
+  color: var(--ink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.oauth-asset-row p,
+.oauth-scope-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.oauth-account-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--line);
+}
+
+.oauth-account-summary > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+  background: var(--surface);
+}
+
+.oauth-account-summary span {
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.oauth-account-summary strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.oauth-connection-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.oauth-denied-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
 }
 
 .whatsapp-setup-panel {
@@ -672,6 +849,10 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
     row-gap: 12px;
   }
+
+  .oauth-progress {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -683,8 +864,23 @@
   .whatsapp-checklist,
   .whatsapp-timestamps,
   .whatsapp-credential-status,
-  .whatsapp-connected-summary {
+  .whatsapp-connected-summary,
+  .oauth-account-summary,
+  .oauth-progress {
     grid-template-columns: 1fr;
+  }
+
+  .channel-limit-notice,
+  .oauth-connect-row,
+  .oauth-test-row {
+    align-items: flex-start;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .oauth-connect-row > button,
+  .oauth-test-row > button {
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .whatsapp-state-banner,
