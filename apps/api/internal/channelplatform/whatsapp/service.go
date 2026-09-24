@@ -229,7 +229,7 @@ func (s *Service) EvaluateHealth(ctx context.Context, actor auth.CurrentUser, co
 	if view.RateLimitedUntil != nil && view.RateLimitedUntil.After(s.now()) {
 		issues = append(issues, "provider_rate_limited")
 	}
-	if view.LastSignatureRejectedAt != nil && (view.LastSignatureVerifiedAt == nil || view.LastSignatureRejectedAt.After(*view.LastSignatureVerifiedAt)) {
+	if view.LastSignatureRejectedAt != nil && view.LastSignatureVerifiedAt == nil {
 		issues = append(issues, "signature_verification_failed")
 	}
 	status := channelplatform.HealthHealthy
@@ -450,15 +450,21 @@ func (s *Service) configurationView(ctx context.Context, connection channelplatf
 		AppSecretConfigured:     configured[CredentialAppSecret],
 		VerifyTokenConfigured:   configured[CredentialVerifyToken],
 		WebhookVerified:         configuration.WebhookStatus == WebhookVerified,
-		SignatureVerified:       configuration.LastSignatureVerifiedAt != nil && (configuration.LastSignatureRejectedAt == nil || !configuration.LastSignatureRejectedAt.After(*configuration.LastSignatureVerifiedAt)),
+		SignatureVerified:       configuration.LastSignatureVerifiedAt != nil,
 		TestMessageSent:         configuration.LastTestMessageAt != nil,
-		InboundTestReceived:     configuration.LastInboundTestAt != nil,
+		InboundTestReceived:     hasVerifiedInboundSetupEvidence(configuration),
 	}
 	checklist.ReadyForInbound = checklist.PhoneIdentityConfigured && checklist.AppSecretConfigured && checklist.VerifyTokenConfigured && checklist.WebhookVerified
 	checklist.ReadyForOutbound = checklist.PhoneIdentityConfigured && checklist.AccessTokenConfigured
 	checklist.TestMessageReady = checklist.ReadyForInbound && checklist.ReadyForOutbound
 	checklist.ReadyToComplete = checklist.TestMessageReady && checklist.TestMessageSent && checklist.InboundTestReceived && checklist.SignatureVerified
 	configuration.SetupState = deriveSetupState(configuration, connection, checklist, credentials)
+	var rejectedSignatureCount int64
+	if err := s.db.WithContext(ctx).Model(&channelplatform.ProviderEvent{}).
+		Where("organization_id = ? AND channel_connection_id = ? AND event_type = ? AND normalized_status = ?", connection.OrganizationID, connection.ID, "webhook_rejected", "rejected").
+		Count(&rejectedSignatureCount).Error; err != nil {
+		return ConfigurationView{}, err
+	}
 	signatureStatus := "not_observed"
 	if checklist.SignatureVerified {
 		signatureStatus = "verified"
@@ -471,11 +477,15 @@ func (s *Service) configurationView(ctx context.Context, connection channelplatf
 	}
 	return ConfigurationView{
 		Configuration: configuration, Connection: connection, Credentials: credentials, Checklist: checklist,
-		WebhookCallbackURL: s.configurationWebhookCallbackURL(configuration), SignatureStatus: signatureStatus,
+		WebhookCallbackURL: s.configurationWebhookCallbackURL(configuration), SignatureStatus: signatureStatus, RejectedSignatureCount: rejectedSignatureCount,
 		NextAction: nextSetupAction(configuration.SetupState), OperationalEvents: events,
 		LegacyCredentialsFound: legacy, EncryptedStorageEnabled: s.encrypted != nil,
 		EmbeddedSignupAvailable: s.embeddedSignupAvailable(),
 	}, nil
+}
+
+func hasVerifiedInboundSetupEvidence(configuration Configuration) bool {
+	return configuration.LastInboundTestAt != nil || (configuration.LastInboundAt != nil && configuration.LastSignatureVerifiedAt != nil)
 }
 
 func (s *Service) saveCredentialInput(ctx context.Context, actor auth.CurrentUser, connectionID uuid.UUID, credentialType string, reference, value *string) error {

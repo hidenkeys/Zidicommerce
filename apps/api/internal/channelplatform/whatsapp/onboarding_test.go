@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -90,6 +91,63 @@ func TestPhaseLOnboardingLifecycleAndControlledMessageFlow(t *testing.T) {
 	health, err := fx.service.EvaluateHealth(context.Background(), fx.actor, fx.connection.ID)
 	if err != nil || health.Status != channelplatform.HealthHealthy || health.SetupState != SetupHealthy {
 		t.Fatalf("final health check did not finish onboarding: %+v err=%v", health, err)
+	}
+}
+
+func TestRejectedSignatureIsSecurityEvidenceNotReadinessRegression(t *testing.T) {
+	fx := newWhatsAppFixture(t)
+	configured := configureWhatsApp(t, fx)
+	if err := fx.service.MarkWebhookVerified(context.Background(), configured.Configuration); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.service.MarkSignatureVerified(context.Background(), configured.Configuration); err != nil {
+		t.Fatal(err)
+	}
+	fx.service.now = func() time.Time { return time.Date(2026, 8, 28, 14, 1, 0, 0, time.UTC) }
+
+	handler := NewHandler(fx.service, fx.platform, fx.adapter, &recordingProcessor{})
+	app := fiber.New(fiber.Config{ErrorHandler: httperror.Handler})
+	handler.RegisterPublic(app)
+	body := []byte(textWebhook(configured.PhoneNumberID, "wamid-invalid-signature", "Rejected"))
+	request := httptest.NewRequest(http.MethodPost, "/runtime/webhooks/whatsapp", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Hub-Signature-256", "sha256=invalid")
+	response, err := app.Test(request)
+	if err != nil || response.StatusCode != http.StatusForbidden {
+		t.Fatalf("invalid signature was not rejected: status=%d err=%v", response.StatusCode, err)
+	}
+
+	view, err := fx.service.GetConfiguration(context.Background(), fx.actor, fx.connection.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.SignatureStatus != "verified" || !view.Checklist.SignatureVerified || view.LastSignatureRejectedAt == nil || view.RejectedSignatureCount != 1 {
+		t.Fatalf("rejected attempt erased valid signature evidence: status=%q checklist=%+v rejected=%d", view.SignatureStatus, view.Checklist, view.RejectedSignatureCount)
+	}
+	health, err := fx.service.EvaluateHealth(context.Background(), fx.actor, fx.connection.ID)
+	if err != nil || health.Status != channelplatform.HealthHealthy || containsString(health.Issues, "signature_verification_failed") {
+		t.Fatalf("security rejection poisoned channel health: %+v err=%v", health, err)
+	}
+}
+
+func TestCompletedHealthySetupSupersedesHistoricalTestFailure(t *testing.T) {
+	configuration := Configuration{ID: uuid.New(), SetupState: SetupRequiresAttention, LastTestMessageError: "historical test failure"}
+	connection := channelplatform.ConnectionView{ChannelConnection: channelplatform.ChannelConnection{Status: channelplatform.StatusHealthy}}
+	checklist := SetupChecklist{ReadyToComplete: true}
+	if state := deriveSetupState(configuration, connection, checklist, nil); state != SetupHealthy {
+		t.Fatalf("expected completed healthy setup, got %q", state)
+	}
+}
+
+func TestVerifiedProviderInboundSatisfiesLegacySetupEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 28, 14, 2, 0, 0, time.UTC)
+	configuration := Configuration{LastInboundAt: &now, LastSignatureVerifiedAt: &now}
+	if !hasVerifiedInboundSetupEvidence(configuration) {
+		t.Fatal("expected a signed provider inbound to satisfy setup evidence")
+	}
+	configuration.LastSignatureVerifiedAt = nil
+	if hasVerifiedInboundSetupEvidence(configuration) {
+		t.Fatal("unsigned inbound activity must not satisfy setup evidence")
 	}
 }
 

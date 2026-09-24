@@ -64,6 +64,7 @@ type WhatsAppConfiguration = {
   setup_state: string;
   webhook_callback_url: string;
   signature_status: string;
+  rejected_signature_count: number;
   next_action: string;
   last_webhook_verified_at?: string;
   last_webhook_verification_attempt_at?: string;
@@ -704,7 +705,7 @@ export function ChannelsPage() {
                   <SectionHeader title="Webhooks" description={whatsApp.connection_method === "embedded_signup" ? "Zidi subscribes the authorized account to its shared Meta app webhook" : "Manual connections retain their connection-specific callback"} />
                   <div className="whatsapp-webhook-row"><span><small>Callback URL</small><code>{webhookURL}</code></span><IconButton label="Copy webhook URL" icon={Clipboard} onClick={() => void copyWebhookURL()} /></div>
                   <div className="whatsapp-checklist"><ReadinessItem complete={whatsApp.checklist.verify_token_configured} label="Verification configured" /><ReadinessItem complete={whatsApp.checklist.webhook_verified} label="WABA subscribed" /><ReadinessItem complete={whatsApp.checklist.signature_verified} label="Signed event observed" /></div>
-                  <div className="whatsapp-timestamps"><span><small>Last verification</small><strong>{whatsApp.last_webhook_verification_attempt_at ? relativeTime(whatsApp.last_webhook_verification_attempt_at) : "Not attempted"}</strong></span><span><small>Last signed webhook</small><strong>{whatsApp.last_signature_verified_at ? relativeTime(whatsApp.last_signature_verified_at) : "Not observed"}</strong></span><span><small>Last inbound event</small><strong>{whatsApp.last_inbound_at ? relativeTime(whatsApp.last_inbound_at) : "None"}</strong></span></div>
+                  <div className="whatsapp-timestamps"><span><small>Last verification</small><strong>{whatsApp.last_webhook_verification_attempt_at ? relativeTime(whatsApp.last_webhook_verification_attempt_at) : "Not attempted"}</strong></span><span><small>Last valid signed webhook</small><strong>{whatsApp.last_signature_verified_at ? relativeTime(whatsApp.last_signature_verified_at) : "Not observed"}</strong></span><span><small>Last rejected attempt</small><strong>{whatsApp.last_signature_rejected_at ? relativeTime(whatsApp.last_signature_rejected_at) : "None"}</strong></span><span><small>Rejected attempts</small><strong>{whatsApp.rejected_signature_count || 0}</strong></span><span><small>Last inbound event</small><strong>{whatsApp.last_inbound_at ? relativeTime(whatsApp.last_inbound_at) : "None"}</strong></span></div>
                 </section>
 
                 <section className="whatsapp-stage" id="whatsapp-messaging">

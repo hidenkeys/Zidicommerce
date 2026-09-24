@@ -299,7 +299,7 @@ func deriveSetupState(configuration Configuration, connection channelplatform.Co
 	if configuration.WebhookStatus == WebhookFailed {
 		return SetupWebhookFailed
 	}
-	if configuration.LastTestMessageError != "" {
+	if configuration.LastTestMessageError != "" && !checklist.ReadyToComplete {
 		return SetupRequiresAttention
 	}
 	if connection.Status == channelplatform.StatusRequiresAttention && configuration.SetupState != SetupConnected && configuration.SetupState != SetupHealthy {
@@ -324,13 +324,39 @@ func deriveSetupState(configuration Configuration, connection channelplatform.Co
 	if checklist.InboundTestReceived {
 		state = SetupInboundTestReceived
 	}
-	if checklist.ReadyToComplete && (configuration.SetupState == SetupConnected || configuration.SetupState == SetupHealthy) {
-		state = configuration.SetupState
+	if checklist.ReadyToComplete && setupWasCompleted(configuration.SetupState) {
+		if configuration.SetupState == SetupConnected {
+			state = SetupConnected
+		} else {
+			switch connection.Status {
+			case channelplatform.StatusHealthy:
+				state = SetupHealthy
+			case channelplatform.StatusConnected:
+				state = SetupConnected
+			case channelplatform.StatusDegraded:
+				state = SetupDegraded
+			case channelplatform.StatusRequiresAttention:
+				state = SetupRequiresAttention
+			default:
+				if configuration.SetupState == SetupHealthy {
+					state = SetupHealthy
+				}
+			}
+		}
 	}
 	if state == SetupHealthy && connection.Status == channelplatform.StatusDegraded {
 		return SetupDegraded
 	}
 	return state
+}
+
+func setupWasCompleted(state string) bool {
+	switch state {
+	case SetupConnected, SetupHealthy, SetupDegraded, SetupRequiresAttention:
+		return true
+	default:
+		return false
+	}
 }
 
 func nextSetupAction(state string) string {

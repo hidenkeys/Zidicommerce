@@ -166,6 +166,7 @@ type ConfigurationView struct {
 	Checklist               SetupChecklist                 `json:"checklist"`
 	WebhookCallbackURL      string                         `json:"webhook_callback_url"`
 	SignatureStatus         string                         `json:"signature_status"`
+	RejectedSignatureCount  int64                          `json:"rejected_signature_count"`
 	NextAction              string                         `json:"next_action"`
 	OperationalEvents       []OperationalEvent             `json:"operational_events"`
 	LegacyCredentialsFound  bool                           `json:"legacy_credentials_found"`
