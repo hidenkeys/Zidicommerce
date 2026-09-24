@@ -4,6 +4,22 @@ This plan extends the channel platform without creating provider-specific
 conversation, AI, commerce, or handoff systems. Each slice is independently
 testable and should be committed before the next slice starts.
 
+## Implementation status
+
+| Slice | Status | Evidence |
+| --- | --- | --- |
+| R0.1 capability model | Complete | Provider catalog, resolved tenant capability rows, runtime guard, migration `000028` |
+| R0.2 shared OAuth | Complete | State/PKCE, encrypted grants, asset selection, refresh/revoke/disconnect, migration `000029` |
+| R0.3 Instagram | Implemented; provider access blocked | Official OAuth client, webhook adapter, runtime sender, tests; Meta products/Advanced Access still required |
+| R0.4 Facebook Messenger | Implemented; provider access blocked | Page discovery/selection, subscription, webhook adapter, runtime sender, tests; Meta products/Advanced Access still required |
+| R0.5 TikTok | Complete for verified public scope | Login Kit/profile lifecycle only; messaging is explicitly unsupported, migration `000031` |
+| R0.6 admin experience | Complete | Four providers, OAuth callback/asset selection, capabilities, health, recovery, responsive QA |
+| R0.7 integration/docs | Complete for automated scope | Shared AI/handoff and isolation tests, empty-PostgreSQL migration test, setup and operations guides |
+
+No staging or production deployment was performed. Live Meta message validation
+remains blocked by missing products and Advanced Access, and the TikTok developer
+application remains unverified in an authenticated portal session.
+
 ## Architecture decisions
 
 1. Keep `channelplatform.Adapter` as the message translation boundary and add a
@@ -136,4 +152,3 @@ or designated test assets and are reported separately from automated results.
   available session requires login.
 - No external provider setting will be changed and no staging deployment will be
   performed in Phase R0 without a separate, explicit validation step.
-
