@@ -14,6 +14,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/channelplatform"
 	metaadapter "github.com/hidenkeys/zidicommerce/apps/api/internal/channelplatform/meta"
+	tiktokadapter "github.com/hidenkeys/zidicommerce/apps/api/internal/channelplatform/tiktok"
 	whatsappadapter "github.com/hidenkeys/zidicommerce/apps/api/internal/channelplatform/whatsapp"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/config"
@@ -88,6 +89,10 @@ func main() {
 		if client.Enabled() {
 			oauthService.RegisterClient(client)
 		}
+	}
+	tikTokOAuthClient := tiktokadapter.NewOAuthClient(tiktokadapter.OAuthConfig{ClientKey: cfg.Channels.TikTokClientKey, ClientSecret: cfg.Channels.TikTokClientSecret, AuthorizeURL: cfg.Channels.TikTokAuthorizeURL, APIBaseURL: cfg.Channels.TikTokAPIBaseURL, VerifiedAccess: cfg.Channels.TikTokVerifiedAccess}, nil)
+	if tikTokOAuthClient.Enabled() {
+		oauthService.RegisterClient(tikTokOAuthClient)
 	}
 	whatsAppService := whatsappadapter.NewService(db, channelService, channelSecretResolver, channelSecretStore)
 	whatsAppService.ConfigureWebhookPublicBaseURL(cfg.Channels.WhatsAppWebhookPublicBaseURL)

@@ -98,6 +98,11 @@ type ChannelConfig struct {
 	InstagramOAuthBaseURL        string
 	InstagramAPIOAuthBaseURL     string
 	InstagramGraphBaseURL        string
+	TikTokClientKey              string
+	TikTokClientSecret           string
+	TikTokAuthorizeURL           string
+	TikTokAPIBaseURL             string
+	TikTokVerifiedAccess         bool
 }
 
 type EmailConfig struct {
@@ -180,6 +185,11 @@ func Load() (Config, error) {
 			InstagramOAuthBaseURL:        strings.TrimRight(getenv("INSTAGRAM_OAUTH_BASE_URL", "https://www.instagram.com"), "/"),
 			InstagramAPIOAuthBaseURL:     strings.TrimRight(getenv("INSTAGRAM_API_OAUTH_BASE_URL", "https://api.instagram.com"), "/"),
 			InstagramGraphBaseURL:        strings.TrimRight(getenv("INSTAGRAM_GRAPH_BASE_URL", "https://graph.instagram.com"), "/"),
+			TikTokClientKey:              strings.TrimSpace(os.Getenv("TIKTOK_CLIENT_KEY")),
+			TikTokClientSecret:           strings.TrimSpace(os.Getenv("TIKTOK_CLIENT_SECRET")),
+			TikTokAuthorizeURL:           strings.TrimRight(getenv("TIKTOK_AUTHORIZE_URL", "https://www.tiktok.com/v2/auth/authorize/"), "/") + "/",
+			TikTokAPIBaseURL:             strings.TrimRight(getenv("TIKTOK_API_BASE_URL", "https://open.tiktokapis.com"), "/"),
+			TikTokVerifiedAccess:         boolEnv("TIKTOK_VERIFIED_ACCESS", false),
 		},
 		Email: EmailConfig{
 			Mode:       getenv("EMAIL_MODE", "log"),

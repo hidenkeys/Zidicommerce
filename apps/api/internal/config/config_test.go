@@ -100,6 +100,9 @@ func TestWhatsAppSignatureBypassDefaultsToFalse(t *testing.T) {
 	if cfg.Channels.InstagramOAuthBaseURL != "https://www.instagram.com" || cfg.Channels.InstagramAPIOAuthBaseURL != "https://api.instagram.com" || cfg.Channels.InstagramGraphBaseURL != "https://graph.instagram.com" {
 		t.Fatalf("unexpected Instagram provider endpoints: %+v", cfg.Channels)
 	}
+	if cfg.Channels.TikTokVerifiedAccess || cfg.Channels.TikTokAuthorizeURL != "https://www.tiktok.com/v2/auth/authorize/" || cfg.Channels.TikTokAPIBaseURL != "https://open.tiktokapis.com" {
+		t.Fatalf("unexpected TikTok defaults: %+v", cfg.Channels)
+	}
 }
 
 func TestWhatsAppSignatureBypassIsRejectedInProduction(t *testing.T) {
