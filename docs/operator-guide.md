@@ -570,3 +570,9 @@ WhatsApp setup and current health are related but distinct. A completed setup wi
 The 2026-08-31 isolated-pilot rerun passed health, authentication, seed availability, grounded enquiries, coherent WhatsApp setup, durable valid-signature evidence, the expected unpaid-order block, provider-verified test-mode payment, post-payment completion, and the unique invalid-signature probe. Fresh outbound and delivered provider events were recorded for the controlled fulfilment transitions. See [Phase Q Pilot Gap Verification](phase-q-pilot-verification.md).
 
 For rollback, redeploy the preceding isolated pilot image and select the previous published snapshot. Recheck health and fail-closed webhook behavior. Preserve aggregate provider evidence, do not export private contact data, and leave the original Bing Chun database untouched.
+
+## Production promotion boundary
+
+Phase Q pilot acceptance is not production authorization. Before a shared API or Admin deployment, use [Production Readiness and Promotion Plan](production-readiness.md) as the release checklist and approval record. In particular, confirm the production migration table, remove all demo/pilot seed and one-time WhatsApp adoption startup variables, preserve stable credential-encryption keys, create and rehearse a database backup, classify Paystack as test or live, and record Meta callback approval.
+
+Run `scripts/production-readiness-check.sh` for public read-only health and release-artifact checks. It intentionally cannot attest protected database migrations, secret values, provider modes, backups, or external account ownership; those remain explicit operator checks. Do not point the authenticated Phase Q verifier at production without a separately approved smoke-test window.

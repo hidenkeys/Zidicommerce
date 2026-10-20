@@ -88,6 +88,9 @@ type ChannelConfig struct {
 	WhatsAppGraphBaseURL         string
 	WhatsAppWebhookPublicBaseURL string
 	WhatsAppSignatureBypass      bool
+	WhatsAppFlowsEnabled         bool
+	WhatsAppFlowsTestWABAID      string
+	WhatsAppFlowsTestPhoneID     string
 	MetaAppID                    string
 	MetaAppSecret                string
 	MetaEmbeddedConfigurationID  string
@@ -175,6 +178,9 @@ func Load() (Config, error) {
 			WhatsAppGraphBaseURL:         strings.TrimRight(getenv("WHATSAPP_GRAPH_BASE_URL", "https://graph.facebook.com"), "/"),
 			WhatsAppWebhookPublicBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("WHATSAPP_WEBHOOK_PUBLIC_BASE_URL")), "/"),
 			WhatsAppSignatureBypass:      boolEnv("WHATSAPP_SIGNATURE_BYPASS", false),
+			WhatsAppFlowsEnabled:         boolEnv("WHATSAPP_FLOWS_ENABLED", false),
+			WhatsAppFlowsTestWABAID:      strings.TrimSpace(os.Getenv("WHATSAPP_FLOWS_TEST_WABA_ID")),
+			WhatsAppFlowsTestPhoneID:     strings.TrimSpace(os.Getenv("WHATSAPP_FLOWS_TEST_PHONE_ID")),
 			MetaAppID:                    strings.TrimSpace(os.Getenv("META_APP_ID")),
 			MetaAppSecret:                strings.TrimSpace(os.Getenv("META_APP_SECRET")),
 			MetaEmbeddedConfigurationID:  strings.TrimSpace(os.Getenv("META_EMBEDDED_SIGNUP_CONFIGURATION_ID")),

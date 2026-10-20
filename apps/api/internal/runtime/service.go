@@ -149,6 +149,14 @@ func (s *Service) ProcessMessage(ctx context.Context, input InboundMessage) (Run
 		_ = s.markProcessed(ctx, processed, nil, "failed", RuntimeResult{Error: publicRuntimeError(err)})
 		return RuntimeResult{}, err
 	}
+	if bot.IsJourney(snapshot.Version) {
+		release, lockErr := s.acquireJourney(ctx, &session)
+		if lockErr != nil {
+			_ = s.markProcessed(ctx, processed, &session.ID, "failed", RuntimeResult{Error: publicRuntimeError(lockErr)})
+			return RuntimeResult{}, lockErr
+		}
+		defer release()
+	}
 	result, err := s.execute(ctx, snapshot, &session, input)
 	if err != nil {
 		s.log.Error("runtime execution failed", "organization_id", channel.OrganizationID, "conversation_id", session.ID, "current_step", session.CurrentStepKey, "module", currentModuleName(session), "error", publicRuntimeError(err).Message)
@@ -416,6 +424,14 @@ func (s *Service) ListConversationMessages(ctx context.Context, actor auth.Curre
 	}
 	var messages []ConversationMessage
 	err := s.db.WithContext(ctx).Where("organization_id = ? AND session_id = ?", actor.OrganizationID, sessionID).Order("created_at ASC").Find(&messages).Error
+	for i := range messages {
+		metadata := parseJSONMap(messages[i].Metadata)
+		if nested, ok := metadata["metadata"].(map[string]any); ok {
+			delete(nested, "flow_token")
+		}
+		delete(metadata, "flow_token")
+		messages[i].Metadata = jsonValue(metadata)
+	}
 	return messages, err
 }
 
@@ -799,6 +815,15 @@ func (s *Service) loadOrCreateSession(ctx context.Context, channel core.Channel,
 		if expired && session.Status == SessionActive {
 			session.Status = SessionExpired
 		}
+		if session.Status == SessionActive && !input.SimulatorStart {
+			pinned, err := s.loadSnapshot(ctx, channel.OrganizationID, session.BotID, session.BotVersionID)
+			if err != nil {
+				return session, bot.VersionConfiguration{}, err
+			}
+			if bot.IsJourney(pinned.Version) {
+				return session, pinned, nil
+			}
+		}
 		terminal := session.Status == SessionCompleted || session.Status == SessionExpired || session.Status == SessionCancelled
 		preserveCompletedCheckout := terminal && isCommerceCancelText(input.Text)
 		shouldReset := input.SimulatorStart || isHardResetText(input.Text) || (terminal && !preserveCompletedCheckout)
@@ -813,7 +838,14 @@ func (s *Service) loadOrCreateSession(ctx context.Context, channel core.Channel,
 			return session, snapshot, err
 		}
 	}
-	botRecord, snapshot, err := s.resolvePublishedBot(ctx, channel, input.SimulatorBotID)
+	selectedBot := input.SimulatorBotID
+	if selectedBot == nil {
+		selectedBot, err = s.journeyRoute(ctx, channel, input.Text)
+		if err != nil {
+			return ConversationSession{}, bot.VersionConfiguration{}, err
+		}
+	}
+	botRecord, snapshot, err := s.resolvePublishedBot(ctx, channel, selectedBot)
 	if err != nil {
 		return ConversationSession{}, bot.VersionConfiguration{}, err
 	}
@@ -823,6 +855,16 @@ func (s *Service) loadOrCreateSession(ctx context.Context, channel core.Channel,
 	}
 	now := s.now()
 	expiresAt := now.Add(defaultSessionTTL)
+	if bot.IsJourney(snapshot.Version) {
+		expiresAt = now.Add(time.Duration(bot.JourneySettings(snapshot.Version).TTLMinutes) * time.Minute)
+		var binding bot.JourneyBinding
+		if err := s.db.WithContext(ctx).Where("organization_id = ? AND bot_id = ? AND version_id = ?", channel.OrganizationID, botRecord.ID, snapshot.Version.ID).First(&binding).Error; err == nil {
+			if binding.Paused {
+				return ConversationSession{}, bot.VersionConfiguration{}, runtimeError(ErrRuntimeConfigurationError, "This journey is temporarily paused.")
+			}
+			systemContext["journey_mode"] = binding.Mode
+		}
+	}
 	if newConversation {
 		session = ConversationSession{ID: uuid.New(), OrganizationID: channel.OrganizationID, BotID: botRecord.ID, BotVersionID: snapshot.Version.ID, ChannelID: channel.ID, CustomerID: input.CustomerID, ExternalConversationID: input.ExternalConversationID, CurrentStepKey: snapshot.Version.StartStepKey, Status: SessionActive, ConversationStatus: ConversationAIHandling, Priority: "normal", Variables: "{}", SystemContext: jsonMap(systemContext), LockVersion: 1, LastMessageAt: &now, ExpiresAt: &expiresAt}
 		if err := s.db.WithContext(ctx).Create(&session).Error; err != nil {
@@ -919,6 +961,9 @@ func currentModuleName(session ConversationSession) string {
 }
 
 func (s *Service) execute(ctx context.Context, snapshot bot.VersionConfiguration, session *ConversationSession, input InboundMessage) (RuntimeResult, error) {
+	if bot.IsJourney(snapshot.Version) {
+		return s.executeConfiguredJourney(ctx, snapshot, session, input)
+	}
 	variables := parseJSONMap(session.Variables)
 	defer func() {
 		session.Variables = jsonMap(variables)

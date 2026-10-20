@@ -31,11 +31,13 @@ func NewHandler(service *Service, platform *channelplatform.Service, adapter *Ad
 }
 
 func (h *Handler) RegisterPublic(router fiber.Router) {
+	h.registerFlowRoutes(router, nil)
 	router.Get("/runtime/webhooks/whatsapp", h.verifyWebhook)
 	router.Post("/runtime/webhooks/whatsapp", h.receiveWebhook)
 }
 
 func (h *Handler) RegisterProtected(router fiber.Router) {
+	h.registerFlowRoutes(nil, router)
 	router.Get("/channel-platform/connections/:id/whatsapp", auth.RequirePermission(authz.PermissionChannelsView), h.getConfiguration)
 	router.Patch("/channel-platform/connections/:id/whatsapp", auth.RequirePermission(authz.PermissionChannelsManage), h.updateConfiguration)
 	router.Post("/channel-platform/connections/:id/whatsapp/credentials/rotate", auth.RequirePermission(authz.PermissionChannelsManage), h.rotateCredential)

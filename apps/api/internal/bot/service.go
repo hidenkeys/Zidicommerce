@@ -432,7 +432,7 @@ func (s *Service) CreateVersion(ctx context.Context, actor auth.CurrentUser, bot
 			return err
 		}
 		startStepKey := defaultString(input.StartStepKey, "start")
-		if input.SourceVersionID != nil && input.StartStepKey == "" {
+		if input.SourceVersionID != nil {
 			var source BotVersion
 			if err := tx.Where("organization_id = ? AND id = ?", actor.OrganizationID, *input.SourceVersionID).First(&source).Error; err != nil {
 				return mapNotFound(err, "Source version not found")
@@ -440,7 +440,12 @@ func (s *Service) CreateVersion(ctx context.Context, actor auth.CurrentUser, bot
 			if source.BotID != botID {
 				return httperror.BadRequest("Source version must belong to the selected bot")
 			}
-			startStepKey = source.StartStepKey
+			if input.StartStepKey == "" {
+				startStepKey = source.StartStepKey
+			}
+			if IsJourney(source) {
+				input.Metadata = source.Metadata
+			}
 		}
 		version = BotVersion{ID: uuid.New(), OrganizationID: actor.OrganizationID, BotID: botID, VersionNumber: maxVersion + 1, Status: VersionStatusDraft, StartStepKey: startStepKey, ValidationErrors: "[]", Metadata: jsonObject(input.Metadata), CreatedByUserID: &actor.ID}
 		if err := tx.Create(&version).Error; err != nil {
@@ -794,12 +799,29 @@ func (s *Service) ValidateVersion(ctx context.Context, actor auth.CurrentUser, v
 }
 
 func (s *Service) PublishVersion(ctx context.Context, actor auth.CurrentUser, versionID uuid.UUID) (PublishedSnapshot, error) {
+	return s.publishVersion(ctx, actor, versionID, false)
+}
+
+func (s *Service) publishVersion(ctx context.Context, actor auth.CurrentUser, versionID uuid.UUID, journeyLocked bool) (PublishedSnapshot, error) {
 	if !actor.Role.HasPermission(authz.PermissionBotPublish) {
 		return PublishedSnapshot{}, httperror.Forbidden("You cannot publish bots")
 	}
 	version, err := s.GetVersion(ctx, actor, versionID)
 	if err != nil {
 		return PublishedSnapshot{}, err
+	}
+	if IsJourney(version) && !journeyLocked {
+		var snapshot PublishedSnapshot
+		err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var locked BotVersion
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", actor.OrganizationID, versionID).First(&locked).Error; err != nil {
+				return err
+			}
+			var err error
+			snapshot, err = NewService(tx).publishVersion(ctx, actor, versionID, true)
+			return err
+		})
+		return snapshot, err
 	}
 	if version.Status == VersionStatusPublished {
 		return PublishedSnapshot{}, httperror.BadRequest("Bot version is already published")
@@ -811,6 +833,14 @@ func (s *Service) PublishVersion(ctx context.Context, actor auth.CurrentUser, ve
 	result := validateConfiguration(config)
 	if !result.Valid {
 		return PublishedSnapshot{}, httperror.BadRequest("Bot version has validation errors")
+	}
+	if IsJourney(version) {
+		if version.PublishedAt != nil {
+			return PublishedSnapshot{}, httperror.BadRequest("Use rollback to activate an immutable journey")
+		}
+		if err := s.checkJourneyConnection(ctx, actor, JourneySettings(version), versionID); err != nil {
+			return PublishedSnapshot{}, err
+		}
 	}
 	raw, err := json.Marshal(config)
 	if err != nil {
@@ -1191,6 +1221,9 @@ func (s *Service) ensureEditable(ctx context.Context, actor auth.CurrentUser, ve
 	if version.Status == VersionStatusPublished || version.Status == VersionStatusArchived {
 		return httperror.BadRequest("Published or archived bot versions are immutable")
 	}
+	if IsJourney(version) {
+		return httperror.BadRequest("Edit this journey atomically through Journey Studio")
+	}
 	return nil
 }
 
@@ -1337,6 +1370,42 @@ func (s *Service) copyVersionConfigTx(tx *gorm.DB, orgID, sourceVersionID, targe
 }
 
 func validateConfiguration(config VersionConfiguration) ValidationResult {
+	if IsJourney(config.Version) {
+		result := ValidateJourney(JourneyFromConfiguration(config))
+		for _, step := range config.Steps {
+			settings := JourneyStepSettings(step)
+			expected := journeyAction(config.Version.OrganizationID, config.Version.ID, settings)
+			if expected.ActionType != "" {
+				found := false
+				for _, action := range config.Actions {
+					if step.ActionID != nil && action.ID == *step.ActionID {
+						found = step.Type == StepAction && action.ActionType == expected.ActionType && sameJourneyJSON(action.InputMappings, expected.InputMappings) && sameJourneyJSON(action.OutputMappings, expected.OutputMappings)
+					}
+				}
+				if !found {
+					result.Issues = append(result.Issues, journeyError(step.StepKey, "Protected commerce mappings cannot be changed or removed"))
+				}
+			} else if isJourneyQuestion(settings) {
+				found := false
+				for _, question := range config.Questions {
+					found = found || (step.Type == StepQuestion && step.QuestionID != nil && question.ID == *step.QuestionID)
+				}
+				if !found {
+					result.Issues = append(result.Issues, journeyError(step.StepKey, "Question configuration is missing"))
+				}
+			} else if settings.Kind == "condition" {
+				found := false
+				for _, condition := range config.Conditions {
+					found = found || (step.Type == StepCondition && step.ConditionID != nil && condition.ID == *step.ConditionID && condition.Combinator == "and" && sameJourneyJSON(condition.Rules, conditionJSON("variables."+settings.ConditionField, defaultString(settings.ConditionOperator, "equals"), settings.ConditionValue)))
+				}
+				if !found {
+					result.Issues = append(result.Issues, journeyError(step.StepKey, "Condition configuration does not match the journey"))
+				}
+			}
+		}
+		result.Valid = len(result.Issues) == 0
+		return result
+	}
 	var issues []ValidationIssue
 	stepKeys := map[string]Step{}
 	variableNames := map[string]struct{}{}

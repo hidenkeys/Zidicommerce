@@ -125,6 +125,16 @@ func (a *Adapter) BuildOutbound(_ context.Context, command channelplatform.Outbo
 		return channelplatform.ProviderRequest{Provider: Provider, ConnectionID: command.ChannelConnectionID, Payload: payload}, nil
 	}
 	switch strings.ToLower(strings.TrimSpace(command.MessageType)) {
+	case "flow":
+		id, token := valueString(command.Metadata["flow_id"]), valueString(command.Metadata["flow_token"])
+		if id == "" || token == "" {
+			return channelplatform.ProviderRequest{}, errors.New("Flow launch requires a provider Flow and session token")
+		}
+		payload["type"] = "interactive"
+		payload["interactive"] = map[string]any{"type": "flow", "body": map[string]any{"text": command.Body}, "action": map[string]any{"name": "flow", "parameters": map[string]any{"flow_message_version": "3", "flow_id": id, "flow_token": token, "flow_cta": "Continue", "flow_action": "data_exchange"}}}
+	case "location_request":
+		payload["type"] = "interactive"
+		payload["interactive"] = map[string]any{"type": "location_request_message", "body": map[string]any{"text": command.Body}, "action": map[string]any{"name": "send_location"}}
 	case "buttons":
 		buttons := make([]map[string]any, 0, len(command.Actions))
 		for _, action := range command.Actions {
@@ -389,6 +399,12 @@ type webhookMessage struct {
 			Description string `json:"description"`
 		} `json:"list_reply"`
 	} `json:"interactive"`
+	Location struct {
+		Latitude  float64 `json:"latitude"`
+		Longitude float64 `json:"longitude"`
+		Name      string  `json:"name"`
+		Address   string  `json:"address"`
+	} `json:"location"`
 	Image    webhookMedia `json:"image"`
 	Document webhookMedia `json:"document"`
 	Audio    webhookMedia `json:"audio"`
@@ -437,6 +453,12 @@ func normalizeMessage(message webhookMessage, entryID string, metadata struct {
 	case "text":
 		body = message.Text.Body
 	case "interactive":
+		if message.Interactive.Type == "nfm_reply" {
+			// Completion is a notification, not a trusted commerce submission.
+			// Answers and writes have already been validated by encrypted exchange.
+			safeMetadata["journey_flow_completion"] = true
+			break
+		}
 		if message.Interactive.ButtonReply.ID != "" {
 			body = message.Interactive.ButtonReply.ID
 			safeMetadata["reply_title"] = message.Interactive.ButtonReply.Title
@@ -450,6 +472,9 @@ func normalizeMessage(message webhookMessage, entryID string, metadata struct {
 		}
 	case "button":
 		body = firstNonEmpty(message.Button.Payload, message.Button.Text)
+	case "location":
+		safeMetadata["location_latitude"], safeMetadata["location_longitude"] = message.Location.Latitude, message.Location.Longitude
+		safeMetadata["location_name"], safeMetadata["location_address"] = message.Location.Name, message.Location.Address
 	case "image", "document", "audio", "video":
 		item := mediaForMessage(message, messageType)
 		if item.ID == "" {
