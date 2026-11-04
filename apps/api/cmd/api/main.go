@@ -95,6 +95,7 @@ func main() {
 		oauthService.RegisterClient(tikTokOAuthClient)
 	}
 	whatsAppService := whatsappadapter.NewService(db, channelService, channelSecretResolver, channelSecretStore)
+	whatsAppService.ConfigureFlows(whatsappadapter.FlowConfig{Enabled: cfg.Channels.WhatsAppFlowsEnabled, TestWABAID: cfg.Channels.WhatsAppFlowsTestWABAID, TestPhoneID: cfg.Channels.WhatsAppFlowsTestPhoneID, GraphBaseURL: cfg.Channels.WhatsAppGraphBaseURL}, nil)
 	whatsAppService.ConfigureWebhookPublicBaseURL(cfg.Channels.WhatsAppWebhookPublicBaseURL)
 	whatsAppService.ConfigureEmbeddedSignup(whatsappadapter.EmbeddedSignupConfig{
 		AppID: cfg.Channels.MetaAppID, AppSecret: cfg.Channels.MetaAppSecret,

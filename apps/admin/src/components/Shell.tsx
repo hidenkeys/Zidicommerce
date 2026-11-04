@@ -47,6 +47,7 @@ const groups: NavGroup[] = [
     label: "Engagement",
     items: [
       { label: "Assistant", path: "/assistant", permission: "bot.view", roles: ["merchant_admin", "platform_admin", "store_manager", "viewer"], icon: Bot },
+      { label: "Journey Studio", path: "/journeys", permission: "bot.view", icon: ClipboardCheck },
       { label: "AI test workspace", path: "/assistant/ai-chat", permission: "ai.use", roles: ["merchant_admin", "platform_admin"], icon: Sparkles },
       { label: "Conversations", path: "/conversations", permission: "conversations.view", icon: MessageSquareText },
       { label: "Business knowledge", path: "/knowledge", permission: "knowledge.view", roles: ["merchant_admin", "platform_admin", "store_manager", "support_agent", "viewer"], icon: LifeBuoy },
@@ -95,6 +96,7 @@ const titles: Record<string, { eyebrow: string; title: string }> = {
   "/assistant/ai-chat": { eyebrow: "Engagement", title: "AI Chat" },
   "/conversations": { eyebrow: "Engagement", title: "Conversations" },
   "/knowledge": { eyebrow: "Engagement", title: "Knowledge" },
+  "/journeys": { eyebrow: "Engagement", title: "Journey Studio" },
   "/team": { eyebrow: "Operations", title: "People" },
   "/settings/business": { eyebrow: "Organization", title: "Business" },
   "/settings/payments": { eyebrow: "Commerce", title: "Payments" },

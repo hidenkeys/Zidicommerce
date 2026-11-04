@@ -19,6 +19,14 @@ func InboundMessageFromChannelEvent(event channelplatform.InboundEvent) InboundM
 		attachments = append(attachments, Attachment{Type: media.Type, URL: media.Reference})
 	}
 	channelID := event.ChannelConnectionID
+	var location *Location
+	if event.MessageType == "location" {
+		latitude, latOK := numberValue(event.Metadata["location_latitude"])
+		longitude, lonOK := numberValue(event.Metadata["location_longitude"])
+		if latOK && lonOK {
+			location = &Location{Latitude: latitude, Longitude: longitude, Name: stringValue(event.Metadata["location_name"]), Address: stringValue(event.Metadata["location_address"])}
+		}
+	}
 	return InboundMessage{
 		ChannelID:              &channelID,
 		Provider:               strings.ToLower(strings.TrimSpace(event.Provider)),
@@ -27,6 +35,7 @@ func InboundMessageFromChannelEvent(event channelplatform.InboundEvent) InboundM
 		Sender:                 strings.TrimSpace(event.ExternalCustomerID),
 		Text:                   event.Body,
 		Attachments:            attachments,
+		Location:               location,
 		Metadata:               event.Metadata,
 		Timestamp:              event.Timestamp,
 	}
@@ -72,6 +81,9 @@ func (s *Service) ProcessChannelInbound(ctx context.Context, organizationID uuid
 		return httperror.NotFound("Channel connection not found")
 	}
 	input := InboundMessageFromChannelEvent(event)
+	if event.Metadata["journey_flow_completion"] == true {
+		return nil
+	}
 	input.TrustedOrganizationID = &organizationID
 	result, err := s.ProcessMessage(ctx, input)
 	if err != nil {

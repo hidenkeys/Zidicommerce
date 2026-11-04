@@ -18,6 +18,7 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) Register(router fiber.Router) {
+	h.registerJourneyPreviews(router)
 	router.Post("/runtime/test/start", h.startTest)
 	router.Post("/runtime/test/message", h.testMessage)
 	router.Get("/runtime/conversations", h.listConversations)

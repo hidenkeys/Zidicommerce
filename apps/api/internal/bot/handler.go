@@ -18,6 +18,7 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) Register(router fiber.Router) {
+	h.registerJourneys(router)
 	router.Get("/bot-modules", h.systemModules)
 	router.Get("/bot-actions", h.systemActions)
 	router.Get("/bot-question-types", h.questionTypes)

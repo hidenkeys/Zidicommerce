@@ -22,6 +22,7 @@ import { StoresPage } from "./pages/Stores";
 import { TeamPage } from "./pages/Team";
 import { InviteAcceptPage } from "./pages/InviteAccept";
 import { ChannelsPage } from "./pages/Channels";
+import { JourneysPage } from "./pages/Journeys";
 import { isUsableChannelStatus } from "./lib/channels";
 
 type Row = Record<string, unknown>;
@@ -2434,6 +2435,7 @@ export default function App() {
           <Route path="assistant/ai-chat" element={<AIChatPage />} />
           <Route path="conversations" element={<ConversationsPage />} />
           <Route path="knowledge" element={<KnowledgePage />} />
+          <Route path="journeys" element={<JourneysPage />} />
           <Route path="team" element={<TeamPage />} />
           <Route path="settings/business" element={<BusinessPage />} />
           <Route path="settings/payments" element={<PaymentsPage />} />

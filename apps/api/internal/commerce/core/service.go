@@ -1369,6 +1369,19 @@ func (s *Service) resolveUsablePaymentProvider(ctx context.Context, organization
 	return provider, nil
 }
 
+// The controlled Meta Flow pilot must never initialize a live transaction.
+// Resolve the tenant credential through the same boundary as normal payments.
+func (s *Service) RequireSandboxPaymentProvider(ctx context.Context, organizationID uuid.UUID, providerName string) error {
+	provider, err := s.resolveUsablePaymentProvider(ctx, organizationID, providerName)
+	if err != nil || provider == nil {
+		return httperror.BadRequest("A test payment provider is required for the Flow pilot")
+	}
+	if paystack, ok := provider.(*PaystackProvider); ok && !strings.HasPrefix(paystack.secretKey, "sk_test_") {
+		return httperror.BadRequest("The Flow pilot requires a Paystack test-mode credential")
+	}
+	return nil
+}
+
 func (s *Service) GetFulfilment(ctx context.Context, actor auth.CurrentUser, orderID uuid.UUID) (Fulfilment, error) {
 	if _, err := s.GetOrder(ctx, actor, orderID); err != nil {
 		return Fulfilment{}, err

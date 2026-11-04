@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"regexp"
 	"sort"
 	"strings"
@@ -28,6 +29,8 @@ type Service struct {
 	embeddedConfig EmbeddedSignupConfig
 	embeddedClient EmbeddedSignupClient
 	publicURL      string
+	flowConfig     FlowConfig
+	flowHTTP       *http.Client
 	now            func() time.Time
 }
 

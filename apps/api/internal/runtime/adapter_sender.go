@@ -31,7 +31,7 @@ func (s *AdapterChannelSender) Send(ctx context.Context, channel core.Channel, r
 		capability := "outbound_text"
 		if strings.TrimSpace(message.MediaURL) != "" {
 			capability = "outbound_media"
-		} else if len(message.Options) > 0 {
+		} else if len(message.Options) > 0 || message.Type == "flow" || message.Type == "location_request" {
 			capability = "interactive_messages"
 		}
 		if err := s.checker.RequireCapability(ctx, channel.OrganizationID, channel.ID, capability); err != nil {

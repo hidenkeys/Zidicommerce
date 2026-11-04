@@ -16,6 +16,7 @@
     "check:admin": "npm --workspace apps/admin run check",
     "check:field": "npm --workspace apps/field run check",
     "test:api": "cd apps/api && GOCACHE=/tmp/zidicommerce-go-cache AI_PHASEC_ARTIFACT_DIR=/tmp/zidicommerce-ai-evaluations go test ./...",
+    "test:journeys": "node scripts/journey-studio-e2e.mjs",
     "check": "npm run test:api && npm run check:admin && npm run check:field"
   }
 }
