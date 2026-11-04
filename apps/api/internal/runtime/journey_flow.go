@@ -138,11 +138,23 @@ func (s *Service) ExchangeJourneyFlow(ctx context.Context, organizationID, conne
 }
 
 func (s *Service) dispatchJourneyFlow(ctx context.Context, channel core.Channel, session ConversationSession, key string, result RuntimeResult) error {
-	if result.SessionStatus == SessionActive && !strings.Contains(strings.ToLower(joinJourneyMessages(result.Messages)), "payment link") {
+	if !journeyFlowNeedsDispatch(result) {
 		return nil
 	}
 	_, err := s.DispatchOutbound(ctx, channel, InboundMessage{ExternalMessageID: key, ExternalConversationID: session.ExternalConversationID, Sender: stringValue(parseJSONMap(session.SystemContext)["sender"])}, result)
 	return err
+}
+
+func journeyFlowNeedsDispatch(result RuntimeResult) bool {
+	if result.SessionStatus != SessionActive {
+		return true
+	}
+	for _, message := range result.Messages {
+		if message.Metadata["journey_checkout"] == true {
+			return true
+		}
+	}
+	return false
 }
 
 func journeyFlowResponse(config bot.VersionConfiguration, session ConversationSession, result RuntimeResult) map[string]any {

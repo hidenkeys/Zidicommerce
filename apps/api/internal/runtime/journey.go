@@ -403,6 +403,9 @@ func (s *Service) executeJourney(ctx context.Context, config bot.VersionConfigur
 				}
 			}
 			appendText(stringValue(outputs["message"]))
+			if j.Kind == "payment" && stringValue(outputs["payment_url"]) != "" && len(result.Messages) > 0 {
+				result.Messages[len(result.Messages)-1].Metadata = map[string]any{"journey_checkout": true}
+			}
 			if !preview {
 				s.recordEvent(ctx, *session, EventActionCompleted, "info", j.Key, a.ActionKey, map[string]any{"action_type": a.ActionType})
 			}

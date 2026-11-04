@@ -341,7 +341,10 @@ func TestJourneyFlowTenantReplayAndExecutionLease(t *testing.T) {
 
 func TestJourneyFlowCommerceSubmissionCreatesOrderExactlyOnce(t *testing.T) {
 	fx, detail := journeyFixture(t, "order")
-	customer, _, _ := seedCommerce(t, fx)
+	customer, store, _ := seedCommerce(t, fx)
+	if err := fx.db.Model(&store).Update("metadata", jsonValue(map[string]any{"notification_recipient": "test-store-recipient"})).Error; err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 	if _, err := bot.NewService(fx.db).PublishJourney(ctx, fx.actor, detail.Version.ID); err != nil {
 		t.Fatal(err)
@@ -391,6 +394,67 @@ func TestJourneyFlowCommerceSubmissionCreatesOrderExactlyOnce(t *testing.T) {
 	fx.db.Model(&core.Payment{}).Count(&payments)
 	if payments != 1 {
 		t.Fatal("duplicate Flow payment", payments)
+	}
+	// Pending provider state must keep the customer in checkout, even when
+	// they explicitly request a payment-status check.
+	request.Screen = stringValue(response["screen"])
+	request.Data.Turn = stringValue(response["data"].(map[string]any)["turn"])
+	request.Data.Answer = "1"
+	response, err = fx.service.ExchangeJourneyFlow(ctx, fx.actor.OrganizationID, fx.channel.ID, request)
+	if err != nil || response["screen"] != bot.FlowScreenID("payment_choice") {
+		t.Fatalf("unpaid checkout advanced: %+v %v", response, err)
+	}
+	var payment core.Payment
+	if err := fx.db.First(&payment).Error; err != nil {
+		t.Fatal(err)
+	}
+	// Deterministic provider verification models an independently confirmed
+	// payment; this is deliberately not evidence of a live Paystack charge.
+	verifiedService := core.NewService(fx.db, runtimeTestPaymentProvider{name: "paystack"})
+	if _, err := verifiedService.VerifyPayment(ctx, fx.actor, core.PaymentVerifyInput{Reference: payment.Reference}); err != nil {
+		t.Fatal(err)
+	}
+	request.Screen = stringValue(response["screen"])
+	request.Data.Turn = stringValue(response["data"].(map[string]any)["turn"])
+	response, err = fx.service.ExchangeJourneyFlow(ctx, fx.actor.OrganizationID, fx.channel.ID, request)
+	if err != nil || response["screen"] != "FINISH" {
+		t.Fatalf("verified checkout did not finish: %+v %v", response, err)
+	}
+	finalReplay, err := fx.service.ExchangeJourneyFlow(ctx, fx.actor.OrganizationID, fx.channel.ID, request)
+	if err != nil || jsonValue(finalReplay) != jsonValue(response) {
+		t.Fatalf("verified checkout replay changed result: %+v %v", finalReplay, err)
+	}
+	var notifications int64
+	fx.db.Model(&core.CommerceNotification{}).Where("order_id = ? AND notification_type IN ?", orders[0].ID, []string{"customer_notification", "store_notification"}).Count(&notifications)
+	if notifications != 2 {
+		t.Fatalf("expected store/customer notifications, got %d", notifications)
+	}
+	if _, err := verifiedService.TransitionOrder(ctx, fx.actor, orders[0].ID, core.TransitionInput{Status: core.OrderProcessing, IdempotencyKey: "flow-prepare"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"ready", "completed"} {
+		if _, err := verifiedService.UpdateFulfilment(ctx, fx.actor, orders[0].ID, core.FulfilmentInput{Status: status, IdempotencyKey: "flow-" + status}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finished, err := verifiedService.GetOrder(ctx, fx.actor, orders[0].ID)
+	if err != nil || finished.Status != core.OrderCompleted {
+		t.Fatalf("fulfilment incomplete: %+v %v", finished, err)
+	}
+}
+
+func TestJourneyFlowCheckoutDispatchDoesNotDependOnWording(t *testing.T) {
+	for _, text := range []string{"Complete checkout", "Payer votre commande", "https://checkout.paystack.com/example"} {
+		result := RuntimeResult{SessionStatus: SessionActive, Messages: []OutboundMessage{{Type: MessageText, Text: text, Metadata: map[string]any{"journey_checkout": true}}}}
+		if !journeyFlowNeedsDispatch(result) {
+			t.Fatalf("checkout was suppressed: %s", text)
+		}
+	}
+	if journeyFlowNeedsDispatch(RuntimeResult{SessionStatus: SessionActive, Messages: []OutboundMessage{{Text: "A payment link will be generated after confirmation."}}}) {
+		t.Fatal("ordinary screen text dispatched as checkout")
+	}
+	if !journeyFlowNeedsDispatch(RuntimeResult{SessionStatus: SessionCompleted}) {
+		t.Fatal("final confirmation suppressed")
 	}
 }
 func TestJourneyAIIntentAndScenarioFallbacks(t *testing.T) {
