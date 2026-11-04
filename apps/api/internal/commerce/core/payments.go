@@ -56,6 +56,7 @@ func (p *PaystackProvider) Initialize(ctx context.Context, req PaymentInitialize
 		"amount":       req.AmountMinor,
 		"currency":     req.Currency,
 		"callback_url": req.CallbackURL,
+		"metadata":     req.Metadata,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

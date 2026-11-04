@@ -32,6 +32,7 @@ type PaymentInitializeRequest struct {
 	AmountMinor int64
 	Currency    string
 	CallbackURL string
+	Metadata    map[string]string
 }
 
 type PaymentInitializeResponse struct {
@@ -1169,7 +1170,7 @@ func (s *Service) InitializePayment(ctx context.Context, actor auth.CurrentUser,
 		return Payment{}, err
 	}
 	reference := fmt.Sprintf("zc_%s", uuid.NewString())
-	init, err := provider.Initialize(ctx, PaymentInitializeRequest{Reference: reference, Email: input.Email, AmountMinor: order.TotalMinor, Currency: order.Currency, CallbackURL: input.CallbackURL})
+	init, err := provider.Initialize(ctx, PaymentInitializeRequest{Reference: reference, Email: input.Email, AmountMinor: order.TotalMinor, Currency: order.Currency, CallbackURL: input.CallbackURL, Metadata: map[string]string{"organization_id": actor.OrganizationID.String(), "order_id": order.ID.String(), "order_number": order.OrderNumber, "customer_id": order.CustomerID.String()}})
 	if err != nil {
 		return Payment{}, err
 	}
