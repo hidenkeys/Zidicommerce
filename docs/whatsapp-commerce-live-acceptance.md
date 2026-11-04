@@ -8,6 +8,10 @@ Commit `742b2a5` replaces checkout detection by English response text with an ex
 
 ## Live prerequisites
 
+### Staging release verification
+
+On 2026-11-04, application commit `29fbd8e` (code change `742b2a5`) was deployed to the staging API as deployment `c0c48258-7716-4d9a-87e3-849627569873`, status SUCCESS. Full `go test ./...` and `go test -race ./...` passed. The API health endpoint returned HTTP 200 with database `ok`; staging admin login and the unchanged main website both returned HTTP 200. Admin code was unchanged and its previous deployment was retained. This release does not establish a live WhatsApp or real Paystack test-payment result.
+
 - Staging project only: `3c6283f1-4371-45aa-8763-627e226b8ef0`, environment `ea7de095-ecf9-40bf-bde6-6a321ea847b4`.
 - An explicitly designated sandbox WhatsApp connection and authorized recipient.
 - Existing Meta access token, app secret and verified webhook configured securely on that connection. Do not put credentials in this document.
