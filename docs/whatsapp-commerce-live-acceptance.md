@@ -22,6 +22,14 @@ On 2026-11-04, application commit `29fbd8e` (code change `742b2a5`) was deployed
 
 At inspection on 2026-11-04, staging had a test-mode Paystack key but no configured Flow test identity. No live recipient had been designated. Do not describe local or mock evidence as Meta acceptance.
 
+### Meta setup progress (2026-11-04)
+
+Browser inspection established the connected Meta test number `+1 555-157-1522`, phone ID `803787309476689`, test WABA `1315307873272485`, business ID `729319212854392`, app ID `784275937440591`. The Nigerian number initially shown in API Setup was unverified and was not selected for staging.
+
+With explicit operator approval, Meta authorization was saved for the nine existing accounts (no future-account opt-in), and a temporary access token was stored through the staging admin's encrypted credential form. The staging connection is Zidi-managed/Sandbox with the verified test references and Graph `v25.0`. No credential value is included in this record. The UI reports Access Token Available; App Secret and Verify Token remain Missing.
+
+App-secret disclosure is blocked by Meta's password reauthentication prompt, which the account owner must complete. The designated recipient is awaiting Meta's five-digit verification. Neither a successful test message nor a live checkout/fulfilment round trip has been established. The existing app-level CRM callback was read but not changed. Flows remain disabled until credentials, routing isolation and recipient verification are complete.
+
 ## Actual-device acceptance steps
 
 1. Create a new ordering journey, bind the sandbox connection, choose WhatsApp Flow and validate the draft.
