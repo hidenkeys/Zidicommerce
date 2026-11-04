@@ -13,6 +13,44 @@ type paymentRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f paymentRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+type capturingPaymentProvider struct {
+	SafeTestProvider
+	request PaymentInitializeRequest
+	calls   int
+}
+
+func (p *capturingPaymentProvider) Initialize(ctx context.Context, request PaymentInitializeRequest) (PaymentInitializeResponse, error) {
+	p.request = request
+	p.calls++
+	return p.SafeTestProvider.Initialize(ctx, request)
+}
+
+func TestPaymentMetadataUsesSavedOrderAndReusesCheckout(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	provider := &capturingPaymentProvider{}
+	fx.service.paymentProvider = provider
+	order, err := fx.service.CreateOrder(context.Background(), fx.actor, OrderInput{CustomerID: fx.customer.ID, StoreID: fx.store.ID, FulfilmentType: FulfilmentPickup, Items: []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := PaymentInput{OrderID: order.ID, Provider: "test", Email: "customer@example.test", IdempotencyKey: "metadata-checkout"}
+	first, err := fx.service.InitializePayment(context.Background(), fx.actor, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := fx.service.InitializePayment(context.Background(), fx.actor, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID || provider.calls != 1 {
+		t.Fatalf("checkout was not reused: calls=%d", provider.calls)
+	}
+	metadata := provider.request.Metadata
+	if provider.request.AmountMinor != order.TotalMinor || provider.request.Currency != order.Currency || metadata["organization_id"] != fx.actor.OrganizationID.String() || metadata["order_id"] != order.ID.String() || metadata["order_number"] != order.OrderNumber || metadata["customer_id"] != order.CustomerID.String() {
+		t.Fatalf("payment did not use saved order facts: %+v", provider.request)
+	}
+}
+
 func TestPaystackInitializeSendsOrderMetadata(t *testing.T) {
 	p := NewPaystackProvider("test-secret")
 	p.client.Transport = paymentRoundTripFunc(func(r *http.Request) (*http.Response, error) {
