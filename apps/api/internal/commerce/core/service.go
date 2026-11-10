@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -1208,6 +1209,20 @@ func (s *Service) InitializePayment(ctx context.Context, actor auth.CurrentUser,
 		return payment, nil
 	}
 	init, err := provider.Initialize(ctx, PaymentInitializeRequest{Reference: payment.Reference, Email: input.Email, AmountMinor: payment.AmountMinor, Currency: payment.Currency, CallbackURL: input.CallbackURL, Metadata: map[string]string{"organization_id": actor.OrganizationID.String(), "order_id": order.ID.String(), "order_number": order.OrderNumber, "customer_id": order.CustomerID.String()}})
+	if errors.Is(err, errPaystackCheckoutRejected) {
+		// Delete only this attempt's unused reservation so a corrected request
+		// can initialize a checkout with the same idempotency key.
+		release := s.db.WithContext(context.WithoutCancel(ctx)).Where(
+			"organization_id = ? AND id = ? AND status = ? AND authorization_url = ?",
+			payment.OrganizationID, payment.ID, PaymentPending, "",
+		).Delete(&Payment{})
+		if release.Error != nil {
+			return Payment{}, release.Error
+		}
+		if release.RowsAffected != 0 {
+			return Payment{}, httperror.BadRequest("Paystack rejected the checkout details. Check them and retry.")
+		}
+	}
 	if err != nil || init.Reference != payment.Reference || strings.TrimSpace(init.AuthorizationURL) == "" {
 		// Keep the reservation when the provider outcome is uncertain. A retry
 		// must never open a second remote checkout.

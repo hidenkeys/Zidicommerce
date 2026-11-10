@@ -29,6 +29,8 @@ func (SafeTestProvider) Verify(_ context.Context, reference string) (PaymentVeri
 	return PaymentVerification{Reference: reference, Paid: true, Status: "success"}, nil
 }
 
+var errPaystackCheckoutRejected = errors.New("Paystack rejected checkout details")
+
 type PaystackProvider struct {
 	secretKey string
 	client    *http.Client
@@ -77,7 +79,9 @@ func (p *PaystackProvider) Initialize(ctx context.Context, req PaymentInitialize
 	defer resp.Body.Close()
 
 	var decoded struct {
-		Status bool `json:"status"`
+		Status bool   `json:"status"`
+		Type   string `json:"type"`
+		Code   string `json:"code"`
 		Data   struct {
 			AuthorizationURL string `json:"authorization_url"`
 			Reference        string `json:"reference"`
@@ -86,6 +90,16 @@ func (p *PaystackProvider) Initialize(ctx context.Context, req PaymentInitialize
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
 		return PaymentInitializeResponse{}, err
+	}
+	// A duplicate reference may already have a checkout. Only release the
+	// reservation for a documented validation rejection unrelated to a reference.
+	detail := strings.ToLower(decoded.Code + " " + decoded.Message)
+	if resp.StatusCode == http.StatusBadRequest && !decoded.Status &&
+		decoded.Data.Reference == "" && decoded.Data.AuthorizationURL == "" &&
+		!strings.Contains(detail, "reference") && !strings.Contains(detail, "duplicate") &&
+		(decoded.Type == "validation_error" || strings.Contains(detail, "invalid email address") ||
+			strings.Contains(detail, "email is not allowed to be empty")) {
+		return PaymentInitializeResponse{}, errPaystackCheckoutRejected
 	}
 	if resp.StatusCode >= 400 || !decoded.Status {
 		return PaymentInitializeResponse{}, fmt.Errorf("paystack initialize failed: %s", decoded.Message)

@@ -2,8 +2,12 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -60,6 +64,70 @@ func TestCheckoutReservesReferenceBeforeProviderCall(t *testing.T) {
 	}
 	if payment, err := fx.service.InitializePayment(ctx, fx.actor, input); err != nil || payment.AuthorizationURL == "" {
 		t.Fatalf("expected saved checkout on retry: %v", err)
+	}
+}
+
+func TestPaystackCheckoutRetryAfterRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		retry  bool
+	}{
+		{"validation rejection", 400, `{"status":false,"type":"validation_error","message":"Invalid Email Address Passed"}`, true},
+		{"duplicate reference", 400, `{"status":false,"type":"validation_error","message":"Duplicate Transaction Reference"}`, false},
+		{"provider failure", 503, `{"status":false}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newCommerceFixture(t, 5)
+			ctx := context.Background()
+			provider := NewPaystackProvider("sk_test_fixture")
+			var refs []string
+			provider.client.Transport = paymentRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				var request struct {
+					Reference string
+					Email     string
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				refs = append(refs, request.Reference)
+				status, body := tc.status, tc.body
+				if request.Email == "buyer@example.com" {
+					status = http.StatusOK
+					body = `{"status":true,"data":{"authorization_url":"https://checkout.paystack.com/test","reference":"` + request.Reference + `"}}`
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})
+			fx.service.paymentProvider = provider
+			fx.service.EnableControlledBeta()
+			order, err := fx.service.CreateOrder(ctx, fx.actor, OrderInput{
+				CustomerID: fx.customer.ID, StoreID: fx.store.ID, FulfilmentType: FulfilmentPickup,
+				Items: []OrderItemInput{{VariantID: fx.variant.ID, Quantity: 1}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			input := PaymentInput{OrderID: order.ID, IdempotencyKey: "retry-checkout", Email: "invalid"}
+			if _, err := fx.service.InitializePayment(ctx, fx.actor, input); err == nil {
+				t.Fatal("expected first checkout to fail")
+			}
+			input.Email = "buyer@example.com"
+			payment, err := fx.service.InitializePayment(ctx, fx.actor, input)
+			if !tc.retry {
+				if err == nil || len(refs) != 1 {
+					t.Fatalf("uncertain checkout allowed another provider call: calls=%d err=%v", len(refs), err)
+				}
+				return
+			}
+			if err != nil || payment.AuthorizationURL == "" || len(refs) != 2 || refs[0] == refs[1] {
+				t.Fatalf("corrected checkout did not succeed with a new reference: calls=%v err=%v", refs, err)
+			}
+			replay, err := fx.service.InitializePayment(ctx, fx.actor, input)
+			if err != nil || replay.ID != payment.ID || len(refs) != 2 {
+				t.Fatalf("successful checkout was not reused: calls=%d err=%v", len(refs), err)
+			}
+		})
 	}
 }
 
