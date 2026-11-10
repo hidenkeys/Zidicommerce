@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/jobs"
 	"gorm.io/gorm"
 )
@@ -39,6 +40,9 @@ func (s *Service) RegisterChannelSender(provider string, sender ChannelSender) {
 }
 
 func (s *Service) DispatchOutbound(ctx context.Context, channel core.Channel, input InboundMessage, result RuntimeResult) ([]ChannelOutboundMessage, error) {
+	if !s.allowsChannel(channel.Provider) {
+		return nil, httperror.Forbidden("Only WhatsApp is enabled in the controlled beta")
+	}
 	deliveries := make([]ChannelOutboundMessage, 0, len(result.Messages))
 	for index, message := range result.Messages {
 		payload := s.channelPayload(channel, input.Sender, message)
@@ -201,7 +205,7 @@ func (s *Service) SendOutboundNow(ctx context.Context, deliveryID uuid.UUID, att
 		return jobs.PermanentError{Err: err}
 	}
 	sender, ok := s.senders[strings.ToLower(channel.Provider)]
-	if !ok {
+	if !ok || !s.allowsChannel(channel.Provider) {
 		now := s.now()
 		updates := map[string]any{"status": OutboundSkipped, "error_message": "channel sender is not configured", "updated_at": now}
 		_ = s.db.WithContext(ctx).Model(&delivery).Updates(updates).Error

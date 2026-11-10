@@ -31,6 +31,7 @@ const defaultSessionTTL = 24 * time.Hour
 var runtimeUsableChannelStatuses = []string{core.StatusActive, "connected", "healthy", "degraded", "requires_attention"}
 
 type Service struct {
+	whatsAppOnly    bool
 	db              *gorm.DB
 	commerce        *core.Service
 	jobs            *jobs.Service
@@ -54,6 +55,14 @@ func (s *Service) ConfigureJobs(jobService *jobs.Service) {
 	s.jobs = jobService
 }
 
+func (s *Service) RestrictToWhatsApp() {
+	s.whatsAppOnly = true
+}
+
+func (s *Service) allowsChannel(provider string) bool {
+	return !s.whatsAppOnly || strings.EqualFold(strings.TrimSpace(provider), "whatsapp")
+}
+
 func (s *Service) ProcessMessage(ctx context.Context, input InboundMessage) (RuntimeResult, error) {
 	start := s.now()
 	if input.Timestamp.IsZero() {
@@ -69,6 +78,10 @@ func (s *Service) ProcessMessage(ctx context.Context, input InboundMessage) (Run
 	if err != nil {
 		return RuntimeResult{}, err
 	}
+	if !s.allowsChannel(channel.Provider) {
+		return RuntimeResult{}, httperror.Forbidden("Only WhatsApp is enabled in the controlled beta")
+	}
+
 	if input.TrustedOrganizationID != nil && channel.OrganizationID != *input.TrustedOrganizationID {
 		return RuntimeResult{}, httperror.Forbidden("Channel does not belong to your organization")
 	}

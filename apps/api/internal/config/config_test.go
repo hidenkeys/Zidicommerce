@@ -152,3 +152,26 @@ func TestMetaEmbeddedSignupConfigurationLoadsWithoutExposingItToFrontendConfig(t
 		t.Fatal("expected server-side Meta credentials to load")
 	}
 }
+
+func TestControlledBetaRequiresSafeConfiguration(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret-value-for-config")
+	t.Setenv("CONTROLLED_BETA", "true")
+	t.Setenv("PAYMENT_PROVIDER", "paystack")
+	t.Setenv("PAYSTACK_SECRET_KEY", "sk_test_fixture")
+	if cfg, err := Load(); err != nil || !cfg.ControlledBeta {
+		t.Fatalf("expected valid beta configuration: %v", err)
+	}
+	for key, value := range map[string]string{
+		"PAYSTACK_SECRET_KEY":       "sk_live_fixture",
+		"WHATSAPP_FLOWS_ENABLED":    "true",
+		"WHATSAPP_SIGNATURE_BYPASS": "true",
+		"FIELD_SERVICE_DEMO_SEED":   "true",
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, value)
+			if _, err := Load(); err == nil {
+				t.Fatal("expected unsafe beta configuration to be rejected")
+			}
+		})
+	}
+}

@@ -87,6 +87,18 @@ func TestPhaseLOnboardingLifecycleAndControlledMessageFlow(t *testing.T) {
 	if err != nil || view.SetupState != SetupConnected {
 		t.Fatalf("validated setup did not connect: state=%q err=%v", view.SetupState, err)
 	}
+	repeatBody := []byte(textWebhook(view.PhoneNumberID, "wamid-phase-l-repeat", "Another message"))
+	repeatRequest := httptest.NewRequest(http.MethodPost, "/runtime/webhooks/whatsapp", bytes.NewReader(repeatBody))
+	repeatRequest.Header.Set("Content-Type", "application/json")
+	repeatRequest.Header.Set("X-Hub-Signature-256", sign(repeatBody, "app-secret"))
+	repeatResponse, err := app.Test(repeatRequest)
+	if err != nil || repeatResponse.StatusCode != http.StatusOK {
+		t.Fatalf("repeat inbound failed: %v", err)
+	}
+	reloaded, err := fx.service.GetConfiguration(context.Background(), fx.actor, fx.connection.ID)
+	if err != nil || reloaded.SetupState != SetupConnected {
+		t.Fatalf("repeat inbound regressed setup: state=%q err=%v", reloaded.SetupState, err)
+	}
 	assertProviderRecordsConnected(t, fx)
 	health, err := fx.service.EvaluateHealth(context.Background(), fx.actor, fx.connection.ID)
 	if err != nil || health.Status != channelplatform.HealthHealthy || health.SetupState != SetupHealthy {

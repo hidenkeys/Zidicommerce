@@ -12,19 +12,20 @@ import (
 )
 
 type Config struct {
-	AppName       string
-	AppEnv        string
-	ServerPort    string
-	LogLevel      string
-	MigrationsDir string
-	CORSOrigins   string
-	Database      DatabaseConfig
-	JWT           JWTConfig
-	Payment       PaymentConfig
-	Email         EmailConfig
-	FieldService  FieldServiceConfig
-	AI            AIConfig
-	Channels      ChannelConfig
+	ControlledBeta bool
+	AppName        string
+	AppEnv         string
+	ServerPort     string
+	LogLevel       string
+	MigrationsDir  string
+	CORSOrigins    string
+	Database       DatabaseConfig
+	JWT            JWTConfig
+	Payment        PaymentConfig
+	Email          EmailConfig
+	FieldService   FieldServiceConfig
+	AI             AIConfig
+	Channels       ChannelConfig
 }
 
 // FieldServiceConfig controls the optional field-service pilot tenant. Seeding
@@ -122,12 +123,13 @@ type EmailConfig struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		AppName:       getenv("APP_NAME", "zidicommerce"),
-		AppEnv:        getenv("APP_ENV", "development"),
-		ServerPort:    getenv("SERVER_PORT", "8080"),
-		LogLevel:      getenv("LOG_LEVEL", "info"),
-		MigrationsDir: getenv("MIGRATIONS_DIR", "migrations"),
-		CORSOrigins:   getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
+		ControlledBeta: boolEnv("CONTROLLED_BETA", false),
+		AppName:        getenv("APP_NAME", "zidicommerce"),
+		AppEnv:         getenv("APP_ENV", "development"),
+		ServerPort:     getenv("SERVER_PORT", "8080"),
+		LogLevel:       getenv("LOG_LEVEL", "info"),
+		MigrationsDir:  getenv("MIGRATIONS_DIR", "migrations"),
+		CORSOrigins:    getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
 		Database: DatabaseConfig{
 			URL:      os.Getenv("DATABASE_URL"),
 			Host:     getenv("DATABASE_HOST", "localhost"),
@@ -236,6 +238,15 @@ func Load() (Config, error) {
 		}
 		if strings.EqualFold(cfg.AppEnv, "production") && parsed.Scheme != "https" {
 			return Config{}, errors.New("WHATSAPP_WEBHOOK_PUBLIC_BASE_URL must use HTTPS in production")
+		}
+	}
+
+	if cfg.ControlledBeta {
+		if cfg.Payment.Provider != "paystack" || (cfg.Payment.PaystackSecret != "" && !strings.HasPrefix(strings.TrimSpace(cfg.Payment.PaystackSecret), "sk_test_")) {
+			return Config{}, errors.New("CONTROLLED_BETA requires Paystack test mode")
+		}
+		if cfg.Channels.WhatsAppSignatureBypass || cfg.Channels.WhatsAppFlowsEnabled || cfg.FieldService.SeedDemo || cfg.FieldService.PilotSeedProfile != "" || cfg.FieldService.AdoptPhoneNumberID != "" {
+			return Config{}, errors.New("CONTROLLED_BETA requires signed WhatsApp with Flows, seeds and number adoption disabled")
 		}
 	}
 

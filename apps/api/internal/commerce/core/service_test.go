@@ -1251,7 +1251,7 @@ func TestDisabledMemberCannotAuthenticate(t *testing.T) {
 
 func TestPaystackWebhookIsSignatureVerifiedAndIdempotent(t *testing.T) {
 	fx := newCommerceFixture(t, 5)
-	fx.service.paymentProvider = namedPaymentProvider{name: "paystack"}
+	fx.service.paymentProvider = namedPaymentProvider{name: "paystack", amountMinor: fx.variant.PriceMinor, currency: "NGN"}
 	fx.service.ConfigurePaymentWebhooks("paystack-secret")
 	channel := Channel{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, Provider: "whatsapp", DisplayName: "WhatsApp", Status: "healthy", Config: "{}", SecretConfig: "{}"}
 	if err := fx.db.Create(&channel).Error; err != nil {

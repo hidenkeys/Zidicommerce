@@ -410,7 +410,7 @@ func TestJourneyFlowCommerceSubmissionCreatesOrderExactlyOnce(t *testing.T) {
 	}
 	// Deterministic provider verification models an independently confirmed
 	// payment; this is deliberately not evidence of a live Paystack charge.
-	verifiedService := core.NewService(fx.db, runtimeTestPaymentProvider{name: "paystack"})
+	verifiedService := core.NewService(fx.db, runtimeTestPaymentProvider{name: "paystack", db: fx.db})
 	if _, err := verifiedService.VerifyPayment(ctx, fx.actor, core.PaymentVerifyInput{Reference: payment.Reference}); err != nil {
 		t.Fatal(err)
 	}

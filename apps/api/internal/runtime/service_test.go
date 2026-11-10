@@ -125,6 +125,10 @@ func newRuntimeFixtureWithPaymentProvider(t *testing.T, config bot.VersionConfig
 	if err := db.Create(&channel).Error; err != nil {
 		t.Fatal(err)
 	}
+	if mock, ok := provider.(runtimeTestPaymentProvider); ok {
+		mock.db = db
+		provider = mock
+	}
 	commerce := core.NewService(db, provider)
 	return runtimeFixture{db: db, commerce: commerce, service: NewService(db, commerce, nil), actor: actor, channel: channel, bot: botRecord, version: version}
 }
@@ -204,6 +208,7 @@ func createRuntimeSessionForScopeTest(t *testing.T, fx runtimeFixture, externalI
 }
 
 type runtimeTestPaymentProvider struct {
+	db          *gorm.DB
 	name        string
 	forceUnpaid bool
 }
@@ -243,7 +248,11 @@ func (p runtimeTestPaymentProvider) Verify(_ context.Context, reference string) 
 	if p.forceUnpaid {
 		return core.PaymentVerification{Reference: reference, Paid: false, Status: "pending"}, nil
 	}
-	return core.PaymentVerification{Reference: reference, Paid: true, Status: "success"}, nil
+	var payment core.Payment
+	if err := p.db.Where("reference = ?", reference).First(&payment).Error; err != nil {
+		return core.PaymentVerification{}, err
+	}
+	return core.PaymentVerification{Reference: reference, Paid: true, Status: "success", AmountMinor: payment.AmountMinor, Currency: payment.Currency}, nil
 }
 
 func TestRuntimeExecutesMessageQuestionAndEnd(t *testing.T) {
@@ -1082,14 +1091,14 @@ func TestRuntimePersistsOrderOutputsWhenPaymentInitializationFails(t *testing.T)
 	}
 
 	retried := send("pr-retry", "retry")
-	if !strings.Contains(joinMessageTexts(retried.Messages), "https://payments.zidicommerce.local/pay/") {
-		t.Fatalf("expected payment initialization retry to return a link, got %+v", retried.Messages)
+	if !strings.Contains(joinMessageTexts(retried.Messages), "could not initialize payment") {
+		t.Fatalf("uncertain checkout retry should remain blocked, got %+v", retried.Messages)
 	}
 	provider.mu.Lock()
 	attempts := provider.attempts
 	provider.mu.Unlock()
-	if attempts != 2 {
-		t.Fatalf("expected exactly two payment initialization attempts, got %d", attempts)
+	if attempts != 1 {
+		t.Fatalf("expected one remote initialization despite retry, got %d", attempts)
 	}
 }
 
@@ -2143,4 +2152,48 @@ func seedCommerce(t *testing.T, fx runtimeFixture) (core.Customer, core.Store, c
 		t.Fatal(err)
 	}
 	return customer, store, product.Variants[0]
+}
+
+func TestControlledBetaRejectsExistingNonWhatsAppChannel(t *testing.T) {
+	fx := newRuntimeFixture(t, bot.VersionConfiguration{})
+	fx.service.RestrictToWhatsApp()
+	ctx := context.Background()
+	fx.channel.Provider = "instagram"
+	if err := fx.db.Model(&fx.channel).Update("provider", fx.channel.Provider).Error; err != nil {
+		t.Fatal(err)
+	}
+	input := inbound(fx.channel.ID, "beta-message", "beta-conversation", "hello")
+	if _, err := fx.service.ProcessMessage(ctx, input); err == nil {
+		t.Fatal("accepted non-WhatsApp inbound")
+	}
+	if _, err := fx.service.DispatchOutbound(ctx, fx.channel, input, RuntimeResult{Messages: []OutboundMessage{{Type: MessageText, Text: "hello"}}}); err == nil {
+		t.Fatal("accepted non-WhatsApp outbound")
+	}
+}
+
+func TestPaymentCheckRejectsAnotherCustomersReferenceBeforeVerification(t *testing.T) {
+	fx := newRuntimeFixture(t, bot.VersionConfiguration{})
+	ctx := context.Background()
+	customer, store, variant := seedCommerce(t, fx)
+	order, err := fx.commerce.CreateOrder(ctx, fx.actor, core.OrderInput{
+		CustomerID: customer.ID, StoreID: store.ID, FulfilmentType: core.FulfilmentPickup,
+		Items: []core.OrderItemInput{{VariantID: variant.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payment, err := fx.commerce.InitializePayment(ctx, fx.actor, core.PaymentInput{OrderID: order.ID, IdempotencyKey: "customer-reference"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherCustomer := uuid.New()
+	session := ConversationSession{OrganizationID: fx.actor.OrganizationID, CustomerID: &otherCustomer}
+	actions := commerceActions{db: fx.db, commerce: fx.commerce}
+	if _, err := actions.checkPayment(ctx, RuntimeContext{Session: session}, map[string]any{"payment_reference": payment.Reference}); err == nil {
+		t.Fatal("accepted another customer's reference")
+	}
+	current, err := fx.commerce.GetPaymentByReference(ctx, fx.actor, payment.Reference)
+	if err != nil || current.Status != core.PaymentPending {
+		t.Fatalf("another customer's payment was verified: %s, %v", current.Status, err)
+	}
 }

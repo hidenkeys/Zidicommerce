@@ -72,8 +72,8 @@ func (h *Handler) Register(router fiber.Router) {
 	router.Post("/orders/:id/transition", auth.RequirePermission(authz.PermissionOrdersManage), h.transitionOrder)
 
 	router.Get("/payments", auth.RequirePermission(authz.PermissionPaymentsView), h.listPayments)
-	router.Post("/payments/initialize", h.initializePayment)
-	router.Post("/payments/verify", h.verifyPayment)
+	router.Post("/payments/initialize", auth.RequirePermission(authz.PermissionPaymentsManage), h.initializePayment)
+	router.Post("/payments/verify", auth.RequirePermission(authz.PermissionPaymentsManage), h.verifyPayment)
 	router.Post("/payments/:id/reconcile", auth.RequirePermission(authz.PermissionPaymentsReconcile), h.reconcilePayment)
 	router.Get("/payment-configurations", auth.RequirePermission(authz.PermissionPaymentsView), h.listPaymentConfigurations)
 	router.Post("/payment-configurations", auth.RequirePermission(authz.PermissionPaymentsManage), h.upsertPaymentConfiguration)

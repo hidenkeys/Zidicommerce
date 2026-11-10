@@ -49,7 +49,17 @@ func (h *Handler) Register(router fiber.Router) {
 }
 
 func (h *Handler) listProviders(c *fiber.Ctx) error {
-	return c.JSON(fiber.Map{"data": ProviderCatalog()})
+	providers := ProviderCatalog()
+	if h.service.whatsAppOnly {
+		filtered := providers[:0]
+		for _, provider := range providers {
+			if provider.Provider == "whatsapp" {
+				filtered = append(filtered, provider)
+			}
+		}
+		providers = filtered
+	}
+	return c.JSON(fiber.Map{"data": providers})
 }
 
 func (h *Handler) listConnections(c *fiber.Ctx) error {

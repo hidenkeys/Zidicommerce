@@ -660,6 +660,11 @@ func (a commerceActions) checkPayment(ctx context.Context, runtimeContext Runtim
 	if err != nil {
 		return nil, runtimeErrorf(ErrActionFailed, "I could not find that payment.", "get payment failed: %v", err)
 	}
+	order, err := a.commerce.GetOrder(ctx, a.actor(runtimeContext), payment.OrderID)
+	if err != nil || order.CustomerID != customerID {
+		return nil, runtimeError(ErrActionFailed, "I could not load that payment.")
+	}
+
 	if payment.Status != core.PaymentPaid {
 		if verified, err := a.commerce.VerifyPayment(ctx, a.actor(runtimeContext), core.PaymentVerifyInput{Reference: payment.Reference, Source: core.CommerceEventSourceRuntime}); err == nil {
 			payment = verified
@@ -667,13 +672,12 @@ func (a commerceActions) checkPayment(ctx context.Context, runtimeContext Runtim
 	}
 	message := "Your payment has not been completed yet. You can try again, cancel the order, or talk to support."
 	if payment.Status == core.PaymentPaid {
-		order, err := a.commerce.GetOrder(ctx, a.actor(runtimeContext), payment.OrderID)
+		// Verification can advance the order, so read its current status.
+		order, err = a.commerce.GetOrder(ctx, a.actor(runtimeContext), payment.OrderID)
 		if err != nil {
 			return nil, runtimeErrorf(ErrActionFailed, "I could not load your confirmed order.", "get paid order failed: %v", err)
 		}
-		if order.CustomerID != customerID {
-			return nil, runtimeError(ErrActionFailed, "I could not load that payment.")
-		}
+
 		var fulfilment *core.Fulfilment
 		if row, err := a.commerce.GetFulfilment(ctx, a.actor(runtimeContext), order.ID); err == nil {
 			fulfilment = &row
