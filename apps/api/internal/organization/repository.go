@@ -2,6 +2,7 @@ package organization
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/google/uuid"
@@ -88,6 +89,29 @@ func (r *UserRepository) FindByEmail(ctx context.Context, email string) (auth.Us
 		Role:           role,
 		Status:         user.Status,
 	}, nil
+}
+
+// SessionRole checks the exact tenant in the token. Legacy users without any
+// membership rows and users awaiting onboarding retain their account role.
+func (r *UserRepository) SessionRole(ctx context.Context, userID, organizationID uuid.UUID) (authz.Role, error) {
+	var session struct{ Role authz.Role }
+	query := r.db.WithContext(ctx).Table("users AS u").
+		Select("COALESCE(m.role, u.role) AS role").
+		Joins("LEFT JOIN organization_memberships AS m ON m.user_id = u.id AND m.organization_id = ?", organizationID).
+		Where("u.id = ? AND u.status = ?", userID, "active")
+
+	legacy := "u.organization_id = ?"
+	if organizationID == uuid.Nil {
+		legacy = "u.organization_id IS NULL OR u.organization_id = ?"
+	}
+	err := query.Where(
+		"m.status = ? OR (("+legacy+") AND NOT EXISTS (SELECT 1 FROM organization_memberships WHERE user_id = u.id))",
+		"active", organizationID,
+	).Take(&session).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", httperror.Unauthorized("Session access is no longer active")
+	}
+	return session.Role, err
 }
 
 func (r *UserRepository) CreateUser(ctx context.Context, input auth.RegisterInput, passwordHash string) (auth.UserIdentity, error) {
