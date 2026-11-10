@@ -347,7 +347,13 @@ func (h *Handler) receiveWebhook(c *fiber.Ctx) error {
 		if normalizeErr != nil {
 			return httperror.BadRequest("WhatsApp webhook normalization failed")
 		}
+		allowedInbound := false
 		for _, event := range inbound {
+			if !h.adapter.allowsTester(event.ExternalCustomerID) {
+				ignored++
+				continue
+			}
+			allowedInbound = true
 			providerEvent, created, recordErr := h.platform.RecordProviderEvent(c.UserContext(), channelplatform.ProviderEventInput{OrganizationID: connection.OrganizationID, ConnectionID: connection.ID, Provider: Provider, EventType: "inbound_message", ProviderEventID: event.ProviderEventID, IdempotencyKey: "whatsapp:message:" + event.ExternalMessageID, NormalizedStatus: "processing", PayloadMetadata: event.Metadata, ReceivedAt: event.Timestamp})
 			if recordErr != nil {
 				return recordErr
@@ -385,6 +391,10 @@ func (h *Handler) receiveWebhook(c *fiber.Ctx) error {
 			return unsupportedErr
 		}
 		for _, event := range unsupported {
+			if !h.adapter.allowsTester(event.ExternalCustomerID) {
+				ignored++
+				continue
+			}
 			_, created, recordErr := h.platform.RecordProviderEvent(c.UserContext(), channelplatform.ProviderEventInput{OrganizationID: connection.OrganizationID, ConnectionID: connection.ID, Provider: Provider, EventType: "inbound_unsupported", ProviderEventID: event.ProviderEventID, IdempotencyKey: "whatsapp:unsupported:" + event.ProviderEventID, NormalizedStatus: "ignored", PayloadMetadata: map[string]any{"message_type": event.MessageType}})
 			if recordErr != nil {
 				return recordErr
@@ -420,7 +430,7 @@ func (h *Handler) receiveWebhook(c *fiber.Ctx) error {
 				deliveryUpdates++
 			}
 		}
-		if len(inbound) > 0 {
+		if allowedInbound {
 			_ = h.service.MarkInbound(c.UserContext(), configuration)
 			_, _ = h.platform.RecordHealthCheck(c.UserContext(), connection.OrganizationID, connection.ID, channelplatform.HealthCheckInput{Status: channelplatform.HealthHealthy, Metadata: jsonValue(map[string]any{"check_type": "inbound_webhook"})})
 		}

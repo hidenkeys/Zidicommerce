@@ -541,3 +541,45 @@ func sign(body []byte, secret string) string {
 	_, _ = mac.Write(body)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
+
+func TestDesignatedTesterFilter(t *testing.T) {
+	fx := newWhatsAppFixture(t)
+	view := configureWhatsApp(t, fx)
+	if err := fx.service.MarkWebhookVerified(context.Background(), view.Configuration); err != nil {
+		t.Fatal(err)
+	}
+	fx.adapter.RestrictToTesters([]string{"2348000000000"})
+	processor := &recordingProcessor{}
+	app := fiber.New()
+	NewHandler(fx.service, fx.platform, fx.adapter, processor).RegisterPublic(app)
+
+	for _, tc := range []struct {
+		sender    string
+		id        string
+		processed int
+		ignored   int
+	}{
+		{"2348000000001", "wamid-blocked", 0, 1},
+		{"2348000000000", "wamid-allowed", 1, 0},
+	} {
+		body := []byte(strings.Replace(textWebhook(view.PhoneNumberID, tc.id, "order"), "2348000000000", tc.sender, 1))
+		request := httptest.NewRequest(http.MethodPost, "/runtime/webhooks/whatsapp", bytes.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("X-Hub-Signature-256", sign(body, "app-secret"))
+		response, err := app.Test(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result struct{ Data map[string]int }
+		err = json.NewDecoder(response.Body).Decode(&result)
+		response.Body.Close()
+		if err != nil || response.StatusCode != 200 || result.Data["processed"] != tc.processed || result.Data["ignored"] != tc.ignored || processor.Count() != tc.processed {
+			t.Fatalf("unexpected webhook outcome: status=%d result=%v err=%v", response.StatusCode, result, err)
+		}
+	}
+
+	_, err := fx.adapter.Send(context.Background(), channelplatform.OutboundCommand{ExternalCustomerID: "2348000000001"})
+	if err == nil || err.Error() != "WhatsApp recipient is outside the designated tester list" {
+		t.Fatalf("non-tester outbound was not stopped at the adapter: %v", err)
+	}
+}

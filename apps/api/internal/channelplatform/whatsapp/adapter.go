@@ -29,6 +29,7 @@ type Adapter struct {
 	graphBaseURL    string
 	client          HTTPClient
 	signatureBypass bool
+	testerNumbers   map[string]struct{}
 	now             func() time.Time
 }
 
@@ -41,6 +42,22 @@ func NewAdapter(service *Service, platform *channelplatform.Service, graphBaseUR
 		client = &http.Client{Timeout: 12 * time.Second}
 	}
 	return &Adapter{service: service, platform: platform, graphBaseURL: graphBaseURL, client: client, signatureBypass: signatureBypass, now: func() time.Time { return time.Now().UTC() }}
+}
+
+// RestrictToTesters configures both directions before the adapter starts serving.
+func (a *Adapter) RestrictToTesters(numbers []string) {
+	a.testerNumbers = make(map[string]struct{}, len(numbers))
+	for _, number := range numbers {
+		a.testerNumbers[number] = struct{}{}
+	}
+}
+
+func (a *Adapter) allowsTester(number string) bool {
+	if a.testerNumbers == nil {
+		return true
+	}
+	_, allowed := a.testerNumbers[strings.TrimPrefix(strings.TrimSpace(number), "+")]
+	return allowed
 }
 
 func (a *Adapter) Provider() string { return Provider }
@@ -222,6 +239,9 @@ func (a *Adapter) UnsupportedInbound(ctx context.Context, envelope channelplatfo
 }
 
 func (a *Adapter) Send(ctx context.Context, command channelplatform.OutboundCommand) (channelplatform.SendResult, error) {
+	if !a.allowsTester(command.ExternalCustomerID) {
+		return channelplatform.SendResult{}, errors.New("WhatsApp recipient is outside the designated tester list")
+	}
 	configuration, err := a.configurationByConnection(ctx, command.ChannelConnectionID)
 	if err != nil {
 		return channelplatform.SendResult{}, err

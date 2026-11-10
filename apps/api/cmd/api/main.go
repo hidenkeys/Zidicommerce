@@ -108,6 +108,9 @@ func main() {
 		WebhookVerifyToken: cfg.Channels.MetaWebhookVerifyToken,
 	}, whatsappadapter.NewMetaGraphClient(cfg.Channels.WhatsAppGraphBaseURL, cfg.Channels.MetaAppID, cfg.Channels.MetaAppSecret, cfg.Channels.MetaGraphAPIVersion, nil))
 	whatsAppAdapter := whatsappadapter.NewAdapter(whatsAppService, channelService, cfg.Channels.WhatsAppGraphBaseURL, nil, cfg.Channels.WhatsAppSignatureBypass)
+	if len(cfg.Channels.WhatsAppTesterNumbers) > 0 {
+		whatsAppAdapter.RestrictToTesters(cfg.Channels.WhatsAppTesterNumbers)
+	}
 	instagramAdapter := metaadapter.NewMessagingAdapter(metaadapter.ProviderInstagram, metaService, channelService, cfg.Channels.InstagramGraphBaseURL, cfg.Channels.MetaGraphAPIVersion, cfg.Channels.MetaAppSecret, nil)
 	facebookAdapter := metaadapter.NewMessagingAdapter(metaadapter.ProviderFacebook, metaService, channelService, cfg.Channels.WhatsAppGraphBaseURL, cfg.Channels.MetaGraphAPIVersion, cfg.Channels.MetaAppSecret, nil)
 	commerceService.ConfigurePaymentWebhooks(cfg.Payment.PaystackSecret)

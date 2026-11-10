@@ -89,6 +89,7 @@ type ChannelConfig struct {
 	WhatsAppGraphBaseURL         string
 	WhatsAppWebhookPublicBaseURL string
 	WhatsAppSignatureBypass      bool
+	WhatsAppTesterNumbers        []string
 	WhatsAppFlowsEnabled         bool
 	WhatsAppFlowsTestWABAID      string
 	WhatsAppFlowsTestPhoneID     string
@@ -238,6 +239,17 @@ func Load() (Config, error) {
 		}
 		if strings.EqualFold(cfg.AppEnv, "production") && parsed.Scheme != "https" {
 			return Config{}, errors.New("WHATSAPP_WEBHOOK_PUBLIC_BASE_URL must use HTTPS in production")
+		}
+	}
+
+	if raw, configured := os.LookupEnv("WHATSAPP_TESTER_NUMBERS"); configured {
+		for _, value := range strings.Split(raw, ",") {
+			number := strings.TrimPrefix(strings.TrimSpace(value), "+")
+			if len(number) < 8 || len(number) > 15 || number[0] == '0' ||
+				strings.IndexFunc(number, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+				return Config{}, errors.New("WHATSAPP_TESTER_NUMBERS must contain international phone numbers")
+			}
+			cfg.Channels.WhatsAppTesterNumbers = append(cfg.Channels.WhatsAppTesterNumbers, number)
 		}
 	}
 
