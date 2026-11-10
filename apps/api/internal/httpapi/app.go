@@ -26,6 +26,7 @@ type Dependencies struct {
 	DB           *sql.DB
 	TokenManager *auth.TokenManager
 	AuthService  *auth.Service
+	SessionRoles auth.SessionRoleReader
 	OrgHandler   *organization.Handler
 	Commerce     *core.Handler
 	Channels     *channelplatform.Handler
@@ -65,7 +66,7 @@ func New(deps Dependencies) *fiber.App {
 		deps.Meta.RegisterPublic(v1)
 	}
 
-	protected := v1.Group("", auth.Middleware(deps.TokenManager))
+	protected := v1.Group("", auth.Middleware(deps.TokenManager, deps.SessionRoles))
 	protected.Get("/auth/me", meHandler)
 
 	protected.Get("/organizations/current", deps.OrgHandler.Current)

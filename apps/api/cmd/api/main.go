@@ -260,6 +260,7 @@ func main() {
 		DB:           sqlDB,
 		TokenManager: tokenManager,
 		AuthService:  auth.NewService(userRepo, tokenManager),
+		SessionRoles: userRepo,
 		OrgHandler:   organization.NewHandler(orgRepo),
 		Commerce:     core.NewHandler(commerceService, tokenManager),
 		Channels:     channelplatform.NewHandler(channelService, oauthService),

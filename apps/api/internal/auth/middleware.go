@@ -1,14 +1,20 @@
 package auth
 
 import (
+	"context"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
 )
 
-func Middleware(tokens *TokenManager) fiber.Handler {
+type SessionRoleReader interface {
+	SessionRole(ctx context.Context, userID, organizationID uuid.UUID) (authz.Role, error)
+}
+
+func Middleware(tokens *TokenManager, sessions SessionRoleReader) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		header := strings.TrimSpace(c.Get("Authorization"))
 		if header == "" {
@@ -25,10 +31,17 @@ func Middleware(tokens *TokenManager) fiber.Handler {
 			return httperror.Unauthorized("Invalid or expired token")
 		}
 
+		role, err := sessions.SessionRole(c.UserContext(), claims.UserID, claims.OrganizationID)
+		if err != nil {
+			return err
+		}
+		if !authz.IsValid(role.String()) || role.String() != claims.Role {
+			return httperror.Unauthorized("Session access changed. Sign in again.")
+		}
 		SetCurrentUser(c, CurrentUser{
 			ID:             claims.UserID,
 			OrganizationID: claims.OrganizationID,
-			Role:           authz.Role(claims.Role),
+			Role:           role,
 		})
 		return c.Next()
 	}
