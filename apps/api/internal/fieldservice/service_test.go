@@ -440,7 +440,25 @@ func TestDispatchTimeoutAdvances(t *testing.T) {
 	if err := fx.db.Where("request_id = ?", request.ID).First(&attempt).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := fx.field.ProcessDispatchTimeout(ctx, jobs.Job{Payload: `{"attempt_id":"` + attempt.ID.String() + `"}`}); err != nil {
+	job := jobs.Job{Payload: `{"attempt_id":"` + attempt.ID.String() + `"}`}
+	otherOrg := uuid.New()
+	job.OrganizationID = &otherOrg
+	if err := fx.field.ProcessDispatchTimeout(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	var foreign DispatchAttempt
+	if err := fx.db.First(&foreign, "id = ?", attempt.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	if err := fx.db.Model(&DispatchAttempt{}).Where("request_id = ?", request.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if foreign.Status != DispatchNotified || count != 1 {
+		t.Fatal("cross-tenant job changed or advanced dispatch")
+	}
+	job.OrganizationID = &fx.actor.OrganizationID
+	if err := fx.field.ProcessDispatchTimeout(ctx, job); err != nil {
 		t.Fatal(err)
 	}
 	var next DispatchAttempt

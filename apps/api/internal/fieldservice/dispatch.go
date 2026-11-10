@@ -2,6 +2,7 @@ package fieldservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -113,12 +114,12 @@ func (s *Service) notifyNextProvider(ctx context.Context, actor auth.CurrentUser
 		return err
 	}
 	var matches []Match
-	if err := s.db.WithContext(ctx).Where("request_id = ?", requestID).Order("rank ASC").Find(&matches).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND request_id = ?", actor.OrganizationID, requestID).Order("rank ASC").Find(&matches).Error; err != nil {
 		return err
 	}
 	tried := map[uuid.UUID]struct{}{}
 	var previous []DispatchAttempt
-	_ = s.db.WithContext(ctx).Where("request_id = ?", requestID).Find(&previous)
+	_ = s.db.WithContext(ctx).Where("organization_id = ? AND request_id = ?", actor.OrganizationID, requestID).Find(&previous)
 	for _, attempt := range previous {
 		if attempt.Status != DispatchCancelled {
 			tried[attempt.ProviderID] = struct{}{}
@@ -175,20 +176,26 @@ func (s *Service) notifyNextProvider(ctx context.Context, actor auth.CurrentUser
 }
 
 func (s *Service) ProcessDispatchTimeout(ctx context.Context, job jobs.Job) error {
+	if job.OrganizationID == nil || *job.OrganizationID == uuid.Nil {
+		return jobs.PermanentError{Err: errors.New("job organization is required")}
+	}
 	payload := parseMap(job.Payload)
 	attemptID, err := uuid.Parse(stringValue(payload["attempt_id"]))
 	if err != nil {
 		return jobs.PermanentError{Err: fmt.Errorf("invalid attempt")}
 	}
 	var attempt DispatchAttempt
-	if err := s.db.WithContext(ctx).Where("id = ?", attemptID).First(&attempt).Error; err != nil {
-		return nil
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", *job.OrganizationID, attemptID).First(&attempt).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
 	}
 	if attempt.Status != DispatchNotified {
 		return nil
 	}
 	now := s.now()
-	if err := s.db.WithContext(ctx).Model(&DispatchAttempt{}).Where("id = ?", attempt.ID).Updates(map[string]any{"status": DispatchTimeout, "responded_at": now, "updated_at": now}).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(&DispatchAttempt{}).Where("organization_id = ? AND id = ?", *job.OrganizationID, attempt.ID).Updates(map[string]any{"status": DispatchTimeout, "responded_at": now, "updated_at": now}).Error; err != nil {
 		return err
 	}
 	actor := auth.CurrentUser{OrganizationID: attempt.OrganizationID, Role: authz.MerchantAdmin}

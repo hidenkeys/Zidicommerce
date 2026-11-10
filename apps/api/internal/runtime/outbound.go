@@ -96,7 +96,7 @@ func (s *Service) DispatchOutbound(ctx context.Context, channel core.Channel, in
 			deliveries = append(deliveries, delivery)
 			continue
 		}
-		if err := s.SendOutboundNow(ctx, delivery.ID, 1, 5); err != nil {
+		if err := s.sendOutboundNow(ctx, delivery.OrganizationID, delivery.ID, 1, 5); err != nil {
 			return deliveries, err
 		}
 		_ = s.db.WithContext(ctx).Where("id = ?", delivery.ID).First(&delivery).Error
@@ -106,6 +106,9 @@ func (s *Service) DispatchOutbound(ctx context.Context, channel core.Channel, in
 }
 
 func (s *Service) ProcessOutboundJob(ctx context.Context, job jobs.Job) error {
+	if job.OrganizationID == nil || *job.OrganizationID == uuid.Nil {
+		return jobs.PermanentError{Err: errors.New("job organization is required")}
+	}
 	var payload struct {
 		OutboundMessageID string `json:"outbound_message_id"`
 	}
@@ -116,10 +119,13 @@ func (s *Service) ProcessOutboundJob(ctx context.Context, job jobs.Job) error {
 	if err != nil {
 		return jobs.PermanentError{Err: err}
 	}
-	return s.SendOutboundNow(ctx, id, job.Attempts+1, job.MaxAttempts)
+	return s.sendOutboundNow(ctx, *job.OrganizationID, id, job.Attempts+1, job.MaxAttempts)
 }
 
 func (s *Service) ProcessNotificationJob(ctx context.Context, job jobs.Job) error {
+	if job.OrganizationID == nil || *job.OrganizationID == uuid.Nil {
+		return jobs.PermanentError{Err: errors.New("job organization is required")}
+	}
 	var payload struct {
 		NotificationID string `json:"notification_id"`
 	}
@@ -131,7 +137,7 @@ func (s *Service) ProcessNotificationJob(ctx context.Context, job jobs.Job) erro
 		return jobs.PermanentError{Err: err}
 	}
 	var notification core.CommerceNotification
-	if err := s.db.WithContext(ctx).Where("id = ?", notificationID).First(&notification).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", *job.OrganizationID, notificationID).First(&notification).Error; err != nil {
 		return jobs.PermanentError{Err: err}
 	}
 	if notification.Status == "sent" || notification.Status == "skipped" {
@@ -155,7 +161,7 @@ func (s *Service) ProcessNotificationJob(ctx context.Context, job jobs.Job) erro
 	if err != nil {
 		return err
 	}
-	if err := s.SendOutboundNow(ctx, delivery.ID, job.Attempts+1, job.MaxAttempts); err != nil {
+	if err := s.sendOutboundNow(ctx, delivery.OrganizationID, delivery.ID, job.Attempts+1, job.MaxAttempts); err != nil {
 		now := s.now()
 		attempt := job.Attempts + 1
 		status := "retry_pending"
@@ -192,8 +198,8 @@ func (s *Service) notificationDelivery(ctx context.Context, notification core.Co
 	return delivery, s.db.WithContext(ctx).Create(&delivery).Error
 }
 
-func (s *Service) SendOutboundNow(ctx context.Context, deliveryID uuid.UUID, attempt, maxAttempts int) error {
-	delivery, claimed, err := s.claimOutboundForSend(ctx, deliveryID, attempt)
+func (s *Service) sendOutboundNow(ctx context.Context, organizationID, deliveryID uuid.UUID, attempt, maxAttempts int) error {
+	delivery, claimed, err := s.claimOutboundForSend(ctx, organizationID, deliveryID, attempt)
 	if err != nil {
 		return jobs.PermanentError{Err: err}
 	}
@@ -244,7 +250,7 @@ func (s *Service) SendOutboundNow(ctx context.Context, deliveryID uuid.UUID, att
 	return s.db.WithContext(ctx).Model(&delivery).Updates(map[string]any{"status": OutboundSent, "attempts": attempt, "provider_message_id": providerResult.ProviderMessageID, "provider_response": jsonValue(providerResult.Response), "sent_at": &now, "next_attempt_at": nil, "error_message": "", "updated_at": now}).Error
 }
 
-func (s *Service) claimOutboundForSend(ctx context.Context, deliveryID uuid.UUID, attempt int) (ChannelOutboundMessage, bool, error) {
+func (s *Service) claimOutboundForSend(ctx context.Context, organizationID, deliveryID uuid.UUID, attempt int) (ChannelOutboundMessage, bool, error) {
 	now := s.now()
 	staleSendingCutoff := now.Add(-15 * time.Minute)
 	if s.db.Dialector.Name() == "postgres" {
@@ -252,14 +258,14 @@ func (s *Service) claimOutboundForSend(ctx context.Context, deliveryID uuid.UUID
 		err := s.db.WithContext(ctx).Raw(`
 			UPDATE channel_outbound_messages
 			SET status = ?, attempts = ?, error_message = '', updated_at = ?
-			WHERE id = ?
+			WHERE organization_id = ? AND id = ?
 			  AND provider_message_id = ''
 			  AND (
 			    status IN (?, ?, ?)
 			    OR (status = ? AND updated_at <= ?)
 			  )
 			RETURNING *
-		`, OutboundSending, attempt, now, deliveryID, OutboundQueued, OutboundFailed, OutboundRetryPending, OutboundSending, staleSendingCutoff).Scan(&delivery).Error
+		`, OutboundSending, attempt, now, organizationID, deliveryID, OutboundQueued, OutboundFailed, OutboundRetryPending, OutboundSending, staleSendingCutoff).Scan(&delivery).Error
 		if err != nil {
 			return ChannelOutboundMessage{}, false, err
 		}
@@ -269,7 +275,10 @@ func (s *Service) claimOutboundForSend(ctx context.Context, deliveryID uuid.UUID
 		return delivery, true, nil
 	}
 	var delivery ChannelOutboundMessage
-	if err := s.db.WithContext(ctx).Where("id = ?", deliveryID).First(&delivery).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", organizationID, deliveryID).First(&delivery).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ChannelOutboundMessage{}, false, nil
+		}
 		return ChannelOutboundMessage{}, false, err
 	}
 	if delivery.ProviderMessageID != "" || !outboundClaimable(delivery, staleSendingCutoff) {
@@ -277,7 +286,7 @@ func (s *Service) claimOutboundForSend(ctx context.Context, deliveryID uuid.UUID
 	}
 	result := s.db.WithContext(ctx).
 		Model(&ChannelOutboundMessage{}).
-		Where("id = ? AND provider_message_id = '' AND (status IN ? OR (status = ? AND updated_at <= ?))", deliveryID, []string{OutboundQueued, OutboundFailed, OutboundRetryPending}, OutboundSending, staleSendingCutoff).
+		Where("organization_id = ? AND id = ? AND provider_message_id = '' AND (status IN ? OR (status = ? AND updated_at <= ?))", organizationID, deliveryID, []string{OutboundQueued, OutboundFailed, OutboundRetryPending}, OutboundSending, staleSendingCutoff).
 		Updates(map[string]any{"status": OutboundSending, "attempts": attempt, "error_message": "", "updated_at": now})
 	if result.Error != nil {
 		return ChannelOutboundMessage{}, false, result.Error

@@ -1977,6 +1977,17 @@ func TestRuntimeDuplicateOutboundJobsSendOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	job := jobs.Job{ID: uuid.New(), JobType: jobs.JobTypeChannelOutbound, Payload: jsonValue(map[string]any{"outbound_message_id": delivery.ID.String()}), MaxAttempts: 3}
+	otherOrg := uuid.New()
+	job.OrganizationID = &otherOrg
+	_ = fx.service.ProcessOutboundJob(context.Background(), job)
+	var foreign ChannelOutboundMessage
+	if err := fx.db.First(&foreign, "id = ?", delivery.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if foreign.Status != OutboundQueued || foreign.Attempts != 0 || len(sender.Sent) != 0 {
+		t.Fatal("cross-tenant job changed delivery state or sent a message")
+	}
+	job.OrganizationID = &fx.actor.OrganizationID
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -2004,6 +2015,17 @@ func TestRuntimeNotificationPermanentFailureIsRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	job := jobs.Job{ID: uuid.New(), JobType: jobs.JobTypeNotificationDelivery, Payload: jsonValue(map[string]any{"notification_id": notification.ID.String()}), MaxAttempts: 1}
+	otherOrg := uuid.New()
+	job.OrganizationID = &otherOrg
+	_ = fx.service.ProcessNotificationJob(context.Background(), job)
+	var foreign core.CommerceNotification
+	if err := fx.db.First(&foreign, "id = ?", notification.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if foreign.Status != "queued" || foreign.Attempts != 0 || len(sender.Sent) != 0 {
+		t.Fatal("cross-tenant job changed delivery state or sent a message")
+	}
+	job.OrganizationID = &fx.actor.OrganizationID
 	if err := fx.service.ProcessNotificationJob(context.Background(), job); err == nil {
 		t.Fatal("expected notification send failure")
 	}
@@ -2025,7 +2047,7 @@ func TestRuntimePermanentChannelPolicyFailureIsNotRetried(t *testing.T) {
 	if err := fx.db.Create(&delivery).Error; err != nil {
 		t.Fatal(err)
 	}
-	err := fx.service.SendOutboundNow(context.Background(), delivery.ID, 1, 5)
+	err := fx.service.sendOutboundNow(context.Background(), delivery.OrganizationID, delivery.ID, 1, 5)
 	var permanent jobs.PermanentError
 	if !errors.As(err, &permanent) {
 		t.Fatalf("expected permanent job error, got %v", err)
