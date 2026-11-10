@@ -56,6 +56,7 @@ type Service struct {
 	paymentSecretStore      PaymentProviderSecretStore
 	paystackProviderFactory func(secret string) PaymentProvider
 	paystackSecret          string
+	controlledBeta          bool
 	mailer                  email.Sender
 	appBaseURL              string
 	log                     *slog.Logger
@@ -74,6 +75,10 @@ func (s *Service) ConfigureNotifications(mailer email.Sender, appBaseURL string,
 	s.mailer = mailer
 	s.appBaseURL = strings.TrimRight(appBaseURL, "/")
 	s.log = logger
+}
+
+func (s *Service) EnableControlledBeta() {
+	s.controlledBeta = true
 }
 
 func (s *Service) ConfigurePaymentWebhooks(paystackSecret string) {
@@ -1076,6 +1081,10 @@ func (s *Service) TransitionOrder(ctx context.Context, actor auth.CurrentUser, o
 	if input.Status == "" {
 		return Order{}, httperror.BadRequest("Target status is required")
 	}
+	if s.controlledBeta && input.Status == OrderPaid {
+		return Order{}, httperror.BadRequest("Only provider verification can mark an order paid")
+	}
+
 	var order Order
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("orders.organization_id = ? AND orders.id = ?", actor.OrganizationID, orderID)
@@ -1161,21 +1170,61 @@ func (s *Service) InitializePayment(ctx context.Context, actor auth.CurrentUser,
 	if provider == nil {
 		return Payment{}, httperror.BadRequest("Payment provider is not configured")
 	}
-	var existing Payment
-	err = s.db.WithContext(ctx).Where("organization_id = ? AND order_id = ? AND provider = ? AND idempotency_key = ?", actor.OrganizationID, input.OrderID, providerName, input.IdempotencyKey).First(&existing).Error
-	if err == nil {
-		return existing, nil
-	}
-	if err != gorm.ErrRecordNotFound {
-		return Payment{}, err
-	}
-	reference := fmt.Sprintf("zc_%s", uuid.NewString())
-	init, err := provider.Initialize(ctx, PaymentInitializeRequest{Reference: reference, Email: input.Email, AmountMinor: order.TotalMinor, Currency: order.Currency, CallbackURL: input.CallbackURL, Metadata: map[string]string{"organization_id": actor.OrganizationID.String(), "order_id": order.ID.String(), "order_number": order.OrderNumber, "customer_id": order.CustomerID.String()}})
+	var payment Payment
+	reserved := false
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var current Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", actor.OrganizationID, order.ID).First(&current).Error; err != nil {
+			return err
+		}
+		if current.Status != OrderAwaitingPayment {
+			return httperror.BadRequest("Payment can only be initialized for orders awaiting payment")
+		}
+		query := tx.Where("organization_id = ? AND order_id = ? AND provider = ?", actor.OrganizationID, current.ID, providerName)
+		// A beta order has one Paystack checkout, even if a caller changes its retry key.
+		if !s.controlledBeta {
+			query = query.Where("idempotency_key = ?", input.IdempotencyKey)
+		}
+		if err := query.First(&payment).Error; err == nil {
+			return nil
+		} else if err != gorm.ErrRecordNotFound {
+			return err
+		}
+		payment = Payment{ID: uuid.New(), OrganizationID: actor.OrganizationID, OrderID: current.ID, Provider: providerName, Reference: "zc_" + uuid.NewString(), Status: PaymentPending, AmountMinor: current.TotalMinor, Currency: current.Currency, IdempotencyKey: input.IdempotencyKey, Metadata: "{}"}
+		reserved = true
+		return tx.Create(&payment).Error
+	})
 	if err != nil {
 		return Payment{}, err
 	}
-	payment := Payment{ID: uuid.New(), OrganizationID: actor.OrganizationID, OrderID: order.ID, Provider: providerName, Reference: init.Reference, Status: PaymentPending, AmountMinor: order.TotalMinor, Currency: order.Currency, AuthorizationURL: init.AuthorizationURL, IdempotencyKey: input.IdempotencyKey, Metadata: jsonObject(init.ProviderMetadata)}
-	return payment, s.db.WithContext(ctx).Create(&payment).Error
+	if !reserved {
+		if s.controlledBeta && jsonMap(payment.Metadata)["paystack_test_mode"] != true {
+			return Payment{}, httperror.Conflict("Existing checkout has no test-mode attestation")
+		}
+
+		if payment.AuthorizationURL == "" {
+			return Payment{}, httperror.Conflict("Checkout initialization is pending or needs reconciliation")
+		}
+		return payment, nil
+	}
+	init, err := provider.Initialize(ctx, PaymentInitializeRequest{Reference: payment.Reference, Email: input.Email, AmountMinor: payment.AmountMinor, Currency: payment.Currency, CallbackURL: input.CallbackURL, Metadata: map[string]string{"organization_id": actor.OrganizationID.String(), "order_id": order.ID.String(), "order_number": order.OrderNumber, "customer_id": order.CustomerID.String()}})
+	if err != nil || init.Reference != payment.Reference || strings.TrimSpace(init.AuthorizationURL) == "" {
+		// Keep the reservation when the provider outcome is uncertain. A retry
+		// must never open a second remote checkout.
+		return Payment{}, httperror.New(502, "CHECKOUT_UNCONFIRMED", "Checkout could not be confirmed and needs reconciliation")
+	}
+	metadata := jsonObject(init.ProviderMetadata)
+	if s.controlledBeta {
+		// Paystack does not currently return metadata on initialization.
+		metadata = `{"paystack_test_mode":true}`
+	}
+	err = s.db.WithContext(ctx).Model(&Payment{}).Where("organization_id = ? AND id = ?", payment.OrganizationID, payment.ID).
+		Updates(map[string]any{"authorization_url": init.AuthorizationURL, "metadata": metadata}).Error
+	if err != nil {
+		return Payment{}, err
+	}
+	err = s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", payment.OrganizationID, payment.ID).First(&payment).Error
+	return payment, err
 }
 
 func (s *Service) VerifyPayment(ctx context.Context, actor auth.CurrentUser, input PaymentVerifyInput) (Payment, error) {
@@ -1187,6 +1236,17 @@ func (s *Service) VerifyPayment(ctx context.Context, actor auth.CurrentUser, inp
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND reference = ?", actor.OrganizationID, input.Reference).First(&payment).Error; err != nil {
 			return mapNotFound(err, "Payment not found")
 		}
+		if actor.Role.RequiresStoreScope() {
+			var count int64
+			query := s.storeScopedQuery(tx.Table("orders"), actor, "orders", "store_id")
+			if err := query.Where("orders.organization_id = ? AND orders.id = ?", actor.OrganizationID, payment.OrderID).Count(&count).Error; err != nil {
+				return err
+			}
+			if count != 1 {
+				return httperror.NotFound("Payment not found")
+			}
+		}
+
 		if payment.Status == PaymentPaid {
 			return nil
 		}
@@ -1364,6 +1424,13 @@ func (s *Service) resolveUsablePaymentProvider(ctx context.Context, organization
 	if err != nil || provider == nil {
 		return provider, err
 	}
+	if s.controlledBeta {
+		paystack, ok := provider.(*PaystackProvider)
+		if !ok || !strings.HasPrefix(strings.TrimSpace(paystack.secretKey), "sk_test_") {
+			return nil, httperror.BadRequest("The controlled beta requires a Paystack test-mode credential")
+		}
+	}
+
 	if paystack, ok := provider.(*PaystackProvider); ok && strings.TrimSpace(paystack.secretKey) == "" {
 		return nil, nil
 	}
@@ -1471,6 +1538,10 @@ func (s *Service) CreateChannel(ctx context.Context, actor auth.CurrentUser, inp
 		return Channel{}, err
 	}
 	input.normalize()
+	if s.controlledBeta && input.Provider != "whatsapp" {
+		return Channel{}, httperror.Forbidden("Only WhatsApp is enabled in the controlled beta")
+	}
+
 	if input.Provider == "" || input.DisplayName == "" {
 		return Channel{}, httperror.BadRequest("Channel provider and display name are required")
 	}
@@ -1636,6 +1707,10 @@ func (s *Service) UpsertPaymentConfiguration(ctx context.Context, actor auth.Cur
 	}
 	secretConfig := jsonMap(input.SecretConfig)
 	if rawSecret := stringFromAny(secretConfig["secret_key"]); rawSecret != "" {
+		if s.controlledBeta && (input.Provider != "paystack" || !strings.HasPrefix(strings.TrimSpace(rawSecret), "sk_test_")) {
+			return PaymentConfiguration{}, httperror.BadRequest("The controlled beta requires a Paystack test-mode credential")
+		}
+
 		if s.paymentSecretStore == nil {
 			return PaymentConfiguration{}, httperror.BadRequest("Secure payment secret storage is not configured")
 		}
@@ -2154,6 +2229,10 @@ func isFulfilmentMode(mode string) bool {
 }
 
 func verifyPaymentMatches(payment Payment, verification PaymentVerification) error {
+	if payment.Provider == "paystack" && (verification.Reference == "" || verification.AmountMinor <= 0 || strings.TrimSpace(verification.Currency) == "") {
+		return httperror.BadRequest("Paystack verification is missing payment details")
+	}
+
 	if verification.Reference != "" && verification.Reference != payment.Reference {
 		return httperror.BadRequest("Payment reference mismatch")
 	}

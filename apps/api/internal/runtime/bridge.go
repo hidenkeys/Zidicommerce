@@ -48,6 +48,12 @@ func (s *Service) SendText(ctx context.Context, organizationID uuid.UUID, recipi
 	var channel core.Channel
 	err := s.db.WithContext(ctx).Where("organization_id = ? AND provider = ? AND status IN ?", organizationID, "whatsapp", runtimeUsableChannelStatuses).Order("updated_at DESC").First(&channel).Error
 	if err != nil {
+		if s.whatsAppOnly {
+			if err == gorm.ErrRecordNotFound {
+				return nil
+			}
+			return err
+		}
 		if err := s.db.WithContext(ctx).Where("organization_id = ? AND status IN ?", organizationID, runtimeUsableChannelStatuses).Order("updated_at DESC").First(&channel).Error; err != nil {
 			s.log.Info("skipping outbound text; no active channel", "organization_id", organizationID)
 			return nil

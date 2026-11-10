@@ -52,15 +52,23 @@ func (s *Service) HandlePaystackWebhook(ctx context.Context, body []byte, signat
 	if payload.Event == "" || payload.Data.Reference == "" {
 		return PaymentWebhookResult{}, httperror.BadRequest("Paystack webhook event and reference are required")
 	}
-	var webhookPayment Payment
-	paymentFound := s.db.WithContext(ctx).Where("provider = ? AND reference = ?", "paystack", payload.Data.Reference).First(&webhookPayment).Error == nil
+	var matchingPayments []Payment
+	if err := s.db.WithContext(ctx).Where("provider = ? AND reference = ?", "paystack", payload.Data.Reference).Limit(2).Find(&matchingPayments).Error; err != nil {
+		return PaymentWebhookResult{}, err
+	}
+	if len(matchingPayments) > 1 {
+		return PaymentWebhookResult{}, httperror.Conflict("Payment reference is ambiguous")
+	}
 	signatureSecret := s.paystackSecret
-	if paymentFound && s.paymentSecretStore != nil {
-		if merchantSecret, err := s.paymentSecretStore.GetSecret(ctx, webhookPayment.OrganizationID, "paystack", "secret_key"); err == nil && strings.TrimSpace(merchantSecret) != "" {
+	if len(matchingPayments) == 1 && s.paymentSecretStore != nil {
+		if merchantSecret, err := s.paymentSecretStore.GetSecret(ctx, matchingPayments[0].OrganizationID, "paystack", "secret_key"); err == nil && strings.TrimSpace(merchantSecret) != "" {
 			signatureSecret = merchantSecret
 		} else if err != nil && err != gorm.ErrRecordNotFound {
 			return PaymentWebhookResult{}, err
 		}
+	}
+	if s.controlledBeta && !strings.HasPrefix(signatureSecret, "sk_test_") {
+		return PaymentWebhookResult{}, httperror.Forbidden("Paystack test-mode signature required")
 	}
 	if !verifyPaystackSignature(signatureSecret, signature, body) {
 		return PaymentWebhookResult{}, httperror.Forbidden("Invalid Paystack webhook signature")
@@ -72,6 +80,9 @@ func (s *Service) HandlePaystackWebhook(ctx context.Context, body []byte, signat
 		var existing PaymentWebhookEvent
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("provider = ? AND external_event_id = ?", "paystack", externalID).First(&existing).Error
 		if err == nil {
+			if existing.Reference != payload.Data.Reference {
+				return httperror.Conflict("Payment webhook identity is ambiguous")
+			}
 			result = PaymentWebhookResult{EventID: existing.ID, Provider: existing.Provider, Reference: existing.Reference, Status: existing.Status}
 			return nil
 		}
@@ -80,13 +91,31 @@ func (s *Service) HandlePaystackWebhook(ctx context.Context, body []byte, signat
 		}
 
 		event := PaymentWebhookEvent{ID: uuid.New(), Provider: "paystack", ExternalEventID: externalID, Reference: payload.Data.Reference, EventType: payload.Event, Status: "processing", Payload: rawPayload}
-		if err := tx.Create(&event).Error; err != nil {
-			return err
+		insert := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&event)
+		if insert.Error != nil {
+			return insert.Error
+		}
+		if insert.RowsAffected == 0 {
+			if err := tx.Where("provider = ? AND external_event_id = ?", "paystack", externalID).First(&existing).Error; err != nil {
+				return err
+			}
+			if existing.Reference != payload.Data.Reference {
+				return httperror.Conflict("Payment webhook identity is ambiguous")
+			}
+			result = PaymentWebhookResult{EventID: existing.ID, Provider: existing.Provider, Reference: existing.Reference, Status: existing.Status}
+			return nil
 		}
 		result = PaymentWebhookResult{EventID: event.ID, Provider: event.Provider, Reference: event.Reference}
 
 		var payment Payment
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("provider = ? AND reference = ?", "paystack", payload.Data.Reference).First(&payment).Error; err != nil {
+		var lookupErr error
+		if len(matchingPayments) == 1 {
+			matched := matchingPayments[0]
+			lookupErr = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", matched.OrganizationID, matched.ID).First(&payment).Error
+		} else {
+			lookupErr = gorm.ErrRecordNotFound
+		}
+		if err := lookupErr; err != nil {
 			status := paymentWebhookFailed
 			if err == gorm.ErrRecordNotFound {
 				status = paymentWebhookIgnored
@@ -132,21 +161,10 @@ func (s *Service) HandlePaystackWebhook(ctx context.Context, body []byte, signat
 			return httperror.BadRequest("Payment provider is not configured")
 		}
 		verification, err := provider.Verify(ctx, payment.Reference)
-		if err != nil {
-			now := s.now()
-			if updateErr := tx.Model(&event).Updates(map[string]any{"organization_id": payment.OrganizationID, "status": paymentWebhookFailed, "error_message": publicWebhookError(err), "processed_at": &now, "updated_at": now}).Error; updateErr != nil {
-				return updateErr
-			}
-			result.Status = paymentWebhookFailed
-			return nil
-		}
-		if !verification.Paid {
-			now := s.now()
-			if err := tx.Model(&event).Updates(map[string]any{"organization_id": payment.OrganizationID, "status": paymentWebhookFailed, "error_message": "provider verification is not paid", "processed_at": &now, "updated_at": now}).Error; err != nil {
-				return err
-			}
-			result.Status = paymentWebhookFailed
-			return nil
+		if err != nil || !verification.Paid {
+			// Roll back the receipt so Paystack can retry a transient failure
+			// or a success event that arrived before verification caught up.
+			return httperror.New(503, "PAYMENT_VERIFICATION_PENDING", "Payment verification is temporarily unavailable")
 		}
 		if err := verifyPaymentMatches(payment, verification); err != nil {
 			now := s.now()
@@ -192,7 +210,7 @@ func (s *Service) HandlePaystackWebhook(ctx context.Context, body []byte, signat
 				}
 			}
 		}
-		if err := tx.Model(&event).Updates(map[string]any{"organization_id": payment.OrganizationID, "status": paymentWebhookProcessed, "processed_at": &now, "updated_at": now}).Error; err != nil {
+		if err := tx.Model(&event).Updates(map[string]any{"organization_id": payment.OrganizationID, "status": paymentWebhookProcessed, "error_message": "", "processed_at": &now, "updated_at": now}).Error; err != nil {
 			return err
 		}
 		result.Status = paymentWebhookProcessed

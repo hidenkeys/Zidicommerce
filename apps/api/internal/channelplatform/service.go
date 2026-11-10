@@ -18,12 +18,17 @@ import (
 )
 
 type Service struct {
-	db  *gorm.DB
-	now func() time.Time
+	whatsAppOnly bool
+	db           *gorm.DB
+	now          func() time.Time
 }
 
 func NewService(db *gorm.DB) *Service {
 	return &Service{db: db, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func (s *Service) RestrictToWhatsApp() {
+	s.whatsAppOnly = true
 }
 
 func (s *Service) ListConnections(ctx context.Context, actor auth.CurrentUser) ([]ConnectionView, error) {
@@ -85,6 +90,9 @@ func (s *Service) CreateConnection(ctx context.Context, actor auth.CurrentUser, 
 		return ConnectionView{}, err
 	}
 	provider := normalizeKey(input.Provider)
+	if s.whatsAppOnly && provider != "whatsapp" {
+		return ConnectionView{}, httperror.Forbidden("Only WhatsApp is enabled in the controlled beta")
+	}
 	displayName := strings.TrimSpace(input.DisplayName)
 	status := normalizeKey(input.Status)
 	if status == "" {
