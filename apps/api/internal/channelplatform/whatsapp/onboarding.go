@@ -242,8 +242,17 @@ func (s *Service) MarkInboundTest(ctx context.Context, configuration Configurati
 	}
 	now := s.now()
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&Configuration{}).Where("organization_id = ? AND channel_connection_id = ?", configuration.OrganizationID, configuration.ConnectionID).Updates(map[string]any{"last_inbound_test_at": now, "setup_state": SetupInboundTestReceived, "updated_at": now}).Error; err != nil {
-			return err
+		result := tx.Model(&Configuration{}).
+			Where("organization_id = ? AND channel_connection_id = ? AND test_recipient_hash = ? AND last_inbound_test_at IS NULL",
+				configuration.OrganizationID, configuration.ConnectionID, configuration.TestRecipientHash).
+			Updates(map[string]any{
+				"last_inbound_test_at": now,
+				"setup_state": gorm.Expr("CASE WHEN setup_state IN ? THEN setup_state ELSE ? END",
+					[]string{SetupConnected, SetupHealthy, SetupDegraded}, SetupInboundTestReceived),
+				"updated_at": now,
+			})
+		if result.Error != nil || result.RowsAffected == 0 {
+			return result.Error
 		}
 		return audit(tx, &configuration.OrganizationID, nil, configuration.ConnectionID, "whatsapp_inbound_test_received", map[string]any{"recipient": configuration.TestRecipientDisplay})
 	})
