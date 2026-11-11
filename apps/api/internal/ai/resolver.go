@@ -118,10 +118,28 @@ func narrowFullyReferencedProduct(text string, matches []GroundedProduct) []Grou
 			exact = append(exact, match)
 		}
 	}
-	if len(exact) == 1 {
-		return exact
+	if selected, ok := mostSpecificFullyReferencedProduct(exact); ok {
+		return []GroundedProduct{selected}
 	}
 	return matches
+}
+
+func mostSpecificFullyReferencedProduct(products []GroundedProduct) (GroundedProduct, bool) {
+	if len(products) == 0 {
+		return GroundedProduct{}, false
+	}
+	sort.SliceStable(products, func(i, j int) bool {
+		return productNameSpecificity(products[i].Name) > productNameSpecificity(products[j].Name)
+	})
+	if len(products) == 1 || productNameSpecificity(products[0].Name) > productNameSpecificity(products[1].Name) {
+		return products[0], true
+	}
+	return GroundedProduct{}, false
+}
+
+func productNameSpecificity(name string) int {
+	normalized := normalizeAIText(name)
+	return len(strings.Fields(normalized))*1000 + len(normalized)
 }
 
 func isProductComparison(text string) bool {
@@ -194,8 +212,8 @@ func rankProducts(text string, filters map[string]string, input ResolverInput) [
 				exact = append(exact, groundedProduct(product, 1))
 			}
 		}
-		if len(exact) == 1 {
-			return exact
+		if selected, ok := mostSpecificFullyReferencedProduct(exact); ok {
+			return []GroundedProduct{selected}
 		}
 	}
 	matches := []GroundedProduct{}
