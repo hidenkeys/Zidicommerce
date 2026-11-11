@@ -51,6 +51,7 @@ func resolveEntities(input ResolverInput) ResolverResult {
 	}
 	productMatches := rankProducts(text, filters, input)
 	productMatches = filterWeakProductMatches(text, productMatches)
+	productMatches = narrowFullyReferencedProduct(text, productMatches)
 	if len(productMatches) == 0 {
 		if seemsProductSpecific(text) {
 			resolved.ProductStatus = ResolutionNoMatch
@@ -100,6 +101,36 @@ func resolveEntities(input ResolverInput) ResolverResult {
 	}
 	requested.NeedsClarification = resolved.ProductStatus == ResolutionAmbiguous || resolved.StoreStatus == ResolutionAmbiguous
 	return ResolverResult{Requested: requested, Resolved: resolved, Products: limitProducts(productMatches, 6), Stores: limitStores(storeMatches, 4)}
+}
+
+func narrowFullyReferencedProduct(text string, matches []GroundedProduct) []GroundedProduct {
+	if len(matches) <= 1 || isProductListing(text) || isProductComparison(text) {
+		return matches
+	}
+	exact := make([]GroundedProduct, 0, 1)
+	for _, match := range matches {
+		if productNameFullyReferenced(text, match.Name) {
+			exact = append(exact, match)
+		}
+	}
+	if len(exact) == 1 {
+		return exact
+	}
+	return matches
+}
+
+func isProductComparison(text string) bool {
+	normalized := normalizeAIText(text)
+	if extractPriceConstraint(normalized) != "" {
+		return true
+	}
+	padded := " " + normalized + " "
+	for _, term := range []string{"compare", " versus ", " vs ", "difference between"} {
+		if strings.Contains(padded, term) {
+			return true
+		}
+	}
+	return false
 }
 
 func filterWeakProductMatches(text string, matches []GroundedProduct) []GroundedProduct {
@@ -537,6 +568,20 @@ func productNameReferenced(text, productName string) bool {
 		}
 	}
 	return hits == len(nameTokens) || (len(nameTokens) > 1 && hits >= len(nameTokens)-1)
+}
+
+func productNameFullyReferenced(text, productName string) bool {
+	textTokens := tokenSetAI(text)
+	nameTokens := tokenSetAI(productName)
+	if len(textTokens) == 0 || len(nameTokens) == 0 {
+		return false
+	}
+	for token := range nameTokens {
+		if _, ok := textTokens[token]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func maxFloat(a, b float64) float64 {

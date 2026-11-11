@@ -343,9 +343,15 @@ func groundedInventory(levels []core.InventoryLevel, grounding GroundingContext,
 	}
 	storeNames := map[uuid.UUID]string{}
 	for _, store := range stores {
+		if store.Status != core.StatusActive {
+			continue
+		}
 		storeNames[store.ID] = store.Name
 	}
 	for _, level := range levels {
+		if _, active := storeNames[level.StoreID]; !active {
+			continue
+		}
 		if grounding.Resolved.VariantID != uuid.Nil && level.VariantID != grounding.Resolved.VariantID {
 			continue
 		}
@@ -616,7 +622,7 @@ func needsInventory(text string) bool {
 	if category := classifyFAQCategory(text); category != "" && category != "locations" && !strings.Contains(text, "stock") && !strings.Contains(text, "available") && !strings.Contains(text, "do you have") && !strings.Contains(text, "how many") && !strings.Contains(text, "i need") && !strings.Contains(text, "i want") {
 		return false
 	}
-	for _, term := range []string{"available", "stock", "in stock", "do you have", "can i get", "quantity", "how many", "i need", "i want", "ill take", "i will take", "pick", "pickup", "what about", "you get", "una get", "do una get"} {
+	for _, term := range []string{"available", "stock", "in stock", "do you have", "can i get", "can i buy", "can i order", "may i order", "quantity", "how many", "i need", "i want", "ill take", "i will take", "pick", "pickup", "what about", "you get", "una get", "do una get"} {
 		if strings.Contains(text, term) {
 			return true
 		}

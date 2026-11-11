@@ -62,6 +62,52 @@ func TestResolveEntitiesKeepsDiscriminativeKnownProductMatch(t *testing.T) {
 	}
 }
 
+func TestResolveEntitiesNarrowsExactProductWithinSimilarCatalogue(t *testing.T) {
+	originalID := uuid.New()
+	coconutID := uuid.New()
+	result := resolveEntities(ResolverInput{
+		Text: "How much is Original Milk Tea?",
+		Products: []core.Product{
+			{ID: originalID, Name: "Original Milk Tea", Slug: "original-milk-tea", Status: core.StatusActive, Variants: []core.Variant{{ID: uuid.New(), ProductID: originalID, Name: "Regular", SKU: "ORIGINAL", PriceMinor: 360000, Currency: "NGN", Status: core.StatusActive}}},
+			{ID: coconutID, Name: "Coconut Milk Tea", Slug: "coconut-milk-tea", Status: core.StatusActive, Variants: []core.Variant{{ID: uuid.New(), ProductID: coconutID, Name: "Regular", SKU: "COCONUT", PriceMinor: 420000, Currency: "NGN", Status: core.StatusActive}}},
+		},
+	})
+
+	if result.Resolved.ProductID != originalID || len(result.Products) != 1 || result.Products[0].ID != originalID {
+		t.Fatalf("expected only the fully referenced product, got resolved=%s products=%+v", result.Resolved.ProductID, result.Products)
+	}
+}
+
+func TestPlanRetrievalTreatsCanIOrderAsInventoryRequest(t *testing.T) {
+	plan := planRetrieval("Can I order Brown Sugar Boba Milk Tea right now?", AIConversationState{}, SecurityDecision{})
+	if !plan.Inventory || !plan.Products || !plan.Stores || plan.Intent != IntentInventory {
+		t.Fatalf("expected an orderability question to check inventory, got %+v", plan)
+	}
+}
+
+func TestGroundedInventoryExcludesInactiveStores(t *testing.T) {
+	productID := uuid.New()
+	variantID := uuid.New()
+	activeStoreID := uuid.New()
+	inactiveStoreID := uuid.New()
+	variant := core.Variant{ID: variantID, ProductID: productID, Name: "Regular", Product: core.Product{ID: productID, Name: "Original Milk Tea"}}
+	rows := groundedInventory(
+		[]core.InventoryLevel{
+			{StoreID: activeStoreID, VariantID: variantID, OnHand: 4, Variant: variant},
+			{StoreID: inactiveStoreID, VariantID: variantID, OnHand: 9, Variant: variant},
+		},
+		GroundingContext{Resolved: ResolvedEntities{ProductID: productID, ProductStatus: ResolutionExact}, Requested: RequestedFacts{Quantity: 1}},
+		[]core.Store{
+			{ID: activeStoreID, Name: "Open Store", Status: core.StatusActive},
+			{ID: inactiveStoreID, Name: "Closed Store", Status: core.StatusInactive},
+		},
+	)
+
+	if len(rows) != 1 || rows[0].StoreID != activeStoreID {
+		t.Fatalf("expected only active-store inventory, got %+v", rows)
+	}
+}
+
 func TestPlanRetrievalRoutesHumanRequestToMerchantKnowledge(t *testing.T) {
 	plan := planRetrieval("Can I speak to a human?", AIConversationState{}, SecurityDecision{})
 	if !plan.FAQ || plan.Intent != IntentFAQ {
