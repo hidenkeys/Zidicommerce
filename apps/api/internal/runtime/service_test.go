@@ -1673,6 +1673,27 @@ func TestRuntimeGroundedAIHandlesFreeFormEntry(t *testing.T) {
 	}
 }
 
+func TestRuntimeFallsBackToWorkflowWhenGroundedAIProviderFails(t *testing.T) {
+	config := bot.VersionConfiguration{
+		Version: bot.BotVersion{StartStepKey: "start"},
+		Steps:   []bot.Step{{ID: uuid.New(), StepKey: "start", Type: bot.StepEnd, Title: "Fallback", Message: "Fallback menu."}},
+	}
+	fx := newRuntimeFixture(t, config)
+	called := false
+	fx.service.ConfigureAIInbound(func(context.Context, ConversationSession, string) (AIInboundResponse, error) {
+		called = true
+		return AIInboundResponse{}, errors.New("provider unavailable")
+	})
+
+	result, err := fx.service.ProcessMessage(context.Background(), inbound(fx.channel.ID, "ai-error-1", "ai-error", "What do you sell?"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || result.SessionStatus != SessionCompleted || len(result.Messages) != 1 || result.Messages[0].Text != "Fallback menu." {
+		t.Fatalf("expected only the workflow fallback after the provider error, got %+v", result)
+	}
+}
+
 func TestClassifyNaturalEntryIntent(t *testing.T) {
 	cases := map[string]string{
 		"I would like to order two milkshakes":  "order",

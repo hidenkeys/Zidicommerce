@@ -23,3 +23,7 @@ Embedded Signup and App Review are deferred. The fresh Meta token worked on the 
 ## Staging release review · 2026-11-11
 
 Candidate `eda0375` is deployed and healthy in staging. **NOT READY for production promotion.** The [release manifest](release-manifest.md) supersedes earlier candidate references; the [remaining gates](remaining-gates.md) distinguish historical acceptance, candidate evidence and open checks. No changes to production, the main Zidi site or the CRM callback.
+
+## Conditional production authorization · 2026-11-11
+
+The owner authorized promotion after all gates pass. Candidate `e59e94a` fixed the staging store-detail permission gap. Both pinned rollback digests were rehearsed and the candidate digests restored. The verdict remains **NOT READY** pending the [remaining gates](remaining-gates.md).
