@@ -111,6 +111,7 @@ func debugFromGrounding(grounding GroundingContext) []aitools.DebugCall {
 			result["resolved_product"] = grounding.Resolved.ProductName
 			result["product_status"] = grounding.Resolved.ProductStatus
 			result["resolved_variant"] = grounding.Resolved.VariantName
+			result["exact_products"] = grounding.Resolved.ExactProducts
 		}
 		calls = append(calls, aitools.DebugCall{
 			Name:   source.Name,

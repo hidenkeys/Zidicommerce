@@ -36,6 +36,11 @@ func resolveEntities(input ResolverInput) ResolverResult {
 		PriceConstraint: extractPriceConstraint(text),
 	}
 	resolved := ResolvedEntities{Filters: filters}
+	for _, product := range input.Products {
+		if product.Status == core.StatusActive && productNameFullyReferenced(text, product.Name) {
+			resolved.ExactProducts = append(resolved.ExactProducts, product.Name)
+		}
+	}
 	storeMatches := rankStores(text, input.Stores)
 	if len(storeMatches) == 1 || (len(storeMatches) > 1 && storeMatches[0].Score-storeMatches[1].Score >= 0.25) {
 		resolved.StoreID = storeMatches[0].ID

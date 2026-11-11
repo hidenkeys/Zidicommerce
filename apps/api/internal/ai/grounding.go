@@ -54,6 +54,7 @@ type ResolvedEntities struct {
 	ProductStatus   ResolutionStatus  `json:"product_status,omitempty"`
 	StoreStatus     ResolutionStatus  `json:"store_status,omitempty"`
 	AmbiguousReason string            `json:"ambiguous_reason,omitempty"`
+	ExactProducts   []string          `json:"exact_products,omitempty"`
 }
 
 type ResolutionStatus string
