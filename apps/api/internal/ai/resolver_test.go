@@ -65,12 +65,16 @@ func TestResolveEntitiesKeepsDiscriminativeKnownProductMatch(t *testing.T) {
 func TestResolveEntitiesNarrowsExactProductWithinSimilarCatalogue(t *testing.T) {
 	originalID := uuid.New()
 	coconutID := uuid.New()
+	sundaeID := uuid.New()
+	categoryID := uuid.New()
 	result := resolveEntities(ResolverInput{
 		Text: "How much is Original Milk Tea?",
 		Products: []core.Product{
-			{ID: originalID, Name: "Original Milk Tea", Slug: "original-milk-tea", Status: core.StatusActive, Variants: []core.Variant{{ID: uuid.New(), ProductID: originalID, Name: "Regular", SKU: "ORIGINAL", PriceMinor: 360000, Currency: "NGN", Status: core.StatusActive}}},
-			{ID: coconutID, Name: "Coconut Milk Tea", Slug: "coconut-milk-tea", Status: core.StatusActive, Variants: []core.Variant{{ID: uuid.New(), ProductID: coconutID, Name: "Regular", SKU: "COCONUT", PriceMinor: 420000, Currency: "NGN", Status: core.StatusActive}}},
+			{ID: originalID, CategoryID: &categoryID, Name: "Original Milk Tea", Slug: "original-milk-tea", Status: core.StatusActive, Variants: []core.Variant{{ID: uuid.New(), ProductID: originalID, Name: "Regular", SKU: "ORIGINAL", PriceMinor: 360000, Currency: "NGN", Status: core.StatusActive}}},
+			{ID: coconutID, CategoryID: &categoryID, Name: "Coconut Milk Tea", Slug: "coconut-milk-tea", Status: core.StatusActive, Variants: []core.Variant{{ID: uuid.New(), ProductID: coconutID, Name: "Regular", SKU: "COCONUT", PriceMinor: 420000, Currency: "NGN", Status: core.StatusActive}}},
+			{ID: sundaeID, Name: "Brown Sugar Boba Sundae", Slug: "brown-sugar-boba-sundae", Status: core.StatusActive, Variants: []core.Variant{{ID: uuid.New(), ProductID: sundaeID, Name: "Regular", SKU: "SUNDAE", PriceMinor: 420000, Currency: "NGN", Status: core.StatusActive}}},
 		},
+		Categories: []core.Category{{ID: categoryID, Name: "Milk tea", Slug: "milk-tea", Status: core.StatusActive}},
 	})
 
 	if result.Resolved.ProductID != originalID || len(result.Products) != 1 || result.Products[0].ID != originalID {
@@ -82,6 +86,24 @@ func TestPlanRetrievalTreatsCanIOrderAsInventoryRequest(t *testing.T) {
 	plan := planRetrieval("Can I order Brown Sugar Boba Milk Tea right now?", AIConversationState{}, SecurityDecision{})
 	if !plan.Inventory || !plan.Products || !plan.Stores || plan.Intent != IntentInventory {
 		t.Fatalf("expected an orderability question to check inventory, got %+v", plan)
+	}
+}
+
+func TestResolveEntitiesDistinguishesMilkTeaFromSamePrefixSundae(t *testing.T) {
+	milkTeaID := uuid.New()
+	sundaeID := uuid.New()
+	milkTeaCategoryID := uuid.New()
+	result := resolveEntities(ResolverInput{
+		Text: "Can I order Brown Sugar Boba Milk Tea right now?",
+		Products: []core.Product{
+			{ID: sundaeID, Name: "Brown Sugar Boba Sundae", Slug: "brown-sugar-boba-sundae", Status: core.StatusActive, Variants: []core.Variant{{ID: uuid.New(), ProductID: sundaeID, Name: "Regular", SKU: "SUNDAE", PriceMinor: 420000, Currency: "NGN", Status: core.StatusActive}}},
+			{ID: milkTeaID, CategoryID: &milkTeaCategoryID, Name: "Brown Sugar Boba Milk Tea", Slug: "brown-sugar-boba-milk-tea", Status: core.StatusActive, Variants: []core.Variant{{ID: uuid.New(), ProductID: milkTeaID, Name: "Regular", SKU: "MILK-TEA", PriceMinor: 420000, Currency: "NGN", Status: core.StatusActive}}},
+		},
+		Categories: []core.Category{{ID: milkTeaCategoryID, Name: "Milk tea", Slug: "milk-tea", Status: core.StatusActive}},
+	})
+
+	if result.Resolved.ProductID != milkTeaID || len(result.Products) != 1 || result.Products[0].ID != milkTeaID {
+		t.Fatalf("expected milk tea rather than same-prefix sundae, got resolved=%s products=%+v", result.Resolved.ProductID, result.Products)
 	}
 }
 

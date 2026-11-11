@@ -182,6 +182,17 @@ func productMatchesAnyToken(product GroundedProduct, tokens map[string]struct{})
 }
 
 func rankProducts(text string, filters map[string]string, input ResolverInput) []GroundedProduct {
+	if !isProductListing(text) && !isProductComparison(text) {
+		exact := make([]GroundedProduct, 0, 1)
+		for _, product := range input.Products {
+			if product.Status == core.StatusActive && productNameFullyReferenced(text, product.Name) {
+				exact = append(exact, groundedProduct(product, 1))
+			}
+		}
+		if len(exact) == 1 {
+			return exact
+		}
+	}
 	matches := []GroundedProduct{}
 	categoryHint := resolveCategory(text, input.Categories, input.State)
 	for _, product := range input.Products {
