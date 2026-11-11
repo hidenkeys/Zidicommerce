@@ -49,7 +49,7 @@ func TestSeedTenantIsIdempotentAndOrganizationScoped(t *testing.T) {
 		&organization.Organization{}, &organization.User{}, &organization.OrganizationMembership{}, &organization.AuditLog{},
 		&core.Store{}, &core.StoreHour{}, &core.StoreFulfilmentMode{}, &core.Category{}, &core.Product{}, &core.Variant{}, &core.ProductImage{},
 		&core.InventoryLevel{}, &core.Customer{}, &core.Cart{}, &core.CartItem{}, &core.Order{}, &core.OrderItem{}, &core.CommerceEvent{}, &core.OrderEvent{},
-		&core.Payment{}, &core.Fulfilment{}, &core.Channel{}, &core.CommerceNotification{},
+		&core.Payment{}, &core.Fulfilment{}, &core.Channel{}, &core.CommerceNotification{}, &core.ConversationOrderLink{},
 		&Settings{}, &Pool{}, &Provider{}, &ProviderPool{}, &Request{}, &Match{}, &DispatchAttempt{}, &Assignment{}, &Quote{}, &QuoteItem{}, &Rating{}, &Message{},
 		&bot.Bot{}, &bot.BotVersion{}, &bot.VersionModule{}, &bot.Variable{}, &bot.Question{}, &bot.Action{}, &bot.Condition{}, &bot.Integration{}, &bot.Step{}, &bot.PublishedSnapshot{},
 	); err != nil {
