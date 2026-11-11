@@ -15,3 +15,5 @@ Use the staging environment for drills. Use synthetic data and the designated Wh
 Railway build-failure email delivery has been verified. API and Admin deployment health checks are configured. Track ongoing incident alert checks separately from build notifications and deployment health.
 
 For an incident, preserve the relevant order, job and provider event references. Use the [pinned release manifest](release-manifest.md) for application rollback. Investigate payment status using the staging payment and event records before retrying any action. Leave the Paystack Test Mode and WhatsApp tester controls in place during recovery.
+
+On November 11, Railway returned `BAD_USER_INPUT` when enabling the native staging backup schedule because scheduled backups require a Pro workspace. The logical backup restore passed. Before launch, verify recurring backups and failure alert delivery using a supported Railway plan or a separately operated backup and alert service. [Railway backup reference](https://docs.railway.com/volumes/backups)
