@@ -27,3 +27,6 @@ Candidate `eda0375` is deployed and healthy in staging. **NOT READY for producti
 ## Conditional production authorization · 2026-11-11
 
 The owner authorized promotion after all gates pass. Candidate `e59e94a` fixed the staging store-detail permission gap. Both pinned rollback digests were rehearsed and the candidate digests restored. The verdict remains **NOT READY** pending the [remaining gates](remaining-gates.md).
+
+
+The fixed staging candidate passed the accepted checkout, pickup and four notification deliveries. The designated WhatsApp contact passed the deployed closed-window block probe and returned to its original open and opted-in state. Production remains on hold. See [remaining gates](remaining-gates.md).

@@ -69,3 +69,12 @@ Phase 1 ran two targeted Go runtime tests on the current checkout: `TestJourneyL
 - On staging API candidate `1292f8f`, WhatsApp Web checkout created order `ZC-20261111-897BB040` for NGN 2,500. Paystack Test Mode reference `zc_58cb7d53-8214-46d1-98fb-fb15372d1f9b` had one processed `charge.success` webhook and exactly one `payment_webhook_verified` transition. No manual verification was invoked. Two Place order messages yielded one order.
 - Order advanced through processing and ready to completed. Pickup ended completed. Payment confirmation, processing, ready for pickup, and completion each had one notification and a Meta delivered receipt on the checkout channel. All four messages were visible in WhatsApp Web.
 - A live staff handoff on the designated test conversation was claimed. Meta delivered the staff reply, and release returned the conversation to active with bot resumption enabled. The next automated reply was not exercised.
+
+
+## Remaining gate verification · 2026-11-11
+
+- Staging Admin API returned opted-in consent and an open service window for the designated tester. Previous live keyword checks used `CANCEL` and `START`.
+- A temporary expiration change targeted the single tester contact under the checkout tenant and connection. The Admin API required a template, and a marked staff probe failed permanently with the closed-window reason and no Meta message ID. The policy metric increased. A compare-and-set restoration updated one row and the API confirmed the open window again.
+- The connection returned zero templates. Before the closed-window probe, the metrics showed 112 delivered and zero read callbacks. Live approved-template send and provider read evidence remain unverified.
+- Focused WhatsApp, runtime and AI tests passed, including duplicate inbound handling, approved and unapproved template validation, handoff and deterministic fallback. The public readiness script passed staging API/database and Admin health, migration inventory and clean tree. It exited 2 with production attestations unverified.
+- WhatsApp Web displayed the staff reply. Chrome changed active chats during the post-release attempt, and no designated tester question or first AI reply was confirmed. The deployed provider outage drill remains open.

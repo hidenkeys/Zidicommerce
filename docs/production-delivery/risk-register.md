@@ -15,3 +15,6 @@
 Phase 2 confirms R03 as an application defect for the beta scope. The [audit backlog](phase-2-audit.md#prioritized-remediation-backlog) adds payment authorization, remote checkout idempotency, incomplete verification, webhook retry and explicit WhatsApp-only enforcement. R06–R08 remain open pending release-specific evidence.
 
 Phase 3 implements candidate remediation for A01–A07 and adds customer-ownership and generic paid-transition safeguards. A09, provider acceptance and staging operational controls remain open. An uncertain checkout requires operator reconciliation, documented in the [Phase 3 notes](phase-3-stabilization.md).
+
+
+The guided WhatsApp checkout portion of R04 is covered by staging order `ZC-20261111-897BB040`. The live AI outage and post-release response, approved-template delivery and recurring backup and operator alert coverage remain open. The closed-window free-form block has deployed evidence. See [remaining gates](remaining-gates.md).

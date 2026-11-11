@@ -17,3 +17,6 @@ Railway build-failure email delivery has been verified. API and Admin deployment
 For an incident, preserve the relevant order, job and provider event references. Use the [pinned release manifest](release-manifest.md) for application rollback. Investigate payment status using the staging payment and event records before retrying any action. Leave the Paystack Test Mode and WhatsApp tester controls in place during recovery.
 
 On November 11, Railway returned `BAD_USER_INPUT` when enabling the native staging backup schedule because scheduled backups require a Pro workspace. The logical backup restore passed. Before launch, verify recurring backups and failure alert delivery using a supported Railway plan or a separately operated backup and alert service. [Railway backup reference](https://docs.railway.com/volumes/backups)
+
+
+The staging Railway project inventory showed no bucket and the API service exposed no backup or operator alert variables. An external option is an approved private S3 bucket for staging PostgreSQL backups with a scoped service credential delivered through the secret store. Configure retention and verify a scheduled execution, disposable restore and actual failure notification before closing that gate. Railway build-failure email remains the verified delivery path.
