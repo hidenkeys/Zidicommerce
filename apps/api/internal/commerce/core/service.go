@@ -2026,11 +2026,9 @@ func (s *Service) recordOrderNotificationTx(tx *gorm.DB, organizationID, orderID
 	if err := tx.Where("organization_id = ? AND id = ?", organizationID, orderID).Preload("Customer").First(&order).Error; err != nil {
 		return err
 	}
-	var channel Channel
-	var channelID *uuid.UUID
-	usableStatuses := []string{StatusActive, "connected", "healthy", "degraded", "requires_attention"}
-	if err := tx.Where("organization_id = ? AND provider = ? AND status IN ?", organizationID, "whatsapp", usableStatuses).Order("created_at ASC").First(&channel).Error; err == nil {
-		channelID = &channel.ID
+	channelID, err := orderNotificationChannel(tx, order)
+	if err != nil {
+		return err
 	}
 	customerID := order.CustomerID
 	notification := CommerceNotification{ID: uuid.New(), OrganizationID: organizationID, OrderID: &order.ID, CustomerID: &customerID, ChannelID: channelID, NotificationType: notificationType, Recipient: order.Customer.Phone, Status: "queued", Payload: jsonValue(map[string]any{"message": message, "order_id": order.ID.String(), "order_number": order.OrderNumber, "status": order.Status})}
@@ -2038,6 +2036,39 @@ func (s *Service) recordOrderNotificationTx(tx *gorm.DB, organizationID, orderID
 		return err
 	}
 	return s.enqueueNotificationJobTx(tx, notification)
+}
+
+// Use the checkout conversation's sender so the notification uses the same
+// WhatsApp identity and consent window as the order conversation.
+func orderNotificationChannel(tx *gorm.DB, order Order) (*uuid.UUID, error) {
+	usableStatuses := []string{StatusActive, "connected", "healthy", "degraded", "requires_attention"}
+	query := tx.Model(&Channel{}).
+		Where("channels.organization_id = ? AND channels.provider = ? AND channels.status IN ?", order.OrganizationID, "whatsapp", usableStatuses)
+
+	var link ConversationOrderLink
+	err := tx.Where("organization_id = ? AND order_id = ? AND customer_id = ? AND store_id = ?",
+		order.OrganizationID, order.ID, order.CustomerID, order.StoreID).
+		Order("created_at ASC, id ASC").First(&link).Error
+	switch {
+	case err == nil:
+		query = query.Joins("JOIN conversation_sessions AS checkout ON checkout.organization_id = channels.organization_id AND checkout.channel_id = channels.id").
+			Where("checkout.id = ? AND checkout.customer_id = ?", link.ConversationSessionID, order.CustomerID)
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		// Orders created in the admin interface have no checkout conversation.
+		query = query.Order("channels.created_at ASC, channels.id ASC")
+	default:
+		return nil, err
+	}
+
+	var channel Channel
+	err = query.First(&channel).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &channel.ID, nil
 }
 
 func (s *Service) paymentConfirmedNotificationMessageTx(tx *gorm.DB, organizationID, orderID uuid.UUID) string {
