@@ -582,17 +582,12 @@ func productNameReferenced(text, productName string) bool {
 }
 
 func productNameFullyReferenced(text, productName string) bool {
-	textTokens := tokenSetAI(text)
-	nameTokens := tokenSetAI(productName)
-	if len(textTokens) == 0 || len(nameTokens) == 0 {
+	text = normalizeAIText(text)
+	productName = normalizeAIText(productName)
+	if text == "" || productName == "" {
 		return false
 	}
-	for token := range nameTokens {
-		if _, ok := textTokens[token]; !ok {
-			return false
-		}
-	}
-	return true
+	return strings.Contains(" "+text+" ", " "+productName+" ")
 }
 
 func maxFloat(a, b float64) float64 {

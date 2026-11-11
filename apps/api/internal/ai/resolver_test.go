@@ -93,8 +93,12 @@ func TestResolveEntitiesDistinguishesMilkTeaFromSamePrefixSundae(t *testing.T) {
 	milkTeaID := uuid.New()
 	sundaeID := uuid.New()
 	milkTeaCategoryID := uuid.New()
+	query := "Can I order Brown Sugar Boba Milk Tea right now?"
+	if !productNameFullyReferenced(query, "Brown Sugar Boba Milk Tea") || productNameFullyReferenced(query, "Brown Sugar Boba Sundae") {
+		t.Fatal("strict product-name matching did not distinguish milk tea from sundae")
+	}
 	result := resolveEntities(ResolverInput{
-		Text: "Can I order Brown Sugar Boba Milk Tea right now?",
+		Text: query,
 		Products: []core.Product{
 			{ID: sundaeID, Name: "Brown Sugar Boba Sundae", Slug: "brown-sugar-boba-sundae", Status: core.StatusActive, Variants: []core.Variant{{ID: uuid.New(), ProductID: sundaeID, Name: "Regular", SKU: "SUNDAE", PriceMinor: 420000, Currency: "NGN", Status: core.StatusActive}}},
 			{ID: milkTeaID, CategoryID: &milkTeaCategoryID, Name: "Brown Sugar Boba Milk Tea", Slug: "brown-sugar-boba-milk-tea", Status: core.StatusActive, Variants: []core.Variant{{ID: uuid.New(), ProductID: milkTeaID, Name: "Regular", SKU: "MILK-TEA", PriceMinor: 420000, Currency: "NGN", Status: core.StatusActive}}},
