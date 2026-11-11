@@ -22,9 +22,10 @@ func TestRunAppliesUnappliedMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	mock.ExpectBegin()
+	mock.ExpectExec("SELECT pg_advisory_xact_lock").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS schema_migrations").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT version FROM schema_migrations").WithArgs("000001_test.sql").WillReturnError(sql.ErrNoRows)
-	mock.ExpectBegin()
 	mock.ExpectExec("CREATE TABLE test_table").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO schema_migrations").WithArgs("000001_test.sql").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()

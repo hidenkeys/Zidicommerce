@@ -1,6 +1,8 @@
 DO $$
 BEGIN
-    CREATE EXTENSION IF NOT EXISTS vector;
+    IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') THEN
+        CREATE EXTENSION IF NOT EXISTS vector;
+    END IF;
 EXCEPTION
     WHEN undefined_file THEN
         RAISE NOTICE 'pgvector extension is not installed; vector search will remain disabled until it is available';

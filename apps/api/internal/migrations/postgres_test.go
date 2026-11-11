@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -33,8 +34,18 @@ func TestRepositoryMigrationsApplyToEmptyPostgres(t *testing.T) {
 	if err != nil || len(files) == 0 {
 		t.Fatalf("repository migrations were not found: files=%d err=%v", len(files), err)
 	}
-	if err := Run(ctx, db, dir); err != nil {
-		t.Fatal(err)
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); errs <- Run(ctx, db, dir) }()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	var applied int
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {

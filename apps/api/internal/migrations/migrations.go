@@ -16,7 +16,16 @@ func Run(ctx context.Context, db *sql.DB, dir string) error {
 		return err
 	}
 
-	if _, err := db.ExecContext(ctx, `
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// Serialize schema inspection and application across API instances.
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(794219130)"); err != nil {
+		return fmt.Errorf("lock migrations: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version TEXT PRIMARY KEY,
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -33,7 +42,7 @@ func Run(ctx context.Context, db *sql.DB, dir string) error {
 
 	for _, file := range files {
 		version := filepath.Base(file)
-		applied, err := hasMigration(ctx, db, version)
+		applied, err := hasMigration(ctx, tx, version)
 		if err != nil {
 			return err
 		}
@@ -46,10 +55,6 @@ func Run(ctx context.Context, db *sql.DB, dir string) error {
 			return err
 		}
 
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
 		if _, err := tx.ExecContext(ctx, string(body)); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("apply migration %s: %w", version, err)
@@ -58,15 +63,12 @@ func Run(ctx context.Context, db *sql.DB, dir string) error {
 			_ = tx.Rollback()
 			return fmt.Errorf("record migration %s: %w", version, err)
 		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
 	}
 
-	return nil
+	return tx.Commit()
 }
 
-func hasMigration(ctx context.Context, db *sql.DB, version string) (bool, error) {
+func hasMigration(ctx context.Context, db *sql.Tx, version string) (bool, error) {
 	var found string
 	err := db.QueryRowContext(ctx, `SELECT version FROM schema_migrations WHERE version = $1`, version).Scan(&found)
 	if err == sql.ErrNoRows {
