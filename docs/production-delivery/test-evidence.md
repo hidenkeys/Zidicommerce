@@ -32,3 +32,11 @@ Phase 1 ran two targeted Go runtime tests on the current checkout: `TestJourneyL
 | `git diff --check`, Go formatting and reverse review patch check | Pass | Uncommitted code review patch matches working tree |
 | Meta configuration | Blocked | App-level CRM callback observed. Password reauthentication prompt opened for owner. No settings saved or messages sent |
 | PostgreSQL concurrency and deployed WhatsApp/Paystack test payment | Not tested | Require disposable PostgreSQL and staging provider UAT |
+
+## Controlled beta candidate · 2026-11-11
+
+- Go full suite, race suite, API build, Admin and Field checks/builds, Git diff check and all 13 Playwright journeys passed. The candidate CI passed. The clean PostgreSQL 17 concurrency test ran against a real server. Staging preflight passed the staging checks; it did not attest production.
+- The staging backup restored in a disposable PostgreSQL database. Checked 32 migration records, seven organizations, one store, one product, one inventory row, ten orders and two WhatsApp configurations at the snapshot. SHA-256: `6c1f513c49c3433641f926856a0c10d89c148202cee23d865343f20cac69db42`. Both disposable Railway databases and the remote temporary backup were removed.
+- Staging Groq `openai/gpt-oss-20b`: direct request from the deployment and grounded Admin test-chat passed. Catalogue, price, stock, store and unknowns tested; prompt-disclosure probe revealed no internals. Handoff claim, AI pause, staff reply, release and resumption passed in test-chat. Session `89667238-981a-44ad-9f3b-56379844f51c` resolved; its handoff and messages remain as audit evidence.
+- Synthetic commerce customer `689a93d0-5682-4a21-9bfa-3f5a90d618a5` remains. Orders `ZC-20261111-AD3213FC` and `ZC-20261111-AD3E880A` were cancelled and retained for audit. The latter check verified exact stock restoration and no payment or fulfilment.
+- Railway alert probe deployment `89099d0f-8250-435b-b725-4a8d455d212c` failed as intended. The corresponding Railway email reached the designated operator inbox at 02:17:58 WAT. The disposable probe service was removed. This proves build alert delivery only.

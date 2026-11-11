@@ -1,28 +1,17 @@
-# Controlled beta readiness checklist
+# Bing Chun controlled beta readiness · 2026-11-11
 
-Execution started November 11, 2026. Release and operations owner is Oluwateniola Sobande. Historical records remain dated evidence. This checklist tracks the current candidate.
-
-| Gate | State | Evidence or remaining work |
+| Gate | State | Evidence or next check |
 |---|---|---|
-| Payment controls and authorization | Proven | Phase 3 tests and PR #1 |
-| Staff disablement and demotion | Proven | PR #2 and staging tokens rejected |
-| Background job tenant isolation | Proven | PR #3 and six probes on 08f5738 |
-| Checkout concurrency and ambiguous references | Proven | Phase 3 staging probes |
-| Provider payment and first webhook delivery | Proven | ZC-20261110-88697F27 |
-| Previously unseen concurrent webhook | Proven | Six simultaneous signed requests, one paid transition |
-| Signature rejection and sampled secret scan | Proven within recorded scope | Phase 3 evidence |
-| Guided device checkout and simulated pickup | Proven historically | Phase 3 staging orders |
-| Immutable candidate with tester filter | In progress | Candidate branch based on 08f5738 |
-| Safe concurrent migration startup | Open | Inspect runner, fix and exercise PostgreSQL |
-| Migration inventory and clean installation | Open | All 32 migrations |
-| Backup restoration and application rollback | Open | Disposable restore and recorded rollback artifact |
-| Meta identity, signatures, token and routing | Open | Reattest existing staging phone override |
-| Grounded live AI and fallback | Open | Current provider configuration and deployed tests |
-| Handoff, claim, reply, release and resumption | Open | Deployed API and UI |
-| Admin desktop/mobile and role acceptance | Open | Administrator, manager, support and viewer |
-| Cancellation, inventory and invalid transitions | Open | Reuse tests and close deployed evidence |
-| Channel policy, opt-out and service window | Open | Deployed negative and approved template paths |
-| Monitoring and alert delivery | Open | Existing destination, controlled alert |
-| Complete verification suite | Open | API, race, builds, journeys and readiness script |
-| Final release manifest and diff | Open | Full commit and staging deployment IDs |
-| Signed UAT and production decision | Pending owner | Consolidated final decision only |
+| Immutable candidate and migrations | Pass | [Release manifest](release-manifest.md), API and Admin healthy, 32/32 staging and fresh-install migrations |
+| Backup and restoration | Pass in staging | Disposable restore and row-count checks; automated retention and backup alert remain unverified |
+| Application rollback | Open | Previous artifacts recorded; rehearse rollback and return on an isolated target or agreed staging window |
+| WhatsApp configuration | Pass for configuration | Meta phone connected, subscribed, valid token, signed challenge path verified, allowlist enabled, CRM callback unchanged |
+| Real-device WhatsApp, test payment and simulated pickup | Prior staging pass | Signed inbound, outbound delivery and simulated pickup proven in Phase 3; fresh complete device run on the final candidate remains open |
+| Paystack first delivery and replay | Prior staging pass | First provider-delivered webhook paid ZC-20261110-88697F27 without Check payment; six concurrent previously unseen signed deliveries caused one paid transition in the prior staging probe |
+| Commerce safety | Pass in staging | Insufficient stock rejected, duplicate order ID reused, manual Paid and unpaid fulfilment rejected, cancellation restored stock |
+| Staff revocation, job isolation, reference ambiguity, secret scan | Prior staging pass | Phase 3 evidence; coverage includes disabled/demoted staff tokens and notifications, outbound delivery and dispatch timeouts. Log scan was sampled |
+| Groq grounding and human handoff | Partial | Live Groq and deployed Admin test-chat passed; live provider failure fallback, policy/FAQ freshness and WhatsApp handoff still need acceptance |
+| Browser and role acceptance | Partial | All 13 local Playwright journeys passed, including mobile and Viewer restrictions. Staging desktop admin smoke passed; Administrator, Manager, Support and Viewer desktop/mobile matrix not signed off |
+| WhatsApp messaging policy | Open | Verify service-window, opt-out, approved template path, duplicate/malformed events and read receipts on deployed staging |
+| Monitoring | Partial | API and Admin health checks and controlled Railway build-failure email verified. Verify recurring runtime, webhook/payment, queue, provider and backup alerting |
+| Production decision | Hold | Close open staging gates and obtain signed UAT and explicit promotion approval |
