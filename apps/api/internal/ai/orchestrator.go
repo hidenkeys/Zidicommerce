@@ -103,13 +103,19 @@ func trimHistory(history []provider.Message, limit int) []provider.Message {
 func debugFromGrounding(grounding GroundingContext) []aitools.DebugCall {
 	calls := []aitools.DebugCall{}
 	for _, source := range grounding.Sources {
+		result := map[string]any{
+			"authority":  source.Authority,
+			"confidence": source.Confidence,
+		}
+		if source.Name == "products" || source.Name == "inventory" {
+			result["resolved_product"] = grounding.Resolved.ProductName
+			result["product_status"] = grounding.Resolved.ProductStatus
+			result["resolved_variant"] = grounding.Resolved.VariantName
+		}
 		calls = append(calls, aitools.DebugCall{
 			Name:   source.Name,
 			Status: "ok",
-			Result: map[string]any{
-				"authority":  source.Authority,
-				"confidence": source.Confidence,
-			},
+			Result: result,
 		})
 	}
 	if grounding.Security.Blocked {
