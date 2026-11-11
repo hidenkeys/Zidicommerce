@@ -36,7 +36,7 @@ func (h *Handler) Register(router fiber.Router) {
 
 	router.Get("/stores", auth.RequirePermission(authz.PermissionStoresView), h.listStores)
 	router.Post("/stores", auth.RequirePermission(authz.PermissionStoresCreate), h.createStore)
-	router.Get("/stores/:id", h.getStore)
+	router.Get("/stores/:id", auth.RequirePermission(authz.PermissionStoresView), h.getStore)
 	router.Patch("/stores/:id", h.updateStore)
 	router.Post("/stores/:id/activate", h.setStoreStatus(StatusActive))
 	router.Post("/stores/:id/deactivate", h.setStoreStatus(StatusInactive))
