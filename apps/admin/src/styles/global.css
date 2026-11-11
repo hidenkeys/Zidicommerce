@@ -3493,6 +3493,8 @@ tr.selected-row {
 
 .modal {
   width: min(460px, 100%);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #ffffff;
