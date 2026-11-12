@@ -175,3 +175,27 @@ func TestControlledBetaRequiresSafeConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestControlledBetaFlowsRequireStagingAndDesignatedTester(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret-value-for-config")
+	t.Setenv("CONTROLLED_BETA", "true")
+	t.Setenv("PAYMENT_PROVIDER", "paystack")
+	t.Setenv("PAYSTACK_SECRET_KEY", "sk_test_fixture")
+	t.Setenv("APP_ENV", "staging")
+	t.Setenv("WHATSAPP_FLOWS_ENABLED", "true")
+	t.Setenv("WHATSAPP_FLOWS_TEST_WABA_ID", "test-waba")
+	t.Setenv("WHATSAPP_FLOWS_TEST_PHONE_ID", "test-phone")
+	t.Setenv("WHATSAPP_TESTER_NUMBERS", "2348156572209")
+	if _, err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("APP_ENV", "production")
+	if _, err := Load(); err == nil {
+		t.Fatal("production Flow beta accepted")
+	}
+	t.Setenv("APP_ENV", "staging")
+	t.Setenv("WHATSAPP_TESTER_NUMBERS", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("unrestricted Flow beta accepted")
+	}
+}

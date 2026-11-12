@@ -259,12 +259,17 @@ func Load() (Config, error) {
 		}
 	}
 
+	if cfg.ControlledBeta && cfg.Channels.WhatsAppFlowsEnabled {
+		if cfg.AppEnv != "staging" || cfg.Channels.WhatsAppFlowsTestWABAID == "" || cfg.Channels.WhatsAppFlowsTestPhoneID == "" || len(cfg.Channels.WhatsAppTesterNumbers) == 0 {
+			return Config{}, errors.New("Controlled beta Flows require staging, a designated WABA and phone, and tester numbers")
+		}
+	}
 	if cfg.ControlledBeta {
 		if cfg.Payment.Provider != "paystack" || (cfg.Payment.PaystackSecret != "" && !strings.HasPrefix(strings.TrimSpace(cfg.Payment.PaystackSecret), "sk_test_")) {
 			return Config{}, errors.New("CONTROLLED_BETA requires Paystack test mode")
 		}
-		if cfg.Channels.WhatsAppSignatureBypass || cfg.Channels.WhatsAppFlowsEnabled || cfg.FieldService.SeedDemo || cfg.FieldService.PilotSeedProfile != "" || cfg.FieldService.AdoptPhoneNumberID != "" {
-			return Config{}, errors.New("CONTROLLED_BETA requires signed WhatsApp with Flows, seeds and number adoption disabled")
+		if cfg.Channels.WhatsAppSignatureBypass || cfg.FieldService.SeedDemo || cfg.FieldService.PilotSeedProfile != "" || cfg.FieldService.AdoptPhoneNumberID != "" {
+			return Config{}, errors.New("CONTROLLED_BETA requires signed WhatsApp with seeds and number adoption disabled")
 		}
 	}
 
