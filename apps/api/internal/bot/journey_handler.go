@@ -36,6 +36,14 @@ func (h *Handler) registerJourneys(router fiber.Router) {
 		data, err := h.service.CreateJourney(c.UserContext(), currentUser(c), input.Template, input.Name)
 		return respond(c, data, err)
 	})
+	router.Post("/journeys/:id/default", publish, bounded, func(c *fiber.Ctx) error {
+		id, err := paramID(c, "id")
+		if err != nil {
+			return err
+		}
+		data, err := h.service.SetDefaultJourney(c.UserContext(), currentUser(c), id)
+		return respond(c, data, err)
+	})
 	router.Get("/journeys/:id", view, func(c *fiber.Ctx) error {
 		id, err := paramID(c, "id")
 		if err != nil {

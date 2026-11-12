@@ -351,14 +351,14 @@ func validateJourneyInput(d JourneyDefinition) error {
 	if strings.TrimSpace(d.Name) == "" || len(d.Name) > 120 || len(d.Purpose) > 1000 || len(d.Steps) == 0 || len(d.Steps) > 80 {
 		return httperror.BadRequest("Journey name and 1 to 80 steps are required")
 	}
-	if !containsString([]string{"order", "track_order", "complaint", "catalogue", "support", "custom"}, d.Category) || !containsString([]string{"guided_chat", "whatsapp_flow", "ai"}, d.Mode) {
+	if !containsString([]string{"order", "track_order", "complaint", "catalogue", "support", "custom"}, d.Category) || !containsString([]string{"guided_chat", "automated_commerce", "guided_questions", "whatsapp_flow", "ai"}, d.Mode) {
 		return httperror.BadRequest("Journey category or presentation is invalid")
 	}
 	if d.TTLMinutes < 5 || d.TTLMinutes > 10080 {
 		return httperror.BadRequest("Session expiry must be between 5 minutes and 7 days")
 	}
-	if !containsString([]string{"order", "track_order", "complaint", "catalogue", "support", "custom", "default"}, d.Trigger) {
-		return httperror.BadRequest("Choose a supported entry intent")
+	if !journeyKey.MatchString(d.Trigger) {
+		return httperror.BadRequest("Use a lowercase entry keyword with letters, numbers or underscores")
 	}
 	keys := map[string]bool{}
 	for _, j := range d.Steps {
@@ -736,7 +736,7 @@ func (s *Service) ActivateJourney(ctx context.Context, actor auth.CurrentUser, b
 	}
 	d := detail.Definition
 	d.Mode = mode
-	if !containsString([]string{"guided_chat", "whatsapp_flow", "ai"}, mode) {
+	if !containsString([]string{"guided_chat", "automated_commerce", "guided_questions", "whatsapp_flow", "ai"}, mode) {
 		return detail, httperror.BadRequest("Choose a valid mode")
 	}
 	if mode == "whatsapp_flow" {
@@ -826,4 +826,40 @@ func sortedJourneyKeys(values map[string]bool) []string {
 }
 func journeyError(key, message string) ValidationIssue {
 	return ValidationIssue{Path: fmt.Sprintf("steps.%s", key), Message: message}
+}
+
+// SetDefaultJourney selects one published journey for new channel conversations.
+func (s *Service) SetDefaultJourney(ctx context.Context, actor auth.CurrentUser, botID uuid.UUID) (JourneyDetail, error) {
+	if !actor.Role.HasPermission(authz.PermissionBotPublish) {
+		return JourneyDetail{}, httperror.Forbidden("You cannot change the conversation mode")
+	}
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var binding JourneyBinding
+		if err := tx.Where("organization_id = ? AND bot_id = ? AND paused = ?", actor.OrganizationID, botID, false).First(&binding).Error; err != nil {
+			return httperror.BadRequest("Activate a published journey first")
+		}
+		if binding.ConnectionID == nil {
+			return httperror.BadRequest("Choose a channel connection")
+		}
+		var channel core.Channel
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("organization_id = ? AND id = ?", actor.OrganizationID, *binding.ConnectionID).First(&channel).Error; err != nil {
+			return httperror.NotFound("Channel not found")
+		}
+		var config map[string]any
+		if err := json.Unmarshal([]byte(channel.Config), &config); err != nil {
+			return httperror.BadRequest("Channel configuration is invalid")
+		}
+		if config == nil {
+			config = map[string]any{}
+		}
+		config["default_journey_id"] = botID.String()
+		if err := tx.Model(&channel).Update("config", jsonValue(config)).Error; err != nil {
+			return err
+		}
+		return auditTx(tx, actor.OrganizationID, actor.ID, "channel", channel.ID, "conversation_mode_changed", jsonValue(map[string]any{"bot_id": botID, "version_id": binding.VersionID, "mode": binding.Mode}))
+	})
+	if err != nil {
+		return JourneyDetail{}, err
+	}
+	return s.GetJourney(ctx, actor, botID, nil)
 }

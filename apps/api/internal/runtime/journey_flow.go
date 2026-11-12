@@ -192,9 +192,22 @@ func (s *Service) journeyRoute(ctx context.Context, channel core.Channel, text s
 	if !s.db.Migrator().HasTable(&bot.JourneyBinding{}) {
 		return nil, nil
 	}
-	intent := journeyEntryIntent(text)
+	intent := strings.ToLower(strings.TrimSpace(text))
 	var binding bot.JourneyBinding
 	err := s.db.WithContext(ctx).Where("organization_id = ? AND connection_id = ? AND trigger = ?", channel.OrganizationID, channel.ID, intent).First(&binding).Error
+	if err == gorm.ErrRecordNotFound {
+		intent = journeyEntryIntent(text)
+		err = s.db.WithContext(ctx).Where("organization_id = ? AND connection_id = ? AND trigger = ?", channel.OrganizationID, channel.ID, intent).First(&binding).Error
+	}
+	if err == gorm.ErrRecordNotFound {
+		channelConfig := parseJSONMap(channel.Config)
+		if defaultID, parseErr := uuid.Parse(stringValue(channelConfig["default_journey_id"])); parseErr == nil {
+			err = s.db.WithContext(ctx).Where("organization_id = ? AND connection_id = ? AND bot_id = ?", channel.OrganizationID, channel.ID, defaultID).First(&binding).Error
+		}
+	}
+	if err == gorm.ErrRecordNotFound {
+		err = s.db.WithContext(ctx).Where("organization_id = ? AND connection_id = ? AND trigger = ?", channel.OrganizationID, channel.ID, "default").First(&binding).Error
+	}
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}

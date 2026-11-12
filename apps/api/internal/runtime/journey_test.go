@@ -642,3 +642,43 @@ func TestReleasedGuidedJourneyAnswersFreeFormAndPreservesCheckout(t *testing.T) 
 		t.Fatalf("guided checkout selection called AI (%d calls)", calls)
 	}
 }
+
+func TestJourneyCustomKeywordAndTenantScopedDefault(t *testing.T) {
+	fx, detail := journeyFixture(t, "order")
+	ctx := context.Background()
+	d := detail.Definition
+	d.Trigger = "guided"
+	d.Mode = "guided_questions"
+	saved, err := bot.NewService(fx.db).SaveJourney(ctx, fx.actor, detail.Version.ID, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := bot.NewService(fx.db).PublishJourney(ctx, fx.actor, saved.Version.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bot.NewService(fx.db).SetDefaultJourney(ctx, fx.actor, published.Bot.ID); err != nil {
+		t.Fatal(err)
+	}
+	var channel core.Channel
+	if err := fx.db.First(&channel, "id = ?", fx.channel.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, keyword := range []string{"guided", "hello", "something unfamiliar"} {
+		id, err := fx.service.journeyRoute(ctx, channel, keyword)
+		if err != nil || id == nil || *id != published.Bot.ID {
+			t.Fatalf("route %q: %v %v", keyword, id, err)
+		}
+	}
+	other := channel
+	other.OrganizationID = uuid.New()
+	id, err := fx.service.journeyRoute(ctx, other, "hello")
+	if err != nil || id != nil {
+		t.Fatalf("default crossed tenant: %v %v", id, err)
+	}
+	viewer := fx.actor
+	viewer.Role = authz.Viewer
+	if _, err := bot.NewService(fx.db).SetDefaultJourney(ctx, viewer, published.Bot.ID); err == nil {
+		t.Fatal("viewer changed default")
+	}
+}

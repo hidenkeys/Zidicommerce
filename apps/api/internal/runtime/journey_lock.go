@@ -53,12 +53,12 @@ func (s *Service) executeConfiguredJourney(ctx context.Context, config bot.Versi
 	if (mode == "ai" || resumeAI) && session.ExpectedInput == "" && s.aiInbound != nil {
 		response, err := s.aiInbound(ctx, *session, input.Text)
 		if err == nil && strings.TrimSpace(response.Reply) != "" {
-			if resumeAI && strings.TrimSpace(response.Variables) != "" {
+			if strings.TrimSpace(response.Variables) != "" {
 				session.Variables = response.Variables
 			}
 			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{Type: MessageText, Text: strings.TrimSpace(response.Reply)}}}, nil
 		}
-		if resumeAI {
+		if resumeAI || mode == "ai" {
 			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{
 				Type: MessageText,
 				Text: "I couldn't answer that right now. Please try again, or send menu to continue.",
