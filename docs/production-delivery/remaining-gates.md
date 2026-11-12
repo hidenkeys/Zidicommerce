@@ -1,4 +1,4 @@
-# Bing Chun controlled beta readiness · 2026-11-11
+# Bing Chun controlled beta readiness · updated 2026-11-13
 
 | Gate | State | Evidence or next check |
 |---|---|---|
@@ -10,8 +10,8 @@
 | Paystack first delivery and replay | Prior staging pass | First provider-delivered webhook paid ZC-20261110-88697F27 without Check payment; six concurrent previously unseen signed deliveries caused one paid transition in the prior staging probe |
 | Commerce safety | Pass in staging | Insufficient stock rejected, duplicate order ID reused, manual Paid and unpaid fulfilment rejected, cancellation restored stock |
 | Staff revocation, job isolation, reference ambiguity, secret scan | Prior staging pass | Phase 3 evidence; coverage includes disabled/demoted staff tokens and notifications, outbound delivery and dispatch timeouts. Log scan was sampled |
-| Groq grounding, freshness and human handoff | Partial | Live Groq, Admin test-chat, same-session knowledge update/archive, price and stock freshness passed. Injected fallback passed locally. Live staff claim, reply delivery and release passed. Deployed AI outage and bot response after release remain open. |
+| Groq grounding, freshness and human handoff | Pass for exercised staging paths | Prior freshness checks retained. Live staff reply, release, one grounded post-release WhatsApp response, safe outage fallback, and recovery verified. See [test evidence](test-evidence.md). |
 | Browser, roles and store scope | Pass for tested routes | Eight deployed desktop/mobile checks passed after the store-detail permission fix. Assignment changes, revocation, demotion and cross-tenant store reads verified. |
-| WhatsApp messaging policy | Open | Invalid signatures and malformed JSON rejected. WhatsApp Web confirmed opt-out blocking and opt-in restoration with delivered messages in the open window. The deployed closed-window probe blocked free-form dispatch and incremented the policy metric. The tester timestamp was restored. Duplicate inbound handling and template validation passed in targeted tests. Staging has no approved template, and no read callback was observed. |
+| WhatsApp messaging policy | Open | Invalid signatures and malformed JSON rejected. WhatsApp Web confirmed opt-out blocking and opt-in restoration with delivered messages in the open window. The deployed closed-window probe blocked free-form dispatch and incremented the policy metric. The tester timestamp was restored. Duplicate inbound handling and template validation passed in targeted tests. Meta is reviewing the submitted Bing Chun pickup-ready utility template. Approved-template sync and a closed-window delivery remain open. No read callback was observed. |
 | Monitoring | Partial | API and Admin health checks and controlled Railway build-failure email verified. Verify recurring runtime, webhook/payment, queue, provider and backup alerting |
 | Production decision | Hold | Conditional owner authorization recorded. Close every staging gate and record pilot acceptance before promotion. |
