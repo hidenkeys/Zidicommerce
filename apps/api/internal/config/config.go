@@ -72,6 +72,9 @@ type AIConfig struct {
 	Model                 string
 	OllamaBaseURL         string
 	OllamaChatModel       string
+	GatewayAPIKey         string
+	GatewayBaseURL        string
+	GatewayModel          string
 	GroqAPIKey            string
 	GroqBaseURL           string
 	GroqModel             string
@@ -166,6 +169,9 @@ func Load() (Config, error) {
 			Model:                 strings.TrimSpace(os.Getenv("AI_MODEL")),
 			OllamaBaseURL:         strings.TrimRight(getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"), "/"),
 			OllamaChatModel:       getenv("OLLAMA_CHAT_MODEL", "llama3.2:3b"),
+			GatewayAPIKey:         strings.TrimSpace(os.Getenv("AI_GATEWAY_API_KEY")),
+			GatewayBaseURL:        getenv("AI_GATEWAY_BASE_URL", "https://ai-gateway.vercel.sh/v1"),
+			GatewayModel:          getenv("AI_GATEWAY_MODEL", "anthropic/claude-sonnet-4.6"),
 			GroqAPIKey:            strings.TrimSpace(os.Getenv("GROQ_API_KEY")),
 			GroqBaseURL:           strings.TrimRight(getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"), "/"),
 			GroqModel:             getenv("GROQ_MODEL", "openai/gpt-oss-20b"),

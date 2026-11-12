@@ -161,6 +161,9 @@ func main() {
 		}
 		aiProvider = aiprovider.NewGroqChatProvider(cfg.AI.GroqAPIKey, cfg.AI.GroqBaseURL, groqModel)
 	}
+	if strings.EqualFold(strings.TrimSpace(cfg.AI.Provider), "vercel_gateway") {
+		aiProvider = aiprovider.NewGatewayChatProvider(cfg.AI.GatewayAPIKey, cfg.AI.GatewayBaseURL, cfg.AI.GatewayModel)
+	}
 	aiService := ai.NewService(db, commerceService, aiProvider, cfg.AI.MaxToolCalls)
 	var embeddingProvider ai.EmbeddingProvider
 	embeddingsEnabled := cfg.AI.EmbeddingsEnabled
