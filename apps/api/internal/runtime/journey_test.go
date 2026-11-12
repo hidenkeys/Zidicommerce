@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
@@ -581,5 +582,63 @@ func TestJourneyControlledTestSafetyAndFreshPrices(t *testing.T) {
 	fx.db.Model(&core.Channel{}).Where("id = ?", fx.channel.ID).Update("provider", "whatsapp")
 	if _, err := fx.service.StartControlledJourneyTest(ctx, fx.actor, published.Version.ID, true); err == nil {
 		t.Fatal("real channel allowed")
+	}
+}
+
+func TestReleasedGuidedJourneyAnswersFreeFormAndPreservesCheckout(t *testing.T) {
+	fx, detail := journeyFixture(t, "order")
+	customer, _, _ := seedCommerce(t, fx)
+	ctx := context.Background()
+	if _, err := bot.NewService(fx.db).PublishJourney(ctx, fx.actor, detail.Version.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := 0
+	fx.service.ConfigureAIInbound(func(_ context.Context, session ConversationSession, _ string) (AIInboundResponse, error) {
+		calls++
+		if calls == 1 {
+			return AIInboundResponse{}, fmt.Errorf("provider unavailable")
+		}
+		if session.HandoffState != "released" {
+			t.Fatalf("expected released session, got %q", session.HandoffState)
+		}
+		return AIInboundResponse{Reply: "The test mug costs NGN 2,500."}, nil
+	})
+	send := func(text string) RuntimeResult {
+		t.Helper()
+		result, err := fx.service.ProcessMessage(ctx, InboundMessage{
+			ChannelID: &fx.channel.ID, Sender: customer.Phone,
+			ExternalConversationID: "guided-release", Text: text, ExternalMessageID: uuid.NewString(),
+		})
+		if err != nil || result.Error != nil {
+			t.Fatalf("processing %q: %v %+v", text, err, result)
+		}
+		return result
+	}
+	start := send("order")
+	handoff, err := fx.service.RequestSupportHandoff(ctx, fx.actor, start.ConversationID, "Test release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.ReleaseSupportHandoff(ctx, fx.actor, handoff.ID, SupportHandoffReleaseInput{ResumeBot: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	const question = "How much is the test mug?"
+	fallback := send(question)
+	if fallback.SessionStatus != SessionActive || len(fallback.Messages) != 1 || fallback.Messages[0].Text != "I couldn't answer that right now. Please try again, or send menu to continue." {
+		t.Fatalf("expected one safe fallback with the conversation still active, got %+v", fallback)
+	}
+	answer := send(question)
+	if len(answer.Messages) != 1 || answer.Messages[0].Text != "The test mug costs NGN 2,500." {
+		t.Fatalf("expected one AI reply after provider recovery, got %+v", answer)
+	}
+	order := send("order")
+	if len(order.Messages) == 0 || calls != 2 {
+		t.Fatalf("expected guided ordering without an AI call, got %+v (%d AI calls)", order, calls)
+	}
+	send("1")
+	if calls != 2 {
+		t.Fatalf("guided checkout selection called AI (%d calls)", calls)
 	}
 }

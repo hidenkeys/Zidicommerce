@@ -78,3 +78,9 @@ Phase 1 ran two targeted Go runtime tests on the current checkout: `TestJourneyL
 - The connection returned zero templates. Before the closed-window probe, the metrics showed 112 delivered and zero read callbacks. Live approved-template send and provider read evidence remain unverified.
 - Focused WhatsApp, runtime and AI tests passed, including duplicate inbound handling, approved and unapproved template validation, handoff and deterministic fallback. The public readiness script passed staging API/database and Admin health, migration inventory and clean tree. It exited 2 with production attestations unverified.
 - WhatsApp Web displayed the staff reply. Chrome changed active chats during the post-release attempt, and no designated tester question or first AI reply was confirmed. The deployed provider outage drill remains open.
+
+## Bing Chun staging functional sweep · November 12–13, 2026 (WAT)
+
+- Retained the accepted checkout evidence for `ZC-20261111-897BB040`. No repeat checkout was required for these checks.
+- On API deployment `cab8d427-740d-4e9d-8d77-5456c3781a4f`, designated-tester session `febea9b8-b089-4243-813b-44072900c748` received the staff test reply. Handoff `a1093c14-4373-4b98-9a07-80549d0c3357` was released with bot resumption enabled. A subsequent WhatsApp question about the Staging Test Mug price received the guided checkout welcome and store picker. Automation resumed, but the grounded AI gate failed. Journey dispatch required explicit AI mode even at the entry step after staff release.
+- Submitted `bing_chun_pickup_ready` (Utility, English, one order-reference variable) in Meta for WABA `773193152076286`. Meta displayed **In review**. Approved sync and a live closed-window template send remain pending. The CRM callback was untouched.

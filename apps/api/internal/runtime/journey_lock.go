@@ -5,6 +5,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
 	"gorm.io/gorm/clause"
+	"strings"
 	"time"
 )
 
@@ -43,10 +44,25 @@ func (s *Service) acquireJourney(ctx context.Context, session *ConversationSessi
 func (s *Service) executeConfiguredJourney(ctx context.Context, config bot.VersionConfiguration, session *ConversationSession, input InboundMessage) (RuntimeResult, error) {
 	system := parseJSONMap(session.SystemContext)
 	mode := stringValue(system["journey_mode"])
-	if mode == "ai" && session.ExpectedInput == "" && s.aiInbound != nil {
+	resumeAI := session.Status == SessionActive &&
+		session.HandoffState == "released" &&
+		session.CurrentStepKey == config.Version.StartStepKey &&
+		!input.SimulatorStart &&
+		classifyCommand(input.Text) == commandNone &&
+		journeyEntryIntent(input.Text) == "default"
+	if (mode == "ai" || resumeAI) && session.ExpectedInput == "" && s.aiInbound != nil {
 		response, err := s.aiInbound(ctx, *session, input.Text)
-		if err == nil && response.Reply != "" {
-			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{Type: MessageText, Text: response.Reply}}}, nil
+		if err == nil && strings.TrimSpace(response.Reply) != "" {
+			if resumeAI && strings.TrimSpace(response.Variables) != "" {
+				session.Variables = response.Variables
+			}
+			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{Type: MessageText, Text: strings.TrimSpace(response.Reply)}}}, nil
+		}
+		if resumeAI {
+			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{
+				Type: MessageText,
+				Text: "I couldn't answer that right now. Please try again, or send menu to continue.",
+			}}}, nil
 		}
 	}
 	result, err := s.executeJourney(ctx, config, session, input)

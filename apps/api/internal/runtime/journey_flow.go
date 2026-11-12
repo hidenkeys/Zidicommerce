@@ -192,6 +192,22 @@ func (s *Service) journeyRoute(ctx context.Context, channel core.Channel, text s
 	if !s.db.Migrator().HasTable(&bot.JourneyBinding{}) {
 		return nil, nil
 	}
+	intent := journeyEntryIntent(text)
+	var binding bot.JourneyBinding
+	err := s.db.WithContext(ctx).Where("organization_id = ? AND connection_id = ? AND trigger = ?", channel.OrganizationID, channel.ID, intent).First(&binding).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if binding.Paused {
+		return nil, httperror.BadRequest("This journey is paused. Please contact the merchant")
+	}
+	return &binding.BotID, nil
+}
+
+func journeyEntryIntent(text string) string {
 	intent := classifyNaturalEntryIntent(text)
 	normalized := strings.ToLower(strings.TrimSpace(text))
 	if intent == "" {
@@ -211,18 +227,7 @@ func (s *Service) journeyRoute(ctx context.Context, channel core.Channel, text s
 	if intent == "" {
 		intent = "default"
 	}
-	var binding bot.JourneyBinding
-	err := s.db.WithContext(ctx).Where("organization_id = ? AND connection_id = ? AND trigger = ?", channel.OrganizationID, channel.ID, intent).First(&binding).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if binding.Paused {
-		return nil, httperror.BadRequest("This journey is paused. Please contact the merchant")
-	}
-	return &binding.BotID, nil
+	return intent
 }
 
 func (s *Service) selectJourneyEntry(ctx context.Context, session *ConversationSession, intent string, system map[string]any) (*bot.VersionConfiguration, error) {
