@@ -44,6 +44,16 @@ func (s *Service) acquireJourney(ctx context.Context, session *ConversationSessi
 func (s *Service) executeConfiguredJourney(ctx context.Context, config bot.VersionConfiguration, session *ConversationSession, input InboundMessage) (RuntimeResult, error) {
 	system := parseJSONMap(session.SystemContext)
 	mode := stringValue(system["journey_mode"])
+	if mode == "ai" && session.ExpectedInput == "" && (input.SimulatorStart || isResetText(input.Text) || strings.EqualFold(strings.TrimSpace(input.Text), bot.JourneySettings(config.Version).Trigger)) {
+		welcome := "Welcome! Ask about our products, prices, availability, stores, orders or policies."
+		for _, step := range config.Steps {
+			if step.StepKey == config.Version.StartStepKey && strings.TrimSpace(step.Message) != "" {
+				welcome = step.Message
+				break
+			}
+		}
+		return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{Type: MessageText, Text: welcome}}}, nil
+	}
 	resumeAI := session.Status == SessionActive &&
 		session.HandoffState == "released" &&
 		session.CurrentStepKey == config.Version.StartStepKey &&
