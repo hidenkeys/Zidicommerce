@@ -70,7 +70,6 @@ export function JourneysPage() {
   const [confirmAction, setConfirmAction] = useState<{ title: string; body: string; run: () => Promise<void> }>();
   const [tab, setTab] = useState("canvas");
   const [nodeSearch,setNodeSearch] = useState("");
-  const [addKind, setAddKind] = useState("message");
   const [issues, setIssues] = useState<Issue[]>([]);
   const [preview, setPreview] = useState<Preview>();
   const [lines, setLines] = useState<PreviewLine[]>([]);
@@ -92,7 +91,7 @@ export function JourneysPage() {
   async function loadList() { const response = await apiGet<Journey[]>("/journeys"); setRows(response.data); }
   function accept(next: Detail) {
     setDetail(next); setDraft(next.definition); setSaved(JSON.stringify(next.definition)); setPast([]); setFuture([]);
-    setSelected(next.definition.steps[0]?.key ?? ""); setIssues([]); setPreview(undefined); setLines([]); setCompilation(undefined);
+    setSelected(next.definition.start || next.definition.steps[0]?.key || ""); setIssues([]); setPreview(undefined); setLines([]); setCompilation(undefined);
   }
   async function openJourney(id: string, version?: string) { accept((await apiGet<Detail>(`/journeys/${id}${version ? `?version=${version}` : ""}`)).data); }
   function leaving(work: () => Promise<void>) {
@@ -128,7 +127,7 @@ export function JourneysPage() {
     if (!draft || !editable || from === to || to < 0 || to >= draft.steps.length || draft.steps[from].locked) return;
     const steps = [...draft.steps]; const [moving] = steps.splice(from, 1); steps.splice(to, 0, moving); change({ ...draft, steps });
   }
-  function addStep(chosen = addKind) {
+  function addStep(chosen: string) {
     if (!draft || !editable) return;
     const key = keyFor();
     const item = library.find(l => `${l.kind}${l.answer_type ? `:${l.answer_type}` : ""}` === chosen);
@@ -137,9 +136,16 @@ export function JourneysPage() {
     const [source, destination] = binding[kind] ?? ["", `answer_${key}`];
     const created: Step = { key, kind, title: item?.name ?? friendly(kind), text: "", help: "", required: false, locked: protectedKinds.includes(kind), answer_type: item?.answer_type ?? (kind === "quantity" ? "number" : "text"), presentation: kind === "buttons" ? "buttons" : source || kind === "list" ? "list" : "free_text", destination, source, options: [], max_length: 1000, max_retries: 3, retry_message: "Please check your answer and try again.", next: step?.next ?? "end", failure: draft.steps.some(s => s.kind === "handoff") ? draft.steps.find(s => s.kind === "handoff")!.key : "", analytics_label: "" };
     const index = Math.max(0, draft.steps.findIndex(s => s.key === selected));
+    if (draft.steps.length === 1 && step?.kind === "end") {
+      created.next = step.key;
+      change({...draft, start:key, steps:[created,step]});
+      setSelected(key);
+      setTab("edit");
+      return;
+    }
     const steps = [...draft.steps]; steps.splice(index + 1, 0, created);
     if (steps[index].next && !["condition", "end", "handoff"].includes(steps[index].kind)) steps[index] = { ...steps[index], next: key };
-    change({ ...draft, steps, trigger: kind === "entry_menu" ? "default" : draft.trigger }); setSelected(key); setTab("edit");
+    change({ ...draft, steps }); setSelected(key); setTab("edit");
   }
   function pasteSteps(keys: string[]) {
     if (!draft || !editable) return;
@@ -235,7 +241,7 @@ export function JourneysPage() {
             {editable && !s.locked ? <div className="journey-step-move"><IconButton label={`Move ${s.title} up`} icon={ArrowUp} disabled={index === 0} onClick={() => move(index, index - 1)} /><IconButton label={`Move ${s.title} down`} icon={ArrowDown} disabled={index === draft.steps.length - 1} onClick={() => move(index, index + 1)} /></div> : null}
           </li>)}</ol>
           {editable ? <div className="journey-add"><h3>Node library</h3><input type="search" aria-label="Search node library" placeholder="Search node types" value={nodeSearch} onChange={e=>setNodeSearch(e.target.value)} />
-            <div className="node-library">{library.filter(item=>item.name.toLowerCase().includes(nodeSearch.trim().toLowerCase())).map(item=>{const value=item.kind+(item.answer_type ? ":"+item.answer_type : "");return <button type="button" key={value} onClick={()=>{setAddKind(value);addStep(value);}}><Plus size={13}/>{item.name}</button>;})}</div>
+            <div className="node-library">{library.filter(item=>item.name.toLowerCase().includes(nodeSearch.trim().toLowerCase())).map(item=>{const value=item.kind+(item.answer_type ? ":"+item.answer_type : "");return <button type="button" key={value} onClick={()=>addStep(value)}><Plus size={13}/>{item.name}</button>;})}</div>
             {!library.some(item=>item.name.toLowerCase().includes(nodeSearch.trim().toLowerCase())) && <p role="status">No matching node types.</p>}</div> : null}
         </aside>
         <section className={`journey-editor ${tab === "edit" ? "mobile-current" : ""}`} aria-label="Step editor">
@@ -282,10 +288,10 @@ export function JourneysPage() {
       </div>
     </>}
     <Modal open={newOpen} title="Browse templates" onClose={() => setNewOpen(false)} footer={<Button icon={Plus} loading={busy} onClick={() => void run(async () => { const response = await apiPost<Detail>("/journeys", { template: newTemplate, name: newName }); accept(response.data); await loadList(); setNewOpen(false); })}>Use template</Button>}>
-      <label>Journey name<input value={newName} maxLength={120} placeholder="Customer ordering" onChange={e => setNewName(e.target.value)} /></label><JourneyTemplates templates={templates} value={newTemplate} onChange={setNewTemplate} />
+      <Flash message={error} /><label>Journey name<input value={newName} maxLength={120} placeholder="Customer ordering" onChange={e => setNewName(e.target.value)} /></label><JourneyTemplates templates={templates} value={newTemplate} onChange={setNewTemplate} />
     </Modal>
     <Modal open={settingsOpen && Boolean(draft)} title="Journey settings" onClose={() => setSettingsOpen(false)} footer={<Button onClick={() => setSettingsOpen(false)}>Done</Button>}>
-      {draft ? <><fieldset disabled={!editable}><label>Name<input value={draft.name} maxLength={120} onChange={e => change({ ...draft, name: e.target.value })} /></label><label>Purpose<textarea value={draft.purpose} onChange={e => change({ ...draft, purpose: e.target.value })} /></label><label>Presentation<select value={draft.mode} onChange={e => change({ ...draft, mode: e.target.value })}><option value="automated_commerce">Automated Commerce</option><option value="guided_questions">Guided Questions</option><option value="guided_chat">Legacy guided chat</option><option value="whatsapp_flow">WhatsApp Flow</option><option value="ai">AI Conversation</option></select></label><p role="status">{experienceHelp[draft.mode]}</p><p>Messaging charges depend on applicable Meta rules and your provider. A Flow is not a guaranteed single charge. AI token usage and payment processing fees are separate.</p><label>Channel connection<select value={draft.connection_id ?? ""} onChange={e => { const connection = connections.find(c => c.id === e.target.value); change({ ...draft, connection_id: e.target.value || undefined, channel: connection?.provider ?? "whatsapp" }); }}><option value="">Unbound preview</option>{connections.filter(c => c.status !== "archived").map(c => <option key={c.id} value={c.id}>{c.display_name} · {c.provider}</option>)}</select></label><label>Entry button label<input maxLength={20} value={draft.entry_cta ?? ""} onChange={e => change({...draft, entry_cta:e.target.value})} /></label><label>Entry keyword<input value={draft.trigger} maxLength={48} pattern="[a-z][a-z0-9_]*" onChange={e => change({ ...draft, trigger: e.target.value })} /></label>{route("Start step", draft.start, start => change({ ...draft, start }))}<label>Session expiry (minutes)<input type="number" min={5} max={10080} value={draft.ttl_minutes} onChange={e => change({ ...draft, ttl_minutes: Number(e.target.value) })} /></label></fieldset>
+      {draft ? <><Flash message={error} /><fieldset disabled={!editable}><label>Name<input value={draft.name} maxLength={120} onChange={e => change({ ...draft, name: e.target.value })} /></label><label>Purpose<textarea value={draft.purpose} onChange={e => change({ ...draft, purpose: e.target.value })} /></label><label>Presentation<select value={draft.mode} onChange={e => change({ ...draft, mode: e.target.value })}><option value="automated_commerce">Automated Commerce</option><option value="guided_questions">Guided Questions</option><option value="guided_chat">Legacy guided chat</option><option value="whatsapp_flow">WhatsApp Flow</option><option value="ai">AI Conversation</option></select></label><p role="status">{experienceHelp[draft.mode]}</p><p>Messaging charges depend on applicable Meta rules and your provider. A Flow is not a guaranteed single charge. AI token usage and payment processing fees are separate.</p><label>Channel connection<select value={draft.connection_id ?? ""} onChange={e => { const connection = connections.find(c => c.id === e.target.value); change({ ...draft, connection_id: e.target.value || undefined, channel: connection?.provider ?? "whatsapp" }); }}><option value="">Unbound preview</option>{connections.filter(c => c.status !== "archived").map(c => <option key={c.id} value={c.id}>{c.display_name} · {c.provider}</option>)}</select></label><label>Entry button label<input maxLength={20} value={draft.entry_cta ?? ""} onChange={e => change({...draft, entry_cta:e.target.value})} /></label><label>Entry keyword<input value={draft.trigger} maxLength={48} pattern="[a-z][a-z0-9_]*" onChange={e => change({ ...draft, trigger: e.target.value })} /></label>{route("Start step", draft.start, start => change({ ...draft, start }))}<label>Session expiry (minutes)<input type="number" min={5} max={10080} value={draft.ttl_minutes} onChange={e => change({ ...draft, ttl_minutes: Number(e.target.value) })} /></label></fieldset>
         {detail?.binding && canPublish ? <label>Active presentation<select value={detail.binding.mode} disabled={busy || dirty} onChange={e => { const mode = e.target.value; setConfirmAction({ title: "Switch presentation?", body: "Only new sessions will change. Active sessions keep their current presentation.", run: async () => { const version = detail.versions.find(v => v.id === detail.binding!.version_id); if (version) await activate(version, mode, detail.binding!.paused); } }); }}><option value="automated_commerce">Automated Commerce</option><option value="guided_questions">Guided Questions</option><option value="guided_chat">Legacy guided chat</option><option value="whatsapp_flow">WhatsApp Flow</option><option value="ai">AI Conversation</option></select></label> : null}
         {detail?.channel_default && <p role="status">Channel default · {rows.find(row => row.id === detail.channel_default?.journey_id)?.name ?? friendly(detail.channel_default.mode)}{detail.channel_default.journey_id === detail.journey.id ? " · Version " + (detail.versions.find(v => v.id === detail.channel_default?.version_id)?.version_number ?? "unknown") : ""}</p>}
         {detail?.binding && canPublish ? <Button disabled={busy || dirty || detail.binding.paused || detail.channel_default?.version_id === detail.binding.version_id} onClick={() => setConfirmAction({ title: "Use as the default conversation mode?", body: "New conversations on this channel will use this published journey. Existing conversations retain their current version.", run: async () => { await apiPost(`/journeys/${detail.journey.id}/default`, {}); await openJourney(detail.journey.id, detail.version.id); setNotice("Channel default updated."); setSettingsOpen(false); } })}>Use as channel default</Button> : null}
