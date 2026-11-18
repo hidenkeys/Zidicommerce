@@ -81,15 +81,21 @@ func TestPaystackCheckoutRetryAfterRejection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newCommerceFixture(t, 5)
 			ctx := context.Background()
+			const returnURL = "https://staging.example.test/checkout-return.html"
+			fx.service.ConfigurePaystackReturnURL(returnURL)
 			provider := NewPaystackProvider("sk_test_fixture")
 			var refs []string
 			provider.client.Transport = paymentRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 				var request struct {
-					Reference string
-					Email     string
+					Reference   string
+					CallbackURL string `json:"callback_url"`
+					Email       string
 				}
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 					t.Fatal(err)
+				}
+				if request.CallbackURL != returnURL {
+					t.Fatalf("wrong customer return destination: %q", request.CallbackURL)
 				}
 				refs = append(refs, request.Reference)
 				status, body := tc.status, tc.body

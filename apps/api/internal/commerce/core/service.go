@@ -56,6 +56,7 @@ type Service struct {
 	paymentProvider         PaymentProvider
 	paymentSecretStore      PaymentProviderSecretStore
 	paystackProviderFactory func(secret string) PaymentProvider
+	paystackReturnURL       string
 	paystackSecret          string
 	controlledBeta          bool
 	mailer                  email.Sender
@@ -71,6 +72,8 @@ type AfterPaymentPaid func(ctx context.Context, organizationID, orderID uuid.UUI
 func NewService(db *gorm.DB, provider PaymentProvider) *Service {
 	return &Service{db: db, paymentProvider: provider, paystackProviderFactory: func(secret string) PaymentProvider { return NewPaystackProvider(secret) }, now: func() time.Time { return time.Now().UTC() }}
 }
+
+func (s *Service) ConfigurePaystackReturnURL(returnURL string) { s.paystackReturnURL = returnURL }
 
 func (s *Service) ConfigureNotifications(mailer email.Sender, appBaseURL string, logger *slog.Logger) {
 	s.mailer = mailer
@@ -1207,6 +1210,9 @@ func (s *Service) InitializePayment(ctx context.Context, actor auth.CurrentUser,
 			return Payment{}, httperror.Conflict("Checkout initialization is pending or needs reconciliation")
 		}
 		return payment, nil
+	}
+	if providerName == "paystack" && s.paystackReturnURL != "" {
+		input.CallbackURL = s.paystackReturnURL
 	}
 	init, err := provider.Initialize(ctx, PaymentInitializeRequest{Reference: payment.Reference, Email: input.Email, AmountMinor: payment.AmountMinor, Currency: payment.Currency, CallbackURL: input.CallbackURL, Metadata: map[string]string{"organization_id": actor.OrganizationID.String(), "order_id": order.ID.String(), "order_number": order.OrderNumber, "customer_id": order.CustomerID.String()}})
 	if errors.Is(err, errPaystackCheckoutRejected) {

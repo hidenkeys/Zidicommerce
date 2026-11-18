@@ -61,6 +61,7 @@ func main() {
 		provider = core.NewPaystackProvider(cfg.Payment.PaystackSecret)
 	}
 	commerceService := core.NewService(db, provider)
+	commerceService.ConfigurePaystackReturnURL(cfg.Payment.PaystackReturnURL)
 	channelService := channelplatform.NewService(db)
 	if cfg.ControlledBeta {
 		commerceService.EnableControlledBeta()

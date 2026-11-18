@@ -62,6 +62,7 @@ type JWTConfig struct {
 }
 
 type PaymentConfig struct {
+	PaystackReturnURL   string
 	Provider            string
 	PaystackSecret      string
 	SecretEncryptionKey string
@@ -149,6 +150,7 @@ func Load() (Config, error) {
 			Issuer: getenv("JWT_ISSUER", "zidicommerce"),
 		},
 		Payment: PaymentConfig{
+			PaystackReturnURL:   strings.TrimSpace(os.Getenv("PAYSTACK_RETURN_URL")),
 			Provider:            getenv("PAYMENT_PROVIDER", "test"),
 			PaystackSecret:      os.Getenv("PAYSTACK_SECRET_KEY"),
 			SecretEncryptionKey: os.Getenv("PAYMENT_SECRET_ENCRYPTION_KEY"),
@@ -237,6 +239,12 @@ func Load() (Config, error) {
 	}
 	if strings.EqualFold(cfg.AppEnv, "production") && cfg.Channels.WhatsAppSignatureBypass {
 		return Config{}, errors.New("WHATSAPP_SIGNATURE_BYPASS cannot be enabled in production")
+	}
+	if returnURL := cfg.Payment.PaystackReturnURL; returnURL != "" {
+		parsed, err := url.Parse(returnURL)
+		if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" {
+			return Config{}, errors.New("PAYSTACK_RETURN_URL must be an absolute HTTPS page URL without credentials, query or fragment")
+		}
 	}
 	if baseURL := cfg.Channels.WhatsAppWebhookPublicBaseURL; baseURL != "" {
 		parsed, parseErr := url.Parse(baseURL)
