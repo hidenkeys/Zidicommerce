@@ -22,7 +22,9 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -96,7 +98,14 @@ func (s *Service) flowGraph(ctx context.Context, config Configuration, method, p
 		return nil, httperror.BadRequest("Meta returned an invalid Flow response")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, httperror.BadRequest(fmt.Sprintf("Meta rejected this Flow operation (HTTP %d). Check test-account permissions and provider validation.", response.StatusCode))
+		var provider struct {
+			Error struct {
+				Code    int `json:"code"`
+				Subcode int `json:"error_subcode"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(data, &provider)
+		return nil, httperror.BadRequest(fmt.Sprintf("Meta rejected the Flow request (HTTP %d, code %d, subcode %d).", response.StatusCode, provider.Error.Code, provider.Error.Subcode))
 	}
 	return result, nil
 }
@@ -124,7 +133,7 @@ func (s *Service) PrepareJourneyFlow(ctx context.Context, actor auth.CurrentUser
 	raw, _ := json.Marshal(compiled.JSON)
 	hash := sha256.Sum256(raw)
 	revisionHash := hex.EncodeToString(hash[:])
-	row := bot.JourneyFlowDeployment{ID: uuid.New(), OrganizationID: actor.OrganizationID, BotID: graph.Version.BotID, VersionID: versionID, ConnectionID: connectionID, Revision: graph.Version.VersionNumber, Status: "draft", Errors: "[]", Warnings: marshal(compiled.Warnings), CompiledHash: revisionHash}
+	row := bot.JourneyFlowDeployment{ID: uuid.New(), OrganizationID: actor.OrganizationID, BotID: graph.Version.BotID, VersionID: versionID, ConnectionID: connectionID, Revision: graph.Version.VersionNumber, Status: "draft", Errors: "[]", Warnings: marshal(compiled.Warnings)}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
 		if result.Error != nil {
@@ -148,7 +157,7 @@ func (s *Service) PrepareJourneyFlow(ctx context.Context, actor auth.CurrentUser
 		return row, err
 	}
 	failed := func(err error) (bot.JourneyFlowDeployment, error) {
-		s.db.WithContext(ctx).Model(&row).Updates(map[string]any{"status": "failed", "errors": `["Provider operation failed; see the safe API error and Meta test account."]`})
+		s.db.WithContext(ctx).Model(&row).Updates(map[string]any{"status": "failed", "compiled_hash": "", "errors": `["Provider operation failed; see the safe API error and Meta test account."]`})
 		return row, err
 	}
 	if row.ProviderFlowID == "" {
@@ -171,7 +180,7 @@ func (s *Service) PrepareJourneyFlow(ctx context.Context, actor auth.CurrentUser
 	}
 	var upload bytes.Buffer
 	writer := multipart.NewWriter(&upload)
-	part, err := writer.CreateFormFile("file", "flow.json")
+	part, err := writer.CreatePart(textproto.MIMEHeader{"Content-Disposition": {`form-data; name="file"; filename="flow.json"`}, "Content-Type": {"application/json"}})
 	if err != nil {
 		return failed(err)
 	}
@@ -179,8 +188,15 @@ func (s *Service) PrepareJourneyFlow(ctx context.Context, actor auth.CurrentUser
 	writer.WriteField("name", "flow.json")
 	writer.WriteField("asset_type", "FLOW_JSON")
 	writer.Close()
-	if _, err := s.flowGraph(ctx, config, "POST", row.ProviderFlowID+"/assets", writer.FormDataContentType(), &upload); err != nil {
+	uploadResult, err := s.flowGraph(ctx, config, "POST", row.ProviderFlowID+"/assets", writer.FormDataContentType(), &upload)
+	if err != nil {
 		return failed(err)
+	}
+	if issues := flowSchemaIssues(uploadResult["validation_errors"]); len(issues) > 0 {
+		return failed(httperror.BadRequest("Meta rejected the Flow JSON: " + strings.Join(issues, "; ")))
+	}
+	if uploadResult["success"] != true {
+		return failed(httperror.BadRequest("Meta did not confirm the Flow JSON upload"))
 	}
 	row.CompiledHash = revisionHash
 	row.Status = "draft"
@@ -255,12 +271,14 @@ func (s *Service) journeyFlowOperation(ctx context.Context, actor auth.CurrentUs
 	if operation == "refresh" {
 		if status := strings.ToLower(valueString(result["status"])); status == "published" || status == "deprecated" {
 			row.Status = status
-		} else {
+		} else if row.CompiledHash != "" {
 			row.Status = "validated"
+		} else {
+			row.Status = "draft"
 		}
 		if failures, ok := result["validation_errors"].([]any); ok && len(failures) > 0 {
 			row.Status = "failed"
-			row.Errors = `["Meta reported Flow schema validation errors. Correct the compiled draft before publishing."]`
+			row.Errors = marshal(flowSchemaIssues(failures))
 		} else {
 			row.Errors = "[]"
 		}
@@ -333,3 +351,25 @@ func (s *Service) RegisterFlowKey(ctx context.Context, actor auth.CurrentUser, c
 	return audit(s.db.WithContext(ctx), &actor.OrganizationID, &actor.ID, connectionID, "journey_flow_key_registered", map[string]any{"key_bits": 2048})
 }
 func marshal(value any) string { raw, _ := json.Marshal(value); return string(raw) }
+
+// Only report provider schema codes and positions. Provider prose may echo customer input.
+var schemaCode = regexp.MustCompile(`^[A-Z_]{1,64}$`)
+
+func flowSchemaIssues(raw any) []string {
+	rows, _ := raw.([]any)
+	var out []string
+	for _, r := range rows {
+		if len(out) >= 8 {
+			break
+		}
+		fields, _ := r.(map[string]any)
+		code := valueString(fields["error"])
+		if !schemaCode.MatchString(code) {
+			code = "VALIDATION_ERROR"
+		}
+		line, _ := fields["line_start"].(float64)
+		column, _ := fields["column_start"].(float64)
+		out = append(out, fmt.Sprintf("%s (line %.0f, column %.0f)", code, line, column))
+	}
+	return out
+}

@@ -70,6 +70,7 @@ type JourneyPreviewResult struct {
 	Result      RuntimeResult    `json:"result"`
 	Cart        []map[string]any `json:"cart"`
 	FlowScreen  string           `json:"flow_screen"`
+	Variables   map[string]any   `json:"variables,omitempty"`
 	Controlled  bool             `json:"controlled_test"`
 }
 type JourneyAnswer struct {
@@ -182,7 +183,19 @@ func journeyPreviewResult(row JourneyPreviewSession, state ConversationSession, 
 	if state.Status != SessionActive {
 		screen = "FINISH"
 	}
-	return JourneyPreviewResult{SessionID: row.ID, CurrentStep: state.CurrentStepKey, Turn: journeyTurn(state), Result: result, Cart: mapSlice(parseJSONMap(state.Variables)["preview_cart"]), FlowScreen: screen}
+	variables := map[string]any{}
+	if parseJSONMap(state.SystemContext)["journey_preview"] == true {
+		var config bot.VersionConfiguration
+		if json.Unmarshal([]byte(row.Snapshot), &config) == nil {
+			values := parseJSONMap(state.Variables)
+			for _, question := range config.Questions {
+				if v, ok := values[question.VariableName]; ok {
+					variables[question.VariableName] = v
+				}
+			}
+		}
+	}
+	return JourneyPreviewResult{Variables: variables, SessionID: row.ID, CurrentStep: state.CurrentStepKey, Turn: journeyTurn(state), Result: result, Cart: mapSlice(parseJSONMap(state.Variables)["preview_cart"]), FlowScreen: screen}
 }
 
 func (s *Service) executeJourney(ctx context.Context, config bot.VersionConfiguration, session *ConversationSession, input InboundMessage) (RuntimeResult, error) {

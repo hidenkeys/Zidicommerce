@@ -2,8 +2,10 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"strings"
 	"time"
@@ -44,6 +46,43 @@ func (s *Service) acquireJourney(ctx context.Context, session *ConversationSessi
 func (s *Service) executeConfiguredJourney(ctx context.Context, config bot.VersionConfiguration, session *ConversationSession, input InboundMessage) (RuntimeResult, error) {
 	system := parseJSONMap(session.SystemContext)
 	mode := stringValue(system["journey_mode"])
+	settings := bot.JourneySettings(config.Version)
+	if !input.SimulatorStart && session.Status == SessionActive && system["journey_preview"] != true && input.Metadata["journey_flow"] != true {
+		intent := strings.ToLower(strings.TrimSpace(input.Text))
+		if intent != "" && intent != settings.Trigger && len(intent) <= 48 && !strings.ContainsAny(intent, " \t\n") {
+			var binding bot.JourneyBinding
+			err := s.db.WithContext(ctx).Where("organization_id = ? AND connection_id = ? AND trigger = ? AND paused = ?", session.OrganizationID, session.ChannelID, intent, false).First(&binding).Error
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return RuntimeResult{}, err
+			}
+			if err == nil && binding.BotID != session.BotID {
+				vars := parseJSONMap(session.Variables)
+				if stringValue(vars["order_id"]) != "" || stringValue(vars["cart_id"]) != "" {
+					return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{Type: MessageText, Text: "Your checkout is in progress. Finish it or contact the team before starting another experience."}}}, nil
+				}
+				target, err := s.selectJourneyEntry(ctx, session, intent, system)
+				if err != nil {
+					return RuntimeResult{}, err
+				}
+				session.Variables = "{}"
+				session.StoreID = nil
+				session.SystemContext = jsonValue(system)
+				expiry := s.now().Add(time.Duration(bot.JourneySettings(target.Version).TTLMinutes) * time.Minute)
+				session.ExpiresAt = &expiry
+				return s.executeConfiguredJourney(ctx, *target, session, InboundMessage{SimulatorStart: true})
+			}
+		}
+		if session.ExpectedInput == "" && isResetText(input.Text) && (mode == "ai" || mode == "guided_questions" || mode == "automated_commerce") {
+			welcome := "Welcome! How can we help?"
+			for _, step := range config.Steps {
+				if step.StepKey == config.Version.StartStepKey && step.Message != "" {
+					welcome = step.Message
+					break
+				}
+			}
+			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{Type: MessageButtons, Text: welcome, Options: []MessageOption{{ID: settings.Trigger, Label: bot.JourneyEntryLabel(mode, settings.EntryCTA, settings.Trigger)}}}}}, nil
+		}
+	}
 	if mode == "ai" && session.ExpectedInput == "" && (input.SimulatorStart || isResetText(input.Text) || strings.EqualFold(strings.TrimSpace(input.Text), bot.JourneySettings(config.Version).Trigger)) {
 		welcome := "Welcome! Ask about our products, prices, availability, stores, orders or policies."
 		for _, step := range config.Steps {

@@ -696,3 +696,50 @@ func TestJourneyCustomKeywordAndTenantScopedDefault(t *testing.T) {
 		t.Fatal("viewer changed default")
 	}
 }
+
+func TestExplicitJourneySwitchKeepsHistoryAndProtectsCheckout(t *testing.T) {
+	fx, order := journeyFixture(t, "order")
+	customer, _, _ := seedCommerce(t, fx)
+	ctx := context.Background()
+	svc := bot.NewService(fx.db)
+	if _, err := svc.PublishJourney(ctx, fx.actor, order.Version.ID); err != nil {
+		t.Fatal(err)
+	}
+	ai, err := svc.CreateJourney(ctx, fx.actor, "product_enquiry", "Enquiry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := ai.Definition
+	d.ConnectionID = &fx.channel.ID
+	d.Channel = "test"
+	if _, err = svc.SaveJourney(ctx, fx.actor, ai.Version.ID, d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.PublishJourney(ctx, fx.actor, ai.Version.ID); err != nil {
+		t.Fatal(err)
+	}
+	send := func(text string) RuntimeResult {
+		t.Helper()
+		r, e := fx.service.ProcessMessage(ctx, InboundMessage{ChannelID: &fx.channel.ID, Sender: customer.Phone, ExternalConversationID: "switch-test", Text: text, ExternalMessageID: uuid.NewString()})
+		if e != nil || r.Error != nil {
+			t.Fatalf("%s: %v %+v", text, e, r.Error)
+		}
+		return r
+	}
+	first := send("ask")
+	second := send("order")
+	var session ConversationSession
+	if err := fx.db.First(&session, "id = ?", first.ConversationID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if session.BotVersionID != order.Version.ID || second.ConversationID != first.ConversationID || session.ExpectedInput != "store" {
+		t.Fatalf("switch lost pin or history: %+v", session)
+	}
+	if err := fx.db.Model(&session).Update("variables", jsonValue(map[string]any{"cart_id": uuid.NewString()})).Error; err != nil {
+		t.Fatal(err)
+	}
+	blocked := send("ask")
+	if !strings.Contains(blocked.Messages[0].Text, "checkout is in progress") {
+		t.Fatalf("cart lost on switch: %+v", blocked)
+	}
+}

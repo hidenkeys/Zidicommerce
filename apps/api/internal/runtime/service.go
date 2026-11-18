@@ -169,6 +169,12 @@ func (s *Service) ProcessMessage(ctx context.Context, input InboundMessage) (Run
 			return RuntimeResult{}, lockErr
 		}
 		defer release()
+		if snapshot.Version.ID != session.BotVersionID {
+			snapshot, err = s.loadSnapshot(ctx, session.OrganizationID, session.BotID, session.BotVersionID)
+			if err != nil {
+				return RuntimeResult{}, err
+			}
+		}
 	}
 	result, err := s.execute(ctx, snapshot, &session, input)
 	if err != nil {
@@ -975,6 +981,12 @@ func currentModuleName(session ConversationSession) string {
 
 func (s *Service) execute(ctx context.Context, snapshot bot.VersionConfiguration, session *ConversationSession, input InboundMessage) (RuntimeResult, error) {
 	if bot.IsJourney(snapshot.Version) {
+		if session.AIShouldPause() {
+			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Handoff: true, Messages: []OutboundMessage{}}, nil
+		}
+		if !input.SimulatorStart && requestsHumanAssistance(input.Text) {
+			return s.handoffJourney(ctx, session, input.Text)
+		}
 		return s.executeConfiguredJourney(ctx, snapshot, session, input)
 	}
 	variables := parseJSONMap(session.Variables)
@@ -1735,7 +1747,7 @@ func (s *Service) persistResult(ctx context.Context, session *ConversationSessio
 	if lastDirection == DirectionOutbound && len(result.Messages) > 0 {
 		unreadCount = 0
 	}
-	updates := map[string]any{"current_step_key": session.CurrentStepKey, "expected_input": session.ExpectedInput, "status": session.Status, "conversation_status": session.ConversationStatus, "assigned_user_id": session.AssignedUserID, "priority": sessionPriority(*session), "handoff_state": session.HandoffState, "store_id": storeID, "unread_count": unreadCount, "last_message_body": lastBody, "last_message_direction": lastDirection, "variables": defaultObject(session.Variables), "system_context": defaultObject(session.SystemContext), "last_message_at": &now, "human_owned_at": session.HumanOwnedAt, "human_released_at": session.HumanReleasedAt, "resolved_at": session.ResolvedAt, "updated_at": now, "lock_version": gorm.Expr("lock_version + 1")}
+	updates := map[string]any{"bot_id": session.BotID, "bot_version_id": session.BotVersionID, "expires_at": session.ExpiresAt, "current_step_key": session.CurrentStepKey, "expected_input": session.ExpectedInput, "status": session.Status, "conversation_status": session.ConversationStatus, "assigned_user_id": session.AssignedUserID, "priority": sessionPriority(*session), "handoff_state": session.HandoffState, "store_id": storeID, "unread_count": unreadCount, "last_message_body": lastBody, "last_message_direction": lastDirection, "variables": defaultObject(session.Variables), "system_context": defaultObject(session.SystemContext), "last_message_at": &now, "human_owned_at": session.HumanOwnedAt, "human_released_at": session.HumanReleasedAt, "resolved_at": session.ResolvedAt, "updated_at": now, "lock_version": gorm.Expr("lock_version + 1")}
 	tx := s.db.WithContext(ctx).Model(&ConversationSession{}).Where("id = ? AND lock_version = ?", session.ID, session.LockVersion).Updates(updates)
 	if tx.Error != nil {
 		return tx.Error
