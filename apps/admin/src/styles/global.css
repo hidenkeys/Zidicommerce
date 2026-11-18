@@ -4357,3 +4357,5 @@ tr.selected-row {
 @media(min-width:1025px){.compact-sidebar{grid-template-columns:76px minmax(0,1fr)}.compact-sidebar .sidebar{padding:20px 8px}.compact-sidebar .nav-groups a{justify-content:center}.compact-sidebar .nav-groups a span,.compact-sidebar .brand .zidi-commerce-logo__wordmark,.compact-sidebar .nav-groups p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.compact-sidebar .brand{padding-inline:9px}.compact-sidebar .nav-groups{gap:12px}}
 @media(max-width:1024px){.desktop-nav-toggle{display:none!important}.sidebar:not(.open){visibility:hidden}.sidebar.open{visibility:visible}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}
+button.table-record-link{background:transparent;color:var(--ink);min-height:32px;border:0;padding:3px 0;justify-content:start;text-align:left}
+button.table-record-link:hover,button.table-record-link:focus-visible{text-decoration:underline}

@@ -223,7 +223,7 @@ export function TeamPage() {
               <tbody>
                 {members.map((member) => (
                   <tr key={member.id} className={selectedMember === member.id ? "selected-row click-row" : "click-row"} onClick={() => setSelectedMember(member.id)}>
-                    <td>{memberName(member)}</td>
+                    <td><button type="button" className="table-record-link" aria-label={`View team member ${memberName(member)}`}>{memberName(member)}</button></td>
                     <td>{String(member.user?.email ?? "")}</td>
                     <td>
                       {canUpdateStaff ? <select value={String(member.role ?? "viewer")} onChange={(event) => void updateMember(member.id, { role: event.target.value })}>

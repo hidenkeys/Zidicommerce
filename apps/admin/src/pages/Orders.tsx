@@ -37,6 +37,7 @@ export function OrdersPage() {
   const [flash, setFlash] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [detailRevision, setDetailRevision] = useState(0);
   const [transitioning, setTransitioning] = useState(false);
 
   async function load() {
@@ -56,31 +57,27 @@ export function OrdersPage() {
     void load();
   }, []);
 
-  async function openOrder(id: string) {
-    setSelectedID(id);
-    setLoadingDetail(true);
-    try {
-      const response = await apiGet<OrderOperations>(`/orders/${id}/operations`);
-      setDetail(response.data);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not load order details");
-    } finally {
-      setLoadingDetail(false);
-    }
-  }
-
   useEffect(() => {
-    if (selectedID) void openOrder(selectedID);
-  }, [selectedID]);
+    if (!selectedID) return;
+    let current = true;
+    setLoadingDetail(true);
+    setDetail(null);
+    apiGet<OrderOperations>(`/orders/${selectedID}/operations`).then(response => {
+      if (current) setDetail(response.data);
+    }).catch(error => {
+      if (current) setMessage(error instanceof Error ? error.message : "Could not load order details");
+    }).finally(() => { if (current) setLoadingDetail(false); });
+    return () => { current = false; };
+  }, [selectedID, detailRevision]);
 
   async function transition(nextStatus: string) {
-    if (!selectedID) return;
+    if (!detail || detail.order.id !== selectedID || transitioning) return;
     setTransitioning(true);
     try {
       await apiPost<Row>(`/orders/${selectedID}/transition`, { status: nextStatus, idempotency_key: `admin-${Date.now()}` });
       setFlash("Order updated.");
       await load();
-      await openOrder(selectedID);
+      setDetailRevision(n => n+1);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "The order could not be updated");
     } finally {
@@ -99,12 +96,13 @@ export function OrdersPage() {
     });
   }, [rows, query, status]);
 
-  const selected = detail?.order ?? rows.find((row) => row.id === selectedID) ?? null;
-  const action = detail?.next_actions.find((item) => Boolean(item.target_status)) ?? null;
+  const currentDetail = detail?.order.id === selectedID ? detail : null;
+  const selected = currentDetail?.order ?? rows.find((row) => row.id === selectedID) ?? null;
+  const action = currentDetail?.next_actions.find((item) => Boolean(item.target_status)) ?? null;
   const customer = ((selected?.customer ?? {}) as Row);
   const items = Array.isArray(selected?.items) ? (selected.items as Row[]) : [];
   const store = ((selected?.store ?? {}) as Row);
-  const events = detail?.events ?? [];
+  const events = currentDetail?.events ?? [];
 
   return (
     <Page title="Orders" description="See what customers ordered and take the next permitted step." help={canManageOrders ? "Actions follow verified payment and fulfilment state. Invalid transitions are not offered." : "Your role has read-only order access. A store operator or administrator must perform status changes."}>
@@ -139,8 +137,8 @@ export function OrdersPage() {
                   {filtered.map((order) => {
                     const person = (order.customer ?? {}) as Row;
                     return (
-                      <tr key={String(order.id)} className={selectedID === order.id ? "selected-row click-row" : "click-row"} onClick={() => void openOrder(String(order.id))}>
-                        <td>{String(order.order_number)}</td>
+                      <tr key={String(order.id)} className={selectedID === order.id ? "selected-row click-row" : "click-row"} onClick={() => setSelectedID(String(order.id))}>
+                        <td><button type="button" className="table-record-link" aria-label={`Open order ${order.order_number}`}>{String(order.order_number)}</button></td>
                         <td>{String(person.name || person.phone || "Customer")}</td>
                         <td><Badge tone={statusTone(String(order.status))}>{humanStatus(order.status)}</Badge></td>
                         <td>{money(order.total_minor, String(order.currency ?? "NGN"))}</td>
@@ -162,10 +160,10 @@ export function OrdersPage() {
               <div className="order-facts">
                 <div><span>Customer</span><strong>{String(customer.name || "Customer")}</strong><small>{String(customer.phone || "No phone")}</small></div>
                 <div><span>Store</span><strong>{String(store.name || "Store")}</strong><small>{String(store.address || "")}</small></div>
-                <div><span>Payment</span><strong>{detail?.payment ? humanStatus(detail.payment.status) : "Not initialized"}</strong><small>{detail?.payment ? String(detail.payment.provider || "") : ""}</small></div>
-                <div><span>Fulfilment</span><strong>{fulfilmentLabel(String(detail?.fulfilment?.type ?? selected.fulfilment_type ?? ""))}</strong><small>{humanStatus(detail?.fulfilment?.status ?? "pending")}</small></div>
+                <div><span>Payment</span><strong>{currentDetail?.payment ? humanStatus(currentDetail.payment.status) : "Not initialized"}</strong><small>{currentDetail?.payment ? String(currentDetail.payment.provider || "") : ""}</small></div>
+                <div><span>Fulfilment</span><strong>{fulfilmentLabel(String(currentDetail?.fulfilment?.type ?? selected.fulfilment_type ?? ""))}</strong><small>{humanStatus(currentDetail?.fulfilment?.status ?? "pending")}</small></div>
               </div>
-              <div className="panel-heading order-items-heading"><div><h3>Items</h3><p>{items.length} line item{items.length === 1 ? "" : "s"}</p></div>{detail?.conversation_id ? <Link to={`/conversations?open=${detail.conversation_id}`}>Open conversation</Link> : null}</div>
+              <div className="panel-heading order-items-heading"><div><h3>Items</h3><p>{items.length} line item{items.length === 1 ? "" : "s"}</p></div>{currentDetail?.conversation_id ? <Link to={`/conversations?open=${currentDetail.conversation_id}`}>Open conversation</Link> : null}</div>
               <div className="order-items">
                 {items.map((item, index) => <div key={String(item.id ?? index)}><span><strong>{String(item.product_name)}</strong><small>{item.variant_name && item.variant_name !== "Regular" ? String(item.variant_name) : "Regular"}</small></span><span>{Number(item.quantity)} x {money(item.unit_price_minor, String(selected.currency ?? "NGN"))}</span><strong>{money(item.total_minor, String(selected.currency ?? "NGN"))}</strong></div>)}
               </div>
@@ -180,7 +178,7 @@ export function OrdersPage() {
               </div>
               <div className="page-actions">
                 {action && canManageOrders ? <Button type="button" className="primary" loading={transitioning} onClick={() => void transition(action.target_status)}>{action.label}</Button> : null}
-                {selected.status === "awaiting_payment" && canCancelOrders ? (
+                {currentDetail && selected.status === "awaiting_payment" && canCancelOrders ? (
                   <ConfirmButton tone="danger" label="Cancel order" confirm="Cancel this unpaid order? Reserved inventory will be released." onConfirm={() => void transition("cancelled")} />
                 ) : null}
               </div>

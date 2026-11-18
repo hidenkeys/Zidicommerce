@@ -79,7 +79,7 @@ export function CustomersPage() {
                     const count = orders.filter((order) => String(order.customer_id) === customer.id || String((order.customer as Row | undefined)?.id) === customer.id).length;
                     return (
                       <tr key={String(customer.id)} className={selectedID === customer.id ? "selected-row click-row" : "click-row"} onClick={() => setSelectedID(String(customer.id))}>
-                        <td>{String(customer.name || "Customer")}</td>
+                        <td><button type="button" className="table-record-link" aria-label={`View customer ${customer.name || customer.phone || "details"}`}>{String(customer.name || "Customer")}</button></td>
                         <td>{String(customer.phone || "—")}</td>
                         <td>{count}</td>
                       </tr>
