@@ -724,13 +724,19 @@ func configuredEvaluationProviders(t *testing.T) []provider.ChatProvider {
 		switch name {
 		case "ollama":
 			providers = append(providers, newRateLimitRetryProvider(provider.NewOllamaChatProvider(os.Getenv("OLLAMA_BASE_URL"), os.Getenv("OLLAMA_CHAT_MODEL"))))
+		case "vercel_gateway":
+			key := strings.TrimSpace(os.Getenv("AI_GATEWAY_API_KEY"))
+			if key == "" {
+				t.Fatal("The Gateway evaluation needs AI_GATEWAY_API_KEY")
+			}
+			providers = append(providers, provider.NewGatewayChatProvider(key, os.Getenv("AI_GATEWAY_BASE_URL"), os.Getenv("AI_GATEWAY_MODEL")))
 		case "groq":
 			if strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "" {
 				t.Fatalf("GROQ_API_KEY is required when AI_EVAL_PROVIDER includes groq")
 			}
 			providers = append(providers, newRateLimitRetryProvider(provider.NewGroqChatProvider(os.Getenv("GROQ_API_KEY"), os.Getenv("GROQ_BASE_URL"), os.Getenv("GROQ_MODEL"))))
 		default:
-			t.Fatalf("unsupported AI_EVAL_PROVIDER %q; use ollama, groq, or both", name)
+			t.Fatalf("unsupported AI_EVAL_PROVIDER %q; use vercel_gateway, ollama, groq, or both", name)
 		}
 	}
 	return providers

@@ -50,6 +50,13 @@ func (s *Service) executeConfiguredJourney(ctx context.Context, config bot.Versi
 	settings := bot.JourneySettings(config.Version)
 	if !input.SimulatorStart && session.Status == SessionActive && system["journey_preview"] != true && input.Metadata["journey_flow"] != true {
 		intent := strings.ToLower(strings.TrimSpace(input.Text))
+		if intent == settings.Trigger && mode == "whatsapp_flow" && session.ExpectedInput != "" {
+			message, err := s.launchJourneyFlow(ctx, *session, bot.JourneyEntryLabel(mode, settings.EntryCTA, intent))
+			if err != nil {
+				return RuntimeResult{}, err
+			}
+			return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{message}}, nil
+		}
 		if intent != "" && intent != settings.Trigger && len(intent) <= 48 && !strings.ContainsAny(intent, " \t\n") {
 			var binding bot.JourneyBinding
 			err := s.db.WithContext(ctx).Where("organization_id = ? AND connection_id = ? AND trigger = ? AND paused = ?", session.OrganizationID, session.ChannelID, intent, false).First(&binding).Error

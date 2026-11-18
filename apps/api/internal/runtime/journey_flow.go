@@ -36,7 +36,13 @@ func (s *Service) launchJourneyFlow(ctx context.Context, session ConversationSes
 		expires = *session.ExpiresAt
 	}
 	row := JourneyFlowSession{ID: uuid.New(), OrganizationID: session.OrganizationID, ConnectionID: session.ChannelID, ConversationID: session.ID, VersionID: session.BotVersionID, TokenHash: flowTokenHash(token), ExpiresAt: expires}
-	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		now := s.now()
+		if err := tx.Model(&JourneyFlowSession{}).Where("organization_id = ? AND connection_id = ? AND conversation_id = ? AND expires_at > ?", session.OrganizationID, session.ChannelID, session.ID, now).Update("expires_at", now).Error; err != nil {
+			return err
+		}
+		return tx.Create(&row).Error
+	}); err != nil {
 		return OutboundMessage{}, err
 	}
 	return OutboundMessage{Type: "flow", Text: "Continue your request securely in WhatsApp.", Metadata: map[string]any{"flow_id": deployment.ProviderFlowID, "flow_token": token, "flow_cta": cta, "flow_action": "data_exchange"}}, nil

@@ -844,3 +844,32 @@ func TestConfirmedReceiptEmailRejectionRetriesOnlyPayment(t *testing.T) {
 		t.Fatalf("did not resume existing checkout: calls %d, step %s", calls, session.CurrentStepKey)
 	}
 }
+
+func TestReopenNativeFlowResumesPinnedStepAndExpiresOldToken(t *testing.T) {
+	fx, d := journeyFixture(t, "support")
+	ctx := context.Background()
+	graph, err := bot.NewService(fx.db).GetConfiguration(ctx, fx.actor, d.Version.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := ConversationSession{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, BotID: d.Bot.ID, BotVersionID: d.Version.ID, ChannelID: fx.channel.ID, Status: SessionActive, CurrentStepKey: "details", ExpectedInput: "details", Variables: `{"saved":"answer"}`, SystemContext: `{"journey_mode":"whatsapp_flow","journey_flow_launched":true}`}
+	deployment := bot.JourneyFlowDeployment{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, BotID: d.Bot.ID, VersionID: d.Version.ID, ConnectionID: fx.channel.ID, ProviderFlowID: "test-flow", Status: "published"}
+	if err := fx.db.Create(&deployment).Error; err != nil {
+		t.Fatal(err)
+	}
+	var previous string
+	for i := 0; i < 2; i++ {
+		r, e := fx.service.executeConfiguredJourney(ctx, graph, &session, InboundMessage{Text: d.Definition.Trigger})
+		if e != nil || len(r.Messages) != 1 || r.Messages[0].Type != "flow" || session.CurrentStepKey != "details" || session.Variables != `{"saved":"answer"}` {
+			t.Fatalf("reopen: %v %+v", e, r)
+		}
+		if previous != "" {
+			var n int64
+			fx.db.Model(&JourneyFlowSession{}).Where("token_hash = ? AND expires_at > ?", previous, fx.service.now()).Count(&n)
+			if n != 0 {
+				t.Fatal("old form remained active after replacement")
+			}
+		}
+		previous = flowTokenHash(stringValue(r.Messages[0].Metadata["flow_token"]))
+	}
+}
