@@ -3,7 +3,7 @@
 Branch: codex/controlled-beta-release-20261111. Baseline: c57e89c.
 
 ## Staging deployments
-Railway staging API bde4705a-8fa4-4cd8-8478-62311f796b6e runs bd1a4bb. Admin 350c8d14-1bf7-4025-84e6-094e31b18da7 runs 89c6de5. Both deployments succeeded. The public staging API health endpoint returned database OK.
+Railway staging API 0d63ecc7-da46-47cf-8746-694ebca13067 runs 93cad68. Admin 350c8d14-1bf7-4025-84e6-094e31b18da7 runs 89c6de5. Both deployments succeeded. The public staging API health endpoint returned database OK.
 
 ## Contracts and decisions
 Preserve journey and version schemas, tenant scope, immutable published versions, existing permissions and audits. Studio edits draft graphs through existing journey APIs. New required APIs and migrations must be documented before integration. Only designated staging WhatsApp recipient and Paystack test payments.
@@ -58,3 +58,5 @@ Revised-receipt guided checkout ZC-20261118-BBC529B5: real Admin processed, mark
 - Native provider Flow 1157152806762991 is published. The real keyword selected its published Zidi version. Meta delivered the CTA at 07:49:34 Lagos. The designated tester completed the native screens, generating 2 accepted INIT requests, 12 accepted encrypted data exchanges, 12 persisted answer receipts and one FINISH. The signed Meta completion callback was persisted and processed exactly once at 07:55:24 Lagos. One new tenant-scoped pickup order ZC-20261118-8E0A1350 (NGN 2,400) was linked to the conversation and completed.
 - Recovery passed using PostgreSQL and a test mailbox. Real staging email delivery requires SMTP and a designated test inbox. Sign-in, signup and first workspace passed through staging UI. Scope limited to staging.
 - Go suite, race suite, API build, Admin component tests and build passed at integrated checkpoints. The final integrated API race suite and build passed at bd1a4bb. Gateway evaluation passed 105/105. The designated customer also completed the guided receipt-email retry without staff intervention. Native Flow and corrected guided orders each received all four lifecycle messages. Two older generic native notifications that had no work scheduled were reconciled as skipped. Custom addressed journey notifications now enqueue a delivery job in the same transaction. Live email delivery is the remaining external check.
+
+The staging People screen exercised invitation creation and resend with a reserved QA address. Each returned 503 and the failed delivery state remained visible after reload. Logging mode now reports unavailable delivery. Live invitation acceptance and password reset through an inbox await staging SMTP credentials and a designated test address.
