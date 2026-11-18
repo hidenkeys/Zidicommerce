@@ -28,9 +28,9 @@ func NewLogSender(logger *slog.Logger, from string) *LogSender {
 
 func (s *LogSender) Send(message Message) error {
 	if s.logger != nil {
-		s.logger.Info("email queued in development mode", "to_domain", recipientDomain(message.To), "subject", message.Subject, "from", s.from)
+		s.logger.Info("email delivery disabled in logging mode", "to_domain", recipientDomain(message.To), "subject", message.Subject, "from", s.from)
 	}
-	return nil
+	return fmt.Errorf("email delivery is not fully configured")
 }
 
 func NewSender(mode, host, port, username, password, from, fromName, tlsMode string, logger *slog.Logger) (Sender, error) {

@@ -32,6 +32,9 @@ func TestNewSenderLogMode(t *testing.T) {
 	if _, ok := sender.(*LogSender); !ok {
 		t.Fatalf("expected log sender, got %T", sender)
 	}
+	if got := SanitizeSMTPError(sender.Send(Message{To: "qa@example.invalid"})); got != "Email sending is not configured." {
+		t.Fatalf("log-only delivery result: %q", got)
+	}
 }
 
 func TestNewSenderSMTPRequiresConfig(t *testing.T) {
