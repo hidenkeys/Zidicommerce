@@ -699,7 +699,7 @@ func TestJourneyCustomKeywordAndTenantScopedDefault(t *testing.T) {
 
 func TestExplicitJourneySwitchKeepsHistoryAndProtectsCheckout(t *testing.T) {
 	fx, order := journeyFixture(t, "order")
-	customer, _, _ := seedCommerce(t, fx)
+	customer, store, _ := seedCommerce(t, fx)
 	ctx := context.Background()
 	svc := bot.NewService(fx.db)
 	if _, err := svc.PublishJourney(ctx, fx.actor, order.Version.ID); err != nil {
@@ -741,5 +741,59 @@ func TestExplicitJourneySwitchKeepsHistoryAndProtectsCheckout(t *testing.T) {
 	blocked := send("ask")
 	if !strings.Contains(blocked.Messages[0].Text, "checkout is in progress") {
 		t.Fatalf("cart lost on switch: %+v", blocked)
+	}
+	orderRecord := core.Order{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, CustomerID: customer.ID, StoreID: store.ID, OrderNumber: "QA-" + uuid.NewString(), Status: core.OrderCompleted, Currency: "NGN"}
+	if err := fx.db.Create(&orderRecord).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.db.Model(&session).Update("variables", jsonValue(map[string]any{"order_id": orderRecord.ID.String(), "cart_id": uuid.NewString()})).Error; err != nil {
+		t.Fatal(err)
+	}
+	send("ask")
+	if err := fx.db.First(&session, "id = ?", first.ConversationID).Error; err != nil || session.BotVersionID != ai.Version.ID {
+		t.Fatalf("completed order did not release checkout: %v %+v", err, session)
+	}
+
+}
+
+func TestJourneyCancelOrderUsesAuthoritativeOrderState(t *testing.T) {
+	fx, d := journeyFixture(t, "order")
+	customer, store, variant := seedCommerce(t, fx)
+	ctx := context.Background()
+	if _, err := bot.NewService(fx.db).PublishJourney(ctx, fx.actor, d.Version.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{core.OrderPaid, core.OrderAwaitingPayment} {
+		order, err := fx.service.commerce.CreateOrder(ctx, fx.actor, core.OrderInput{CustomerID: customer.ID, StoreID: store.ID, FulfilmentType: core.FulfilmentPickup, Items: []core.OrderItemInput{{VariantID: variant.ID, Quantity: 1}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fx.db.Model(&order).Update("status", status).Error; err != nil {
+			t.Fatal(err)
+		}
+		send := func(text string) RuntimeResult {
+			t.Helper()
+			r, e := fx.service.ProcessMessage(ctx, InboundMessage{ChannelID: &fx.channel.ID, Sender: customer.Phone, ExternalConversationID: "cancel-" + status, Text: text, ExternalMessageID: uuid.NewString()})
+			if e != nil || r.Error != nil {
+				t.Fatalf("message failed %v %+v", e, r.Error)
+			}
+			return r
+		}
+		start := send("order")
+		if err := fx.db.Model(&ConversationSession{}).Where("id = ?", start.ConversationID).Update("variables", jsonValue(map[string]any{"order_id": order.ID.String()})).Error; err != nil {
+			t.Fatal(err)
+		}
+		result := send("cancel order")
+		fresh, err := fx.service.commerce.GetOrder(ctx, fx.actor, order.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status == core.OrderPaid {
+			if fresh.Status != core.OrderPaid || result.SessionStatus != SessionActive {
+				t.Fatalf("paid order cancellation accepted: %s %+v", fresh.Status, result)
+			}
+		} else if fresh.Status != core.OrderCancelled || result.SessionStatus != SessionCancelled {
+			t.Fatalf("unpaid order cancellation lost: %s %+v", fresh.Status, result)
+		}
 	}
 }

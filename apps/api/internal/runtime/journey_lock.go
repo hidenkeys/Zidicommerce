@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"strings"
@@ -57,8 +58,12 @@ func (s *Service) executeConfiguredJourney(ctx context.Context, config bot.Versi
 			}
 			if err == nil && binding.BotID != session.BotID {
 				vars := parseJSONMap(session.Variables)
-				if stringValue(vars["order_id"]) != "" || stringValue(vars["cart_id"]) != "" {
-					return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{Type: MessageText, Text: "Your checkout is in progress. Finish it or contact the team before starting another experience."}}}, nil
+				blocked, err := s.checkoutBlocksJourneySwitch(ctx, *session, vars)
+				if err != nil {
+					return RuntimeResult{}, err
+				}
+				if blocked {
+					return RuntimeResult{ConversationID: session.ID, SessionStatus: session.Status, Messages: []OutboundMessage{{Type: MessageText, Text: "Your checkout is in progress. Finish it, send “cancel order” to cancel an unpaid checkout, or contact the team."}}}, nil
 				}
 				target, err := s.selectJourneyEntry(ctx, session, intent, system)
 				if err != nil {
@@ -130,4 +135,28 @@ func (s *Service) executeConfiguredJourney(ctx context.Context, config bot.Versi
 		result.Messages = []OutboundMessage{message}
 	}
 	return result, nil
+}
+
+func (s *Service) checkoutBlocksJourneySwitch(ctx context.Context, session ConversationSession, vars map[string]any) (bool, error) {
+	reference := stringValue(vars["order_id"])
+	if reference == "" {
+		return stringValue(vars["cart_id"]) != "", nil
+	}
+	orderID, err := uuid.Parse(reference)
+	if err != nil || session.CustomerID == nil {
+		return true, nil
+	}
+	var order core.Order
+	err = s.db.WithContext(ctx).Select("status").Where("id = ? AND organization_id = ? AND customer_id = ?", orderID, session.OrganizationID, *session.CustomerID).First(&order).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	switch order.Status {
+	case core.OrderCompleted, core.OrderCancelled, core.OrderRefunded:
+		return false, nil
+	}
+	return true, nil
 }

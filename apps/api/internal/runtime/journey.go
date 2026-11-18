@@ -218,9 +218,20 @@ func (s *Service) executeJourney(ctx context.Context, config bot.VersionConfigur
 	if command := classifyCommand(input.Text); command != commandNone {
 		switch command {
 		case commandCancel:
+			message := "Your journey has been cancelled. Existing orders and payments are unchanged."
+			if !preview && isCommerceCancelText(input.Text) {
+				handled, reply, err := s.cancelCommerceLifecycle(ctx, rctx)
+				if err != nil {
+					appendText("I could not cancel this checkout. Its payment or fulfilment may already be in progress. Contact the team for help.")
+					return result, nil
+				}
+				if handled {
+					message = reply
+				}
+			}
 			session.Status = SessionCancelled
 			session.ExpectedInput = ""
-			appendText("Your journey has been cancelled. Existing orders and payments are unchanged.")
+			appendText(message)
 			result.SessionStatus = session.Status
 			return result, nil
 		case commandMenu, commandRestart:
