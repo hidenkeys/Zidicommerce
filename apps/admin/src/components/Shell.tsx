@@ -1,12 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { Bot, Boxes, Building2, ClipboardCheck, CreditCard, FileClock, Home, LifeBuoy, LogOut, Menu, MessageSquareText, PackageSearch, Settings, ShieldCheck, ShoppingBag, Sparkles, Store, Users, X, type LucideIcon } from "lucide-react";
+import { PanelLeft, Search, Bell, Bot, Boxes, Building2, ClipboardCheck, CreditCard, FileClock, Home, LifeBuoy, LogOut, Menu, MessageSquareText, PackageSearch, Settings, ShieldCheck, ShoppingBag, Sparkles, Store, Users, X, type LucideIcon } from "lucide-react";
 import { apiGet } from "../api/client";
 import { hasOrganization, useAuth } from "../auth";
 import { roleLabel } from "../lib/format";
 import { hasPermission, type Permission } from "../lib/permissions";
 import { ZidiCommerceLogo } from "./brand/ZidiCommerceLogo";
-import { IconButton } from "./ui";
+import { IconButton, Modal } from "./ui";
 
 type NavGroup = {
   label: string;
@@ -47,7 +47,7 @@ const groups: NavGroup[] = [
     label: "Engagement",
     items: [
       { label: "Assistant", path: "/assistant", permission: "bot.view", roles: ["merchant_admin", "platform_admin", "store_manager", "viewer"], icon: Bot },
-      { label: "Journey Studio", path: "/journeys", permission: "bot.view", icon: ClipboardCheck },
+      { label: "Flow Studio", path: "/journeys", permission: "bot.view", icon: ClipboardCheck },
       { label: "AI test workspace", path: "/assistant/ai-chat", permission: "ai.use", roles: ["merchant_admin", "platform_admin"], icon: Sparkles },
       { label: "Conversations", path: "/conversations", permission: "conversations.view", icon: MessageSquareText },
       { label: "Business knowledge", path: "/knowledge", permission: "knowledge.view", roles: ["merchant_admin", "platform_admin", "store_manager", "support_agent", "viewer"], icon: LifeBuoy },
@@ -96,7 +96,7 @@ const titles: Record<string, { eyebrow: string; title: string }> = {
   "/assistant/ai-chat": { eyebrow: "Engagement", title: "AI Chat" },
   "/conversations": { eyebrow: "Engagement", title: "Conversations" },
   "/knowledge": { eyebrow: "Engagement", title: "Knowledge" },
-  "/journeys": { eyebrow: "Engagement", title: "Journey Studio" },
+  "/journeys": { eyebrow: "Engagement", title: "Flow Studio" },
   "/team": { eyebrow: "Operations", title: "People" },
   "/settings/business": { eyebrow: "Organization", title: "Business" },
   "/settings/payments": { eyebrow: "Commerce", title: "Payments" },
@@ -122,6 +122,29 @@ export function Shell() {
   const [fieldService, setFieldService] = useState(false);
   const [organizationName, setOrganizationName] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [compact,setCompact] = useState(() => localStorage.getItem("zidi.sidebar.compact") === "yes");
+  const [panel,setPanel] = useState<"find"|"notifications"|"account">();
+  const [query,setQuery] = useState("");
+  const [handoffs,setHandoffs] = useState<number>();
+  const [inboxError,setInboxError] = useState("");
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const closeNav = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!mobileOpen) return;
+    closeNav.current?.focus();
+    const close = (event: KeyboardEvent) => { if(event.key==="Escape"){setMobileOpen(false);menuButton.current?.focus();} };
+    window.addEventListener("keydown",close);
+    return () => window.removeEventListener("keydown",close);
+  },[mobileOpen]);
+  useEffect(() => {
+    if(panel !== "notifications") return;
+    let current=true;
+    setHandoffs(undefined);setInboxError("");
+    apiGet<{conversation_status:string}[]>("/runtime/conversations").then(r=>{
+      if(current)setHandoffs(r.data.filter(c=>["human_requested","human_assigned"].includes(c.conversation_status)).length);
+    }).catch(()=>{if(current)setInboxError("Conversation activity could not be loaded.");});
+    return ()=>{current=false;};
+  },[panel,user.organization_id]);
   const fieldPortalURL = import.meta.env.VITE_FIELD_PORTAL_URL ?? "";
   useEffect(() => {
     apiGet<Record<string, unknown>>("/organizations/current").then((response) => {
@@ -142,12 +165,12 @@ export function Shell() {
   const meta = pageMeta(location.pathname);
 
   return (
-    <div className="app-shell">
+    <div className={compact ? "app-shell compact-sidebar" : "app-shell"}>
       {mobileOpen ? <button className="sidebar-scrim" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} /> : null}
       <aside className={mobileOpen ? "sidebar open" : "sidebar"} aria-label="Primary navigation">
         <div className="brand">
           <ZidiCommerceLogo tone="light" subtitle={organizationName || (organizationReady ? "Merchant workspace" : "Workspace setup")} />
-          <IconButton className="sidebar-close" label="Close navigation" icon={X} onClick={() => setMobileOpen(false)} />
+          <IconButton ref={closeNav} className="sidebar-close" label="Close navigation" icon={X} onClick={() => setMobileOpen(false)} />
         </div>
 
         <nav className="nav-groups">
@@ -155,9 +178,9 @@ export function Shell() {
             <section key={group.label} className={group.collapsed ? "nav-advanced" : undefined}>
               <p>{group.label}</p>
               {group.items.map(({ label, path, external, icon: Icon }) => external ? (
-                <a key={path} href={path}><Icon size={17} aria-hidden="true" /><span>{label}</span></a>
+                <a key={path} href={path} title={label}><Icon size={17} aria-hidden="true" /><span>{label}</span></a>
               ) : (
-                <NavLink key={path} to={path} end={path === "/"}><Icon size={17} aria-hidden="true" /><span>{label}</span></NavLink>
+                <NavLink key={path} title={label} to={path} end={path === "/"}><Icon size={17} aria-hidden="true" /><span>{label}</span></NavLink>
               ))}
             </section>
           ))}
@@ -167,18 +190,24 @@ export function Shell() {
       <main className="main-panel">
         <header className="topbar">
           <div className="topbar-context">
-            <IconButton className="mobile-menu" label="Open navigation" icon={Menu} onClick={() => setMobileOpen(true)} />
+            <IconButton className="desktop-nav-toggle" label={compact ? "Expand navigation" : "Collapse navigation"} icon={PanelLeft} onClick={() => {localStorage.setItem("zidi.sidebar.compact",compact ? "no":"yes");setCompact(!compact);}} /><IconButton ref={menuButton} className="mobile-menu" label="Open navigation" icon={Menu} onClick={() => setMobileOpen(true)} />
             <div>
             <span className="eyebrow">{meta.eyebrow}</span>
               <strong>{meta.title}</strong>
             </div>
           </div>
           <div className="topbar-actions">
-            <div className="user-summary"><span>{String(user.email || roleLabel(user.role)).slice(0, 1).toUpperCase()}</span><div><strong>{user.email || "Signed in"}</strong><small>{organizationReady ? roleLabel(user.role) : "Account setup"}</small></div></div>
-            <IconButton label="Log out" icon={LogOut} onClick={logout} />
+            <IconButton label="Find a page" icon={Search} onClick={()=>{setQuery("");setPanel("find");}} />
+            {hasPermission(user.role,"conversations.view") && <IconButton label="Conversation activity" icon={Bell} onClick={()=>setPanel("notifications")} />}
+            <button className="account-button" onClick={()=>setPanel("account")} aria-label="Open account menu">{String(user.email || roleLabel(user.role)).slice(0,1).toUpperCase()}</button>
           </div>
         </header>
         <Outlet />
+        <Modal open={Boolean(panel)} title={panel==="find" ? "Find a page" : panel==="notifications" ? "Conversation activity" : "Your account"} onClose={()=>setPanel(undefined)}>
+          {panel==="find" && <><label>Search navigation<input type="search" value={query} onChange={e=>setQuery(e.target.value)} /></label><div className="shell-results">{visibleGroups.flatMap(group=>group.items.filter(item=>!item.external && (group.label+" "+item.label).toLowerCase().includes(query.trim().toLowerCase())).map(item=><NavLink key={item.path} to={item.path} onClick={()=>setPanel(undefined)}><item.icon size={16}/>{item.label}<small>{group.label}</small></NavLink>))}{!visibleGroups.some(group=>group.items.some(item=>!item.external && (group.label+" "+item.label).toLowerCase().includes(query.trim().toLowerCase()))) && <p>No matching pages.</p>}</div></>}
+          {panel==="notifications" && <><p role="status">{inboxError || (handoffs===undefined ? "Loading conversations…" : handoffs===0 ? "No conversations are waiting for your team." : handoffs+" conversations need your team.")}</p><NavLink to="/conversations" onClick={()=>setPanel(undefined)}>Open conversations</NavLink></>}
+          {panel==="account" && <><strong>{user.email}</strong><p>{roleLabel(user.role)} · {organizationName}</p><button onClick={logout}><LogOut size={16}/> Sign out</button></>}
+        </Modal>
       </main>
     </div>
   );

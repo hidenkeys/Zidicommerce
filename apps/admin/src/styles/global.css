@@ -4348,3 +4348,12 @@ tr.selected-row {
     right: 16px;
   }
 }
+:root {--zidi-motion-fast:160ms;--zidi-radius-control:8px;--zidi-focus:#16836d}
+:focus-visible{outline:3px solid var(--zidi-focus);outline-offset:2px}
+.account-button{border:1px solid #bbd4c5;border-radius:50%;width:36px;height:36px;background:#edf5ee;color:#27553b;font-weight:700}
+.shell-results{display:grid;margin-top:12px}
+.shell-results a{display:flex;align-items:center;gap:9px;padding:10px;border-bottom:1px solid var(--line);text-decoration:none}
+.shell-results small{margin-left:auto;color:var(--ink-subtle)}
+@media(min-width:1025px){.compact-sidebar{grid-template-columns:76px minmax(0,1fr)}.compact-sidebar .sidebar{padding:20px 8px}.compact-sidebar .nav-groups a{justify-content:center}.compact-sidebar .nav-groups a span,.compact-sidebar .brand .zidi-commerce-logo__wordmark,.compact-sidebar .nav-groups p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.compact-sidebar .brand{padding-inline:9px}.compact-sidebar .nav-groups{gap:12px}}
+@media(max-width:1024px){.desktop-nav-toggle{display:none!important}.sidebar:not(.open){visibility:hidden}.sidebar.open{visibility:visible}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}

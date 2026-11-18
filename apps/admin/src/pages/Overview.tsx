@@ -24,6 +24,8 @@ export function OverviewPage() {
   const [org, setOrg] = useState<Organization | null>(null);
   const [orders, setOrders] = useState<Row[]>([]);
   const [conversations, setConversations] = useState<Row[]>([]);
+  const [customerCount, setCustomerCount] = useState<number>();
+  const [storeCount, setStoreCount] = useState<number>();
   const [inventory, setInventory] = useState<Row[]>([]);
   const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -31,10 +33,12 @@ export function OverviewPage() {
   const [bots, setBots] = useState<Bot[]>([]);
   const [fieldOverview, setFieldOverview] = useState<Row | null>(null);
   const [message, setMessage] = useState("");
+  const [reload,setReload] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
+      setMessage(""); setLoading(true);
       let partialFailure = false;
       async function safeGet<T>(enabled: boolean, path: string, fallback: T): Promise<T> {
         if (!enabled) return fallback;
@@ -61,7 +65,7 @@ export function OverviewPage() {
           setChannels(channelResponse);
           setPayments(paymentResponse);
           setBots(botResponse);
-          if (partialFailure) setMessage("Some overview information is temporarily unavailable. The available sections are current.");
+          if (partialFailure) setMessage("Some overview data could not be loaded. Refresh to see current totals.");
           return;
         }
         const [orderResponse, conversationResponse, inventoryResponse, setupResponse, channelResponse, paymentResponse, botResponse] = await Promise.all([
@@ -73,6 +77,12 @@ export function OverviewPage() {
           safeGet(canSeePayments, "/payment-configurations", [] as PaymentConfiguration[]),
           safeGet(canSeeBot, "/bots", [] as Bot[]),
         ]);
+        const [customerRows, storeRows] = await Promise.all([
+          safeGet<Row[] | null>(hasPermission(user.role, "customers.view"), "/customers", null),
+          safeGet<Row[] | null>(hasPermission(user.role, "stores.view"), "/stores", null),
+        ]);
+        setCustomerCount(customerRows?.length);
+        setStoreCount(storeRows?.filter(store => store.status === "active").length);
         setOrders(orderResponse);
         setConversations(conversationResponse);
         setInventory(inventoryResponse);
@@ -80,7 +90,7 @@ export function OverviewPage() {
         setChannels(channelResponse);
         setPayments(paymentResponse);
         setBots(botResponse);
-        if (partialFailure) setMessage("Some overview information is temporarily unavailable. The available sections are current.");
+        if (partialFailure) setMessage("Some overview data could not be loaded. Refresh to see current totals.");
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Could not load overview");
       } finally {
@@ -88,11 +98,11 @@ export function OverviewPage() {
       }
     }
     void load();
-  }, [user.role]);
+  }, [user.role, user.organization_id, reload]);
 
   const todayOrders = orders.filter((order) => isToday(order.created_at));
   const todayRevenue = todayOrders
-    .filter((order) => !["cancelled", "awaiting_payment"].includes(String(order.status)))
+    .filter((order) => ["paid", "processing", "ready", "out_for_delivery", "completed"].includes(String(order.status)) && order.currency === (org?.currency || "NGN"))
     .reduce((sum, order) => sum + Number(order.total_minor ?? 0), 0);
   const awaitingPrep = orders.filter((order) => ["paid", "processing"].includes(String(order.status))).length;
   const awaitingFulfilment = orders.filter((order) => ["ready", "out_for_delivery"].includes(String(order.status))).length;
@@ -107,7 +117,7 @@ export function OverviewPage() {
   const merchantItems = merchantReadinessItems(setupStatus);
   const requiredItems = merchantItems.filter((item) => item.required);
   const setupDone = requiredItems.filter((item) => item.complete).length;
-  const attentionClear = awaitingPayment === 0 && awaitingPrep === 0 && awaitingFulfilment === 0 && waitingConversations === 0 && lowStock.length === 0
+  const attentionClear = !message && awaitingPayment === 0 && awaitingPrep === 0 && awaitingFulfilment === 0 && waitingConversations === 0 && lowStock.length === 0
     && (!canSeeChannels || isUsableChannelStatus(customerChannel?.status))
     && (!canSeePayments || Boolean(paymentConfiguration?.enabled && paymentConfiguration.status === "active"))
     && (!canManageBot || Boolean(bot?.published_version_id));
@@ -127,6 +137,8 @@ export function OverviewPage() {
       </Page>
     );
   }
+
+  if (message) return <Page title={org?.name || "Overview"}><Flash message={message}/><button onClick={()=>setReload(n=>n+1)}>Refresh overview</button></Page>;
 
   if (fieldOverview) {
     return (
@@ -220,12 +232,15 @@ export function OverviewPage() {
           <Card>
             <div className="panel-heading"><div><h3>Customer operations</h3><p>Current service readiness.</p></div></div>
             <div className="health-list">
+              {customerCount !== undefined && <div><span>Customers</span><Link to="/customers">{customerCount}</Link></div>}
+              {storeCount !== undefined && <div><span>Active stores</span><Link to="/stores">{storeCount}</Link></div>}
+              {hasPermission(user.role,"conversations.view") && <div><span>AI handling</span><Link to="/conversations">{conversations.filter(c => c.conversation_status === "ai_handling").length}</Link></div>}
               <div><span>Human handoffs</span><StatusDot live={waitingConversations === 0} label={waitingConversations === 0 ? "Covered" : `${waitingConversations} need attention`} /></div>
               {canSeeBot ? <div><span>Assistant</span><StatusDot live={Boolean(bot?.published_version_id) && bot?.status === "active"} label={bot?.published_version_id ? "Live" : "Not published"} /></div> : null}
               {canSeeChannels ? <div><span>Customer channel</span><StatusDot live={isUsableChannelStatus(customerChannel?.status)} label={isUsableChannelStatus(customerChannel?.status) ? "Connected" : "Not connected"} /></div> : null}
               {canSeePayments ? <div><span>Payments</span><StatusDot live={Boolean(paymentConfiguration?.enabled)} label={paymentConfiguration?.enabled ? "Ready" : "Not ready"} /></div> : null}
             </div>
-            <div className="page-actions compact-actions">{canSeeBot ? <Link className="button" to="/assistant">Assistant</Link> : null}<Link className="button" to="/conversations">Inbox</Link></div>
+            <div className="page-actions compact-actions">{canSeeBot ? <Link className="button" to="/journeys">Flow Studio</Link> : null}<Link className="button" to="/conversations">Inbox</Link></div>
           </Card>
           {canManageSetup && setupStatus && !setupStatus.ready ? (
             <Card>

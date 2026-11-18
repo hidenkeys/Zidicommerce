@@ -144,10 +144,10 @@ export function Tabs({ value, onChange, items, label }: { value: string; onChang
   );
 }
 
-export function Modal({ open, title, description, onClose, children, footer, danger = false }: { open: boolean; title: string; description?: string; onClose: () => void; children?: ReactNode; footer?: ReactNode; danger?: boolean }) {
-  const titleID = useId();
-  const descriptionID = useId();
+function useDialogFocus(open: boolean, onClose: () => void) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const callback = useRef(onClose);
+  callback.current = onClose;
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -155,15 +155,30 @@ export function Modal({ open, title, description, onClose, children, footer, dan
     document.body.style.overflow = "hidden";
     closeRef.current?.focus();
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      const dialog = closeRef.current?.closest('[role="dialog"]');
+      const dialogs = document.querySelectorAll('[role="dialog"]');
+      if (!dialog || dialog !== dialogs[dialogs.length - 1]) return;
+      if (event.key === "Escape") { event.preventDefault(); callback.current(); }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('a[href],button,input,select,textarea,[tabindex]')).filter(el => el.tabIndex >= 0 && !el.matches(":disabled") && el.getClientRects().length);
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
-    window.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey);
     return () => {
-      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onKey);
       document.body.style.overflow = overflow;
-      previous?.focus();
+      if (previous?.isConnected) previous.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
+  return closeRef;
+}
+
+export function Modal({ open, title, description, onClose, children, footer, danger = false }: { open: boolean; title: string; description?: string; onClose: () => void; children?: ReactNode; footer?: ReactNode; danger?: boolean }) {
+  const titleID = useId();
+  const descriptionID = useId();
+  const closeRef = useDialogFocus(open, onClose);
   if (!open) return null;
   return createPortal(
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -193,23 +208,7 @@ export function Drawer({
   children: ReactNode;
 }) {
   const titleID = useId();
-  const closeRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const previous = document.activeElement as HTMLElement | null;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    closeRef.current?.focus();
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = overflow;
-      previous?.focus();
-    };
-  }, [open, onClose]);
+  const closeRef = useDialogFocus(open, onClose);
 
   if (!open) return null;
   return createPortal(

@@ -114,7 +114,7 @@ export function AIChatPage() {
   }
 
   return (
-    <Page title="AI Chat" description="Local test console for Ollama plus read-only Zidi tools.">
+    <Page title="AI Chat" description="Test customer questions with the configured AI provider and current business data.">
       <Flash message={flash} tone={flash.includes("started") ? "success" : "error"} />
       <div className="two-column">
         <Card>
