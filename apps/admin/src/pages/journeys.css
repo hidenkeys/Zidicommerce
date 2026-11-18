@@ -111,3 +111,5 @@
   .flow-node,.template-cards button{transition:background-color 160ms ease,border-color 160ms ease,box-shadow 160ms ease}
   @keyframes zidi-studio-enter{from{opacity:0}to{opacity:1}}
 }
+.flow-canvas header button[aria-pressed=true]{background:#dceee3}
+@media(max-width:760px){.content:has(.journey-studio) .page-header .page-actions{display:flex;flex-wrap:wrap;gap:6px}.content:has(.journey-studio) .page-header .page-actions button{width:auto}.flow-canvas header div{gap:4px}}

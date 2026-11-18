@@ -50,7 +50,7 @@ function layout(nodes: Node[], start: string) {
       const level = levels.get(node.key) ?? last,
         row = rows.get(level) ?? 0;
       rows.set(level, row + 1);
-      return [node.key, { x: 32 + level * 304, y: 48 + row * 144 }];
+      return [node.key, { x: 32 + row * 272, y: 40 + level * 136 }];
     }),
   );
 }
@@ -79,6 +79,7 @@ export function JourneyCanvas({
   const [picked, setPicked] = useState<string[]>([]);
   const [copied, setCopied] = useState<string[]>([]);
   const [linking, setLinking] = useState(false);
+  const [allFallbacks, setAllFallbacks] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
   const [view, setView] = useState({ x: 0, y: 0, w: 0, h: 0 });
   const [zoom, setZoom] = useState(1);
@@ -222,6 +223,12 @@ export function JourneyCanvas({
             </button>
           )}
           <button
+            aria-label="Show all fallback routes"
+            title="Show all fallback routes"
+            aria-pressed={allFallbacks}
+            onClick={() => setAllFallbacks(!allFallbacks)}
+          ><GitBranch size={15}/></button>
+          <button
             aria-label="Toggle minimap"
             aria-pressed={mapOpen}
             onClick={() => setMapOpen(!mapOpen)}
@@ -363,14 +370,20 @@ export function JourneyCanvas({
                   const a = points[node.key],
                     b = edge.id && points[edge.id];
                   if (!b) return null;
-                  const x = a.x + width,
-                    y = a.y + height / 2,
-                    endY = b.y + height / 2,
-                    bend = Math.max(42, Math.abs(b.x - x) * 0.45);
+                  if (edge.label === "Fallback" && !allFallbacks && node.key !== selected) return null;
+                  const downward = b.y >= a.y + height;
+                  const sideways = Math.abs(b.x - a.x) > Math.abs(b.y - a.y);
+                  const from = sideways ? {x:a.x + width,y:a.y + height/2} : {x:a.x + width/2,y:a.y + (downward?height:0)};
+                  const to = sideways ? {x:b.x,y:b.y + height/2} : {x:b.x + width/2,y:b.y + (downward?0:height)};
+                  const bend = Math.min(80,Math.max(24,(sideways ? Math.abs(to.x-from.x) : Math.abs(to.y-from.y))/2));
+                  const offset = downward ? bend : -bend;
+                  const curve = sideways
+                    ? `M${from.x} ${from.y} C${from.x+bend} ${from.y} ${to.x-bend} ${to.y} ${to.x} ${to.y}`
+                    : `M${from.x} ${from.y} C${from.x} ${from.y+offset} ${to.x} ${to.y-offset} ${to.x} ${to.y}`;
                   return (
                     <g key={node.key + ":" + index}>
                       <path
-                        d={`M${x} ${y} C${x + bend} ${y} ${b.x - bend} ${endY} ${b.x} ${endY}`}
+                        d={curve}
                         fill="none"
                         stroke="#65857b"
                         strokeDasharray={
@@ -380,8 +393,8 @@ export function JourneyCanvas({
                       />
                       {edge.label && (
                         <text
-                          x={(x + b.x) / 2}
-                          y={(y + endY) / 2 - 5}
+                          x={(from.x + to.x) / 2}
+                          y={(from.y + to.y) / 2 - 5}
                           textAnchor="middle"
                         >
                           {edge.label}

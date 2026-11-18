@@ -38,6 +38,7 @@ test("published graph displays choice labels and excludes graph mutation control
         failure: "",
         options: [{ next: "finish", label: "Go to checkout" }],
       },
+      { key:"other", title:"Question", kind:"question", next:"finish", failure:"finish" },
       { key: "finish", title: "Finish", kind: "end", next: "", failure: "" },
     ],
     select() {},
@@ -49,6 +50,9 @@ test("published graph displays choice labels and excludes graph mutation control
   assert.match(html, /Go to checkout/);
   assert.match(html, /Start shopping/);
   assert.match(html, /marker-end=/);
+  assert.doesNotMatch(html,/>Fallback<\/text>/);
+  const branch = renderToStaticMarkup(createElement(JourneyCanvas,{...props,selected:"other"}));
+  assert.match(branch,/>Fallback<\/text>/);
   assert.doesNotMatch(
     html,
     /Auto-layout workflow|Connect next|Select multiple/,
