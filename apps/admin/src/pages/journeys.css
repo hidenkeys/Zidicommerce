@@ -104,3 +104,10 @@
 .node-library {display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:5px}
 .node-library button {min-width:0;display:flex;align-items:center;gap:6px;background:white;color:var(--ink);text-align:left;white-space:normal;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:8px}
 .node-library svg{flex:none}.journey-add h3{margin:0;font-size:14px}.journey-studio .journey-steps{display:none}.journey-studio.panel-steps .journey-steps{display:flex;flex-direction:column}.journey-add{order:-1;margin-bottom:12px}.node-library{max-height:155px;overflow:auto}
+@media(min-width:761px){.journey-studio.panel-preview.preview-desktop{display:block}.journey-studio.panel-preview.preview-desktop .flow-canvas{display:none}.journey-studio.panel-preview.preview-desktop .journey-preview{max-width:940px;margin:auto;max-height:none}.preview-desktop .journey-phone{max-width:none}.preview-desktop .journey-bubble{max-width:70%}.preview-desktop .journey-scenario{display:inline-block;min-width:180px;margin-right:12px}}
+@media(prefers-reduced-motion:no-preference){
+  .flow-node,.journey-section-heading,.template-preview{animation:zidi-studio-enter 170ms ease-out}
+  .flow-links path{transition:stroke 160ms ease}
+  .flow-node,.template-cards button{transition:background-color 160ms ease,border-color 160ms ease,box-shadow 160ms ease}
+  @keyframes zidi-studio-enter{from{opacity:0}to{opacity:1}}
+}

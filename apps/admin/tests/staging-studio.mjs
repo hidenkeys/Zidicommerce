@@ -26,12 +26,16 @@ const created = await (async () => {
     await page.goto(admin + "/journeys");
     await button("New journey").click();
     await page.getByLabel("Journey name").fill(name);
+    if (process.env.ZIDI_STUDIO_BLANK_TEST === "1") {
+      await page.getByLabel("Search templates").fill("Blank journey");
+      await page.getByRole("button",{name:/Blank journey/}).click();
+    }
     const modern = await button("Use template").count();
-    if (modern) {
+    if (modern && process.env.ZIDI_STUDIO_BLANK_TEST !== "1") {
       await page.getByLabel("Search templates").fill("custom");
       await page.getByRole("button", { name: /Custom journey/ }).click();
       await page.locator(".template-preview li").first().waitFor();
-    } else await page.getByRole("radio", { name: /Custom journey/ }).check();
+    } else if (!modern) await page.getByRole("radio", { name: /Custom journey/ }).check();
     const [response] = await Promise.all([
       page.waitForResponse(
         (r) =>
@@ -48,6 +52,20 @@ const created = await (async () => {
   }
 })();
 try {
+  if (process.env.ZIDI_STUDIO_BLANK_TEST === "1") {
+    await tab("Steps").click();
+    await page.getByLabel("Search node library").fill("message");
+    await page.locator(".node-library").getByRole("button",{name:"Message",exact:true}).click();
+    await page.getByLabel("Customer message",{exact:true}).fill("Welcome to the blank journey test.");
+    const [write]=await Promise.all([
+      page.waitForResponse(r=>r.request().method()==="PUT" && r.url().includes("/journey-versions/")),
+      button("Save draft").click(),
+    ]);
+    const definition=(await write.json()).data.definition;
+    assert.equal(definition.steps[0].key,definition.start);
+    assert.equal(definition.steps[0].next,definition.steps[1].key);
+    console.log("Blank flow component saved a reachable starting message and end");
+  }
   for (const width of [1440, 1024, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await tab("Canvas").click();
@@ -70,7 +88,7 @@ try {
     );
   }
   await page.setViewportSize({ width: 1440, height: 900 });
-  if (await button("Select multiple").count()) {
+  if (process.env.ZIDI_STUDIO_BLANK_TEST !== "1" && await button("Select multiple").count()) {
     await tab("Canvas").click();
     await button("Select multiple").click();
     await page.locator(".flow-node").nth(1).click();
@@ -91,6 +109,18 @@ try {
       "Multiple selection, paste, undo, connection and minimap passed",
     );
   }
+  if (await button("Zidi Architect").count()) {
+    await button("Zidi Architect").click();
+    await page.getByRole("dialog", {name:"Zidi Architect"}).waitFor();
+    await page.keyboard.press("Escape");
+    await tab("Steps").click();
+    await page.getByLabel("Search node library").fill("message");
+    const count = await page.locator(".flow-node").count();
+    await page.locator(".node-library").getByRole("button",{name:"Message",exact:true}).click();
+    assert.equal(await page.locator(".flow-node").count(),count+1);
+    await button("Undo").click();
+    await page.locator(".flow-node").first().click();
+  }
   const copy = "Hello from staging Studio QA.";
   await page.getByLabel("Customer message", { exact: true }).fill(copy);
   await tab("Canvas").click();
@@ -110,6 +140,11 @@ try {
   await button("Validate").click();
   await page.getByText("Validation passed.", { exact: true }).waitFor();
   await tab("Preview").click();
+  if(await page.getByLabel("Preview device").count()) {
+    await page.getByLabel("Preview device").selectOption("desktop");
+    assert.equal(await page.locator(".flow-canvas").isVisible(),false);
+    await page.getByLabel("Preview device").selectOption("phone");
+  }
   await button("Start preview").click();
   await page
     .getByRole("region", { name: "Interactive journey preview" })
@@ -137,6 +172,25 @@ try {
     published.journey.id,
     published.version.id,
   );
+  await button("New draft").click();
+  await button("Publish").click();
+  const [republish] = await Promise.all([
+    page.waitForResponse(r=>r.request().method()==="POST" && r.url().endsWith("/publish")),
+    button("Confirm").click(),
+  ]);
+  assert.ok(republish.ok());
+  const second=(await republish.json()).data;
+  assert.ok(second.version.version_number > published.version.version_number);
+  await button("Version history").click();
+  await button("Roll back").click();
+  const [restore] = await Promise.all([
+    page.waitForResponse(r=>r.request().method()==="POST" && r.url().endsWith("/activate")),
+    button("Confirm").click(),
+  ]);
+  assert.ok(restore.ok());
+  const restored=(await restore.json()).data;
+  assert.equal(restored.binding.version_id,published.version.id);
+  console.log("Version history restored published version",restored.binding.version_id);
 } finally {
   try {
     if (await button("Journey settings").isVisible()) {

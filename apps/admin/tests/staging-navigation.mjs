@@ -73,6 +73,23 @@ try {
       "Search, activity, navigation and all 15 Admin pages passed at " + width,
     );
   }
+  // Simulate a failed GET in this browser only, then exercise merchant recovery.
+  let release, attempt=0;
+  const delayed = new Promise(resolve => { release=resolve; });
+  await page.route("**/v1/journeys", async route => {
+    if (attempt++ === 0) {
+      await delayed;
+      await route.fulfill({status:503,contentType:"application/json",body:JSON.stringify({error:{message:"Unavailable"}})});
+    } else {
+      await route.fulfill({status:200,contentType:"application/json",body:JSON.stringify({data:[]})});
+    }
+  });
+  await page.goto(root+"/journeys");
+  await page.getByText("Loading journeys",{exact:true}).waitFor();
+  release();
+  await page.getByRole("button",{name:"Retry loading journeys"}).click();
+  await page.getByText("No journeys yet",{exact:true}).waitFor();
+  console.log("Studio loading, request error, retry and empty state passed using isolated browser responses.");
 } finally {
   await browser.close();
 }

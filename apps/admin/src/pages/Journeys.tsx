@@ -58,6 +58,8 @@ export function JourneysPage() {
   const [past, setPast] = useState<Definition[]>([]);
   const [future, setFuture] = useState<Definition[]>([]);
   const [busy, setBusy] = useState(false);
+  const [loadFailure,setLoadFailure] = useState("");
+  const [reload,setReload] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -74,6 +76,7 @@ export function JourneysPage() {
   const [preview, setPreview] = useState<Preview>();
   const [lines, setLines] = useState<PreviewLine[]>([]);
   const [answer, setAnswer] = useState("");
+  const [previewContext,setPreviewContext] = useState("phone");
   const [previewMode, setPreviewMode] = useState("chat");
   const [scenario, setScenario] = useState("normal");
   const [compilation, setCompilation] = useState<Compilation>();
@@ -98,12 +101,21 @@ export function JourneysPage() {
     if (dirty) setConfirmAction({ title: "Discard unsaved changes?", body: "The last saved draft will remain available.", run: work });
     else void run(work);
   }
-  useEffect(() => { void run(async () => {
-    await loadList();
-    setTemplates((await apiGet<Template[]>("/journeys/templates")).data);
-    setLibrary((await apiGet<Library[]>("/journeys/step-library")).data);
-    if (hasPermission(user.role, "channels.view")) setConnections((await apiGet<Connection[]>("/channels")).data);
-  }).finally(() => setLoading(false)); }, [user.organization_id]);
+  useEffect(() => {
+    let current = true;
+    setLoading(true);
+    setLoadFailure("");
+    Promise.all([
+      apiGet<Journey[]>("/journeys"), apiGet<Template[]>("/journeys/templates"),
+      apiGet<Library[]>("/journeys/step-library"),
+      hasPermission(user.role,"channels.view") ? apiGet<Connection[]>("/channels") : Promise.resolve({data:[]}),
+    ]).then(([journeys, availableTemplates, steps, channelRows]) => {
+      if (!current) return;
+      setRows(journeys.data); setTemplates(availableTemplates.data); setLibrary(steps.data); setConnections(channelRows.data);
+    }).catch(reason => { if(current)setLoadFailure(reason instanceof Error ? reason.message : "Could not load Flow Studio."); })
+      .finally(()=>{ if(current)setLoading(false); });
+    return () => { current = false; };
+  }, [user.organization_id, user.role, reload]);
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => { if (dirty) { event.preventDefault(); event.returnValue = ""; } };
     const navigate = (event: MouseEvent) => {
@@ -214,6 +226,7 @@ export function JourneysPage() {
   const flowPrompt = preview?.result.messages.map(message => message.text).filter(Boolean).join("\n\n");
 
   if (loading) return <Page title="Flow Studio"><LoadingState label="Loading journeys" /></Page>;
+  if (loadFailure) return <Page title="Flow Studio"><Flash message={loadFailure}/><Button className="secondary" onClick={()=>setReload(n=>n+1)}>Retry loading journeys</Button></Page>;
   return <Page title={detail ? draft?.name ?? "Flow Studio" : "Flow Studio"} breadcrumbs={detail ? [{ label: "Journeys", to: "/journeys" }, { label: `Version ${detail.version.version_number}` }] : undefined} actions={detail ? <>
     <Badge tone={dirty ? "warning" : detail.version.status === "published" ? "success" : "neutral"}>{dirty ? "Unsaved" : friendly(detail.version.status)}</Badge>
     <IconButton label="Journey settings" icon={Settings2} onClick={() => setSettingsOpen(true)} />
@@ -232,7 +245,7 @@ export function JourneysPage() {
       </div>
       {issues.length ? <div className="journey-issues" role="alert"><strong>{issues.length} validation {issues.length === 1 ? "issue" : "issues"}</strong>{issues.map((issue, index) => <button key={index} type="button" onClick={() => { setSelected(issue.path.replace(/^steps\./, "")); setTab("edit"); }}>{draft.steps.find(s => `steps.${s.key}` === issue.path)?.title ?? "Journey"}: {issue.message}</button>)}</div> : null}
       <div className="journey-mobile-tabs"><Tabs label="Journey panels" value={tab} onChange={setTab} items={[{ value: "canvas", label: "Canvas" }, { value: "steps", label: "Steps" }, { value: "edit", label: "Edit" }, { value: "preview", label: "Preview" }]} /></div>
-      <div className={`journey-studio panel-${tab}`} data-testid="journey-studio">
+      <div className={`journey-studio panel-${tab} preview-${previewContext}`} data-testid="journey-studio">
         <JourneyCanvas key={detail.version.id} paste={pasteSteps} connect={next=>patchStep({next})} nodes={draft.steps} start={draft.start} editable={editable} selected={selected} select={key => { setSelected(key); setTab("edit"); }} arrange={positions => change({ ...draft, steps: draft.steps.map(s => positions[s.key] ? {...s,position:positions[s.key]} : s) })} />
         <aside className={`journey-steps ${tab === "steps" ? "mobile-current" : ""}`} aria-label="Journey steps">
           <div className="journey-section-heading"><h2>Steps</h2><span>{draft.steps.length}</span></div>
@@ -273,6 +286,7 @@ export function JourneysPage() {
         <section className={`journey-preview ${tab === "preview" ? "mobile-current" : ""}`} aria-label="Interactive journey preview">
           <div className="journey-section-heading"><h2>Preview</h2><IconButton label="Restart preview" icon={RotateCcw} disabled={busy || dirty} onClick={() => void run(startPreview)} /></div>
           <div className="journey-preview-switch" role="group" aria-label="Preview presentation"><button type="button" className={previewMode === "chat" ? "active" : ""} onClick={() => setPreviewMode("chat")}><MessageSquare size={15} />Chat</button><button type="button" className={previewMode === "flow" ? "active" : ""} onClick={() => setPreviewMode("flow")}><Smartphone size={15} />Flow</button></div>
+          <label className="journey-scenario">Preview device<select value={previewContext} onChange={e=>setPreviewContext(e.target.value)}><option value="phone">Phone</option><option value="desktop">Desktop</option></select></label>
           <label className="journey-scenario">Scenario<select value={scenario} onChange={e => { setScenario(e.target.value); setPreview(undefined); setLines([]); }}>{["normal", "empty_catalogue", "unavailable_stock", "payment_failure", "handoff", "unsupported_channel"].map(value => <option key={value} value={value}>{friendly(value)}</option>)}</select></label>
           <div className="journey-phone"><div className="journey-phone-header"><strong>{draft.name}</strong><Badge tone={preview?.controlled_test ? "warning" : "info"}>{preview?.controlled_test ? "Test records" : "Preview only"}</Badge></div>
             {preview ? previewMode === "chat" ? <div className="journey-chat" ref={scrollRef}>{lines.map((line, index) => <div key={index} className={`journey-bubble ${line.from}`}><p>{line.message.text}</p>{line.message.metadata?.help ? <small>{line.message.metadata.help}</small> : null}{index === lines.length - 1 && questionActive ? line.message.options?.map(option => <button key={option.id} type="button" disabled={busy} onClick={() => void run(() => send(option.id, option.label))}>{option.label}</button>) : null}</div>)}</div> : compilation?.errors.length ? <Flash message="This journey cannot be rendered as a Flow. Resolve the compilation errors first." /> : <JourneyFlowPreview compilation={compilation?.json} screenId={preview.flow_screen} prompt={flowPrompt} options={currentPrompt?.options} busy={busy} submit={(id, label) => void run(() => send(id, label))} /> : <div className="journey-preview-empty"><Button icon={Play} disabled={busy || dirty} onClick={() => void run(startPreview)}>Start preview</Button></div>}
