@@ -2,7 +2,7 @@ package bot
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
+
 	"strings"
 )
 
@@ -14,7 +14,15 @@ type FlowCompilation struct {
 
 func FlowScreenID(key string) string {
 	sum := sha256.Sum256([]byte(key))
-	return "S_" + strings.ToUpper(hex.EncodeToString(sum[:6]))
+	// Meta accepts letters and underscores in screen IDs. Encode the same
+	// 48-bit digest with A–P nibbles so IDs are stable across compilations.
+	var id strings.Builder
+	id.WriteString("S_")
+	for _, b := range sum[:6] {
+		id.WriteByte('A' + b>>4)
+		id.WriteByte('A' + (b & 15))
+	}
+	return id.String()
 }
 
 // Commerce actions and conditions execute on the data endpoint, never in the

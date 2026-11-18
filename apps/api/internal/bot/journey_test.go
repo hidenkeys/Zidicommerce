@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
+	"strings"
 	"testing"
 )
 
@@ -100,6 +101,9 @@ func TestJourneyTemplatesAndCompiler(t *testing.T) {
 				visiting[id], done[id] = false, true
 			}
 			for id := range routes {
+				if strings.Trim(id, "ABCDEFGHIJKLMNOPQRSTUVWXYZ_") != "" {
+					t.Fatalf("invalid provider screen id: %s", id)
+				}
 				visit(id)
 			}
 		})
