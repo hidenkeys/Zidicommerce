@@ -7,6 +7,7 @@ import { hasPermission } from "../lib/permissions";
 import "./journeys.css";
 import { JourneyFlowPreview } from "./JourneyFlowPreview";
 
+import { inspectJourney } from "./journey-insights";
 import { JourneyTemplates } from "./JourneyTemplates";
 import { JourneyCanvas, type Point } from "./JourneyCanvas";
 
@@ -29,7 +30,7 @@ type Issue = { path: string; message: string };
 type Validation = { valid: boolean; issues: Issue[] };
 type Compilation = { json: Record<string, unknown>; errors: Issue[]; warnings: Issue[] };
 type Message = { type: string; text: string; options?: { id: string; label: string }[]; metadata?: { answer_type?: string; help?: string } };
-type Preview = { session_id: string; current_step: string; turn: string; flow_screen: string; controlled_test?: boolean; result: { status: string; messages: Message[]; handoff?: boolean }; cart: { name: string; quantity: number; unit_price_minor: number; currency: string }[] };
+type Preview = { variables?: Record<string, unknown>; session_id: string; current_step: string; turn: string; flow_screen: string; controlled_test?: boolean; result: { status: string; messages: Message[]; handoff?: boolean }; cart: { name: string; quantity: number; unit_price_minor: number; currency: string }[] };
 type Library = { kind: string; name: string; answer_type?: string };
 type Connection = { id: string; provider: string; display_name: string; status: string };
 type Template = { id: string; name: string; description: string };
@@ -64,9 +65,11 @@ export function JourneysPage() {
   const [newTemplate, setNewTemplate] = useState("order");
   const [newName, setNewName] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [architectOpen,setArchitectOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<{ title: string; body: string; run: () => Promise<void> }>();
   const [tab, setTab] = useState("canvas");
+  const [nodeSearch,setNodeSearch] = useState("");
   const [addKind, setAddKind] = useState("message");
   const [issues, setIssues] = useState<Issue[]>([]);
   const [preview, setPreview] = useState<Preview>();
@@ -125,11 +128,11 @@ export function JourneysPage() {
     if (!draft || !editable || from === to || to < 0 || to >= draft.steps.length || draft.steps[from].locked) return;
     const steps = [...draft.steps]; const [moving] = steps.splice(from, 1); steps.splice(to, 0, moving); change({ ...draft, steps });
   }
-  function addStep() {
+  function addStep(chosen = addKind) {
     if (!draft || !editable) return;
     const key = keyFor();
-    const item = library.find(l => `${l.kind}${l.answer_type ? `:${l.answer_type}` : ""}` === addKind);
-    const kind = item?.kind ?? addKind;
+    const item = library.find(l => `${l.kind}${l.answer_type ? `:${l.answer_type}` : ""}` === chosen);
+    const kind = item?.kind ?? chosen;
     const binding: Record<string, [string, string]> = { entry_menu: ["journeys", "journey_intent"], store_selector: ["stores", "store_id"], category_selector: ["categories", "category_id"], product_selector: ["products", "product_id"], variant_selector: ["variants", "variant_id"], fulfilment_selector: ["fulfilment", "fulfilment_mode"], quantity: ["", "quantity"], address: ["", "delivery_address"] };
     const [source, destination] = binding[kind] ?? ["", `answer_${key}`];
     const created: Step = { key, kind, title: item?.name ?? friendly(kind), text: "", help: "", required: false, locked: protectedKinds.includes(kind), answer_type: item?.answer_type ?? (kind === "quantity" ? "number" : "text"), presentation: kind === "buttons" ? "buttons" : source || kind === "list" ? "list" : "free_text", destination, source, options: [], max_length: 1000, max_retries: 3, retry_message: "Please check your answer and try again.", next: step?.next ?? "end", failure: draft.steps.some(s => s.kind === "handoff") ? draft.steps.find(s => s.kind === "handoff")!.key : "", analytics_label: "" };
@@ -201,6 +204,7 @@ export function JourneysPage() {
   const fieldOptions = draft?.steps.filter(s => s.destination).map(s => ({ value: s.destination!, label: s.title }));
   const currentPrompt = preview?.result.messages[preview.result.messages.length - 1];
   const questionActive = preview?.result.status === "active" && !(previewMode === "flow" && compilation?.errors.length);
+  const architectIssues = draft && architectOpen ? inspectJourney(draft.start,draft.steps) : [];
   const flowPrompt = preview?.result.messages.map(message => message.text).filter(Boolean).join("\n\n");
 
   if (loading) return <Page title="Flow Studio"><LoadingState label="Loading journeys" /></Page>;
@@ -215,6 +219,7 @@ export function JourneysPage() {
     <Flash message={error} /><Flash message={notice} tone="success" />
     {!detail || !draft ? rows.length ? <div className="journey-list"><table><thead><tr><th>Journey</th><th>Publication</th><th>Status</th><th /></tr></thead><tbody>{rows.map(row => <tr key={row.id}><td><strong>{row.name}</strong><div className="muted">{row.description}</div></td><td>{row.published_version_id ? <Badge tone="success">Published version available</Badge> : <Badge>Draft only</Badge>}</td><td><Badge>{friendly(row.status)}</Badge></td><td><Button className="secondary" onClick={() => void run(() => openJourney(row.id))}>Open</Button></td></tr>)}</tbody></table></div> : <EmptyState title="No journeys yet" action={canEdit ? <Button icon={Plus} onClick={() => setNewOpen(true)}>Create a journey</Button> : undefined} /> : <>
       <div className="journey-toolbar"><IconButton label="Back to journeys" icon={ArrowLeft} onClick={() => leaving(async () => { setDetail(undefined); setDraft(undefined); })} /><Badge tone={detail.binding?.paused ? "warning" : "neutral"}>{detail.binding?.paused ? "New sessions paused" : `${draft.category.replace(/_/g, " ")} · ${detail.binding?.mode ? friendly(detail.binding.mode) : "Not activated"}`}</Badge><span className="journey-spacer" />
+        <Button icon={GitBranch} className="secondary" onClick={()=>setArchitectOpen(true)}>Zidi Architect</Button>
         <IconButton label="Undo" icon={Undo2} disabled={!editable || !past.length} onClick={() => { const previous = past[past.length - 1]; if (previous) { setFuture(old => [draft, ...old]); setDraft(previous); setPast(old => old.slice(0, -1)); setPreview(undefined); } }} />
         <IconButton label="Redo" icon={Redo2} disabled={!editable || !future.length} onClick={() => { const next = future[0]; if (next) { setPast(old => [...old, draft]); setDraft(next); setFuture(old => old.slice(1)); setPreview(undefined); } }} />
         {canPublish && detail.binding ? <IconButton label={detail.binding.paused ? "Resume new sessions" : "Pause new sessions"} icon={detail.binding.paused ? Play : Pause} disabled={busy} onClick={() => void run(async () => { const version = detail.versions.find(v => v.id === detail.binding!.version_id); if (version) await activate(version, detail.binding!.mode, !detail.binding!.paused); })} /> : null}
@@ -229,7 +234,9 @@ export function JourneysPage() {
             <button type="button" className="journey-step-select" onClick={() => { setSelected(s.key); setTab("edit"); }}><span className="journey-step-num">{s.locked ? <Lock size={13} /> : <GripVertical size={15} />}</span><span><strong>{s.title || friendly(s.kind)}</strong><small>{friendly(s.kind)}{draft.start === s.key ? " · Start" : ""}</small>{s.next && s.next !== draft.steps[index + 1]?.key ? <small className="journey-branch"><GitBranch size={12} />{draft.steps.find(item => item.key === s.next)?.title ?? "Missing route"}</small> : null}</span>{issues.some(issue => issue.path === `steps.${s.key}`) ? <span className="journey-error-dot" /> : null}</button>
             {editable && !s.locked ? <div className="journey-step-move"><IconButton label={`Move ${s.title} up`} icon={ArrowUp} disabled={index === 0} onClick={() => move(index, index - 1)} /><IconButton label={`Move ${s.title} down`} icon={ArrowDown} disabled={index === draft.steps.length - 1} onClick={() => move(index, index + 1)} /></div> : null}
           </li>)}</ol>
-          {editable ? <div className="journey-add"><select aria-label="New step type" value={addKind} onChange={e => setAddKind(e.target.value)}>{library.map(item => { const value = `${item.kind}${item.answer_type ? `:${item.answer_type}` : ""}`; return <option key={value} value={value}>{item.name}</option>; })}</select><Button icon={Plus} className="secondary" onClick={addStep}>Add step</Button></div> : null}
+          {editable ? <div className="journey-add"><h3>Node library</h3><input type="search" aria-label="Search node library" placeholder="Search node types" value={nodeSearch} onChange={e=>setNodeSearch(e.target.value)} />
+            <div className="node-library">{library.filter(item=>item.name.toLowerCase().includes(nodeSearch.trim().toLowerCase())).map(item=>{const value=item.kind+(item.answer_type ? ":"+item.answer_type : "");return <button type="button" key={value} onClick={()=>{setAddKind(value);addStep(value);}}><Plus size={13}/>{item.name}</button>;})}</div>
+            {!library.some(item=>item.name.toLowerCase().includes(nodeSearch.trim().toLowerCase())) && <p role="status">No matching node types.</p>}</div> : null}
         </aside>
         <section className={`journey-editor ${tab === "edit" ? "mobile-current" : ""}`} aria-label="Step editor">
           {step ? <><div className="journey-section-heading"><h2>{step.title || "Untitled step"}</h2><div className="page-actions">{step.locked ? <Badge><Lock size={12} />Protected</Badge> : editable ? <><IconButton label="Duplicate step" icon={Copy} onClick={() => { const copy = { ...step, key: keyFor(), title: `${step.title} copy`, destination: step.destination ? `answer_${keyFor()}` : undefined, options: (step.options ?? []).map(o => ({ ...o })) }; const index = draft.steps.findIndex(s => s.key === step.key); const steps = [...draft.steps]; steps.splice(index + 1, 0, copy); change({ ...draft, steps }); setSelected(copy.key); }} /><IconButton label="Delete step" icon={Trash2} disabled={draft.steps.length === 1} onClick={() => setConfirmAction({ title: `Delete ${step.title}?`, body: "Incoming routes will move to this step’s next route.", run: async () => { deleteStep(); } })} /></> : null}</div></div>
@@ -266,6 +273,7 @@ export function JourneysPage() {
             {questionActive && !currentPrompt?.options?.length ? <form className="journey-answer" onSubmit={e => { e.preventDefault(); void run(() => send(answer)); }}><input aria-label="Customer answer" value={answer} disabled={busy} type={currentPrompt?.metadata?.answer_type === "date" ? "date" : currentPrompt?.metadata?.answer_type === "email" ? "email" : "text"} onChange={e => setAnswer(e.target.value)} /><IconButton label="Send preview answer" icon={Send} type="submit" disabled={busy || !answer.trim()} /></form> : null}
           </div>
           {preview ? <><div className="journey-preview-controls"><IconButton label="Back in preview" icon={ArrowLeft} disabled={busy} onClick={() => void run(() => send("back", "Back", "back"))} /><IconButton label="Restart journey" icon={RotateCcw} disabled={busy} onClick={() => void run(() => send("restart", "Restart", "restart"))} /><Button className="secondary" disabled={busy} onClick={() => void run(() => send("cancel", "Cancel", "cancel"))}>Cancel</Button><Badge>{friendly(preview.result.status)}</Badge></div><p className="muted journey-current">{draft.steps.find(s => s.key === preview.current_step)?.title ?? "Finished"}</p></> : null}
+          {preview?.variables && <details className="journey-vars"><summary>Test variables</summary>{Object.entries(preview.variables).length ? <dl>{Object.entries(preview.variables).map(([key,value])=><div key={key}><dt>{key}</dt><dd>{typeof value==="string"?value:JSON.stringify(value)}</dd></div>)}</dl> : <p>No answers recorded yet.</p>}</details>}
           {preview?.cart?.length ? <div className="journey-cart"><h3>Preview cart</h3>{preview.cart.map((item, index) => <p key={index}>{item.quantity} × {item.name}<strong>{new Intl.NumberFormat("en-NG", { style: "currency", currency: item.currency ?? "NGN" }).format(item.quantity * item.unit_price_minor / 100)}</strong></p>)}</div> : null}
           {previewMode === "flow" && compilation?.errors.length ? <Flash message={compilation.errors.map(i => i.message).join(" ")} /> : null}
           {previewMode === "flow" && compilation?.warnings.length ? <details><summary>Flow warnings ({compilation.warnings.length})</summary>{compilation.warnings.map((warning, index) => <p key={index}>{warning.message}</p>)}</details> : null}
@@ -288,6 +296,9 @@ export function JourneysPage() {
         </div>
         {canEdit && detail ? <Button className="secondary" icon={Trash2} onClick={() => setConfirmAction({ title: "Archive this journey?", body: "New sessions will stop. Existing orders are not deleted.", run: async () => { await apiDelete(`/journeys/${detail.journey.id}`); setSettingsOpen(false); setDetail(undefined); setDraft(undefined); await loadList(); } })}>Archive journey</Button> : null}
       </> : null}
+    </Modal>
+    <Modal open={architectOpen} title="Zidi Architect" description="Review your draft’s routes and questions." onClose={()=>setArchitectOpen(false)}>
+      {draft && <>{step && <p><strong>{step.title}</strong> · {friendly(step.kind)}{step.destination ? " · Saves to "+step.destination : ""}</p>}{architectIssues.length ? <ul className="architect-list">{architectIssues.map(issue=><li key={issue.message}><p>{issue.message}</p><button onClick={()=>{setSelected(issue.key);setTab("edit");setArchitectOpen(false);}}>Inspect step</button></li>)}</ul> : <p>All steps are reachable and each question has a prompt. Use Validate for the full publishing checks.</p>}</>}
     </Modal>
     <Modal open={historyOpen} title="Version history" onClose={() => setHistoryOpen(false)}>{detail?.versions.map(version => <div className="journey-version" key={version.id}><div><strong>Version {version.version_number}</strong><Badge>{version.status}</Badge>{detail.binding?.version_id === version.id ? <Badge tone="success">Active</Badge> : null}</div><div className="page-actions"><Button className="secondary" disabled={busy} onClick={() => leaving(async () => { await openJourney(detail.journey.id, version.id); setHistoryOpen(false); })}>View</Button>{canPublish && version.published_at && detail.binding?.version_id !== version.id ? <Button icon={RotateCcw} disabled={busy} onClick={() => setConfirmAction({ title: `Roll back to version ${version.version_number}?`, body: "New sessions will use this version. Existing sessions remain unchanged.", run: () => activate(version) })}>Roll back</Button> : null}</div></div>)}</Modal>
     <Modal open={Boolean(confirmAction)} title={confirmAction?.title ?? "Confirm"} description={confirmAction?.body} onClose={() => setConfirmAction(undefined)} footer={<><Button className="secondary" disabled={busy} onClick={() => setConfirmAction(undefined)}>Keep working</Button><Button loading={busy} onClick={() => { const action = confirmAction; setConfirmAction(undefined); if (action) void run(action.run); }}>Confirm</Button></>} />

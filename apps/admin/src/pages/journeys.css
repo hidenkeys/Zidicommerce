@@ -99,3 +99,8 @@
 .flow-edit-tools button{padding:5px 8px;background:white;color:#315342;font-size:12px;border:1px solid #d5e1d9;display:inline-flex;align-items:center;gap:5px;border-radius:5px}
 .flow-edit-tools button[aria-pressed=true]{background:#dbefe4}.flow-edit-tools small{color:#5d7165;font-size:11px;margin-left:auto}
 .flow-minimap{position:absolute;z-index:1;right:12px;bottom:15px;width:128px;height:70px;padding:4px;background:#fffffff2;border:1px solid #bbcfc0;border-radius:6px;pointer-events:none}
+.journey-vars{margin:12px 0;padding:10px;border:1px solid var(--line);border-radius:8px}.journey-vars dl{margin:0}.journey-vars dl>div{padding:6px 0;border-bottom:1px solid var(--line)}.journey-vars dt{font-weight:600}.journey-vars dd{margin:2px 0;overflow-wrap:anywhere}
+.architect-list{list-style:none;padding:0}.architect-list li{border-top:1px solid var(--line);padding:10px 0}
+.node-library {display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:5px}
+.node-library button {min-width:0;display:flex;align-items:center;gap:6px;background:white;color:var(--ink);text-align:left;white-space:normal;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:8px}
+.node-library svg{flex:none}.journey-add h3{margin:0;font-size:14px}.journey-studio .journey-steps{display:none}.journey-studio.panel-steps .journey-steps{display:flex;flex-direction:column}.journey-add{order:-1;margin-bottom:12px}.node-library{max-height:155px;overflow:auto}
