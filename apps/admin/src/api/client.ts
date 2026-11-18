@@ -6,7 +6,7 @@ type JsonBody = Record<string, unknown> | Array<unknown>;
 
 const TOKEN_KEY = "zidicommerce_token";
 function isPublicPath(path: string) {
-  return path === "/auth/login" || path === "/auth/register" || path.startsWith("/invitations/");
+  return path === "/auth/login" || path === "/auth/register" || path === "/auth/forgot-password" || path === "/auth/reset-password" || path.startsWith("/invitations/");
 }
 
 export const UNAUTHORIZED_EVENT = "zidicommerce:unauthorized";
@@ -53,6 +53,7 @@ async function request<T>(method: string, path: string, body?: JsonBody): Promis
       404: "This item is no longer available. Refresh the page to see the latest information.",
       409: "This item changed while you were working. Refresh the page and try again.",
       429: "Too many requests were made. Wait a moment and try again.",
+      503: path === "/auth/forgot-password" ? "Password recovery email is unavailable. Contact your workspace administrator." : "This service is temporarily unavailable. Please try again shortly.",
       500: "Something went wrong while completing this action. Try again.",
     };
     const message = serverMessage && !technical && response.status < 500 ? serverMessage : fallback[response.status] ?? "The request could not be completed. Try again.";
