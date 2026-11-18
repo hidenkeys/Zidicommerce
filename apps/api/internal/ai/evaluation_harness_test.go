@@ -462,6 +462,7 @@ func meansGroundedUnknown(body string) bool {
 		"has not provided any information",
 		"not provided that information",
 		"not provided information",
+		"hasnt provided information",
 		"not listed",
 		"not found",
 		"not in this merchants catalogue",

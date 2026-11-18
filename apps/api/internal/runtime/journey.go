@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/mail"
@@ -843,7 +844,7 @@ func (s *Service) journeyAction(ctx context.Context, a bot.Action, j bot.Journey
 		if rctx.System["journey_controlled_test"] == true {
 			return map[string]any{"message": "Test notification suppressed."}, nil
 		}
-		inputs["message"] = "Your order payment has been verified."
+		inputs["message"] = defaultString(strings.TrimSpace(j.Text), "Your order payment has been verified.")
 		inputs["recipient"] = stringValue(rctx.System["sender"])
 		if j.Source == "store" {
 			store, err := s.commerce.GetStore(ctx, actor, storeID)
@@ -851,7 +852,7 @@ func (s *Service) journeyAction(ctx context.Context, a bot.Action, j bot.Journey
 				return nil, err
 			}
 			inputs["recipient"] = stringValue(parseJSONMap(store.Metadata)["notification_recipient"])
-			inputs["message"] = "A customer order has verified payment: " + stringValue(rctx.Variables["order_number"])
+			inputs["message"] = defaultString(strings.TrimSpace(j.Text), "A customer order has verified payment: "+stringValue(rctx.Variables["order_number"]))
 		}
 	}
 	if j.Kind == "add_to_cart" {
@@ -910,7 +911,21 @@ func (s *Service) journeyAction(ctx context.Context, a bot.Action, j bot.Journey
 				return err
 			}
 			var err error
-			outputs, err = NewActionRegistry(tx, core.NewService(tx, nil)).ExecuteDirect(ctx, a.ActionType, rctx, inputs)
+			if j.Kind == "notification" && j.Key == "notify_customer" && j.Locked && j.Source == "" && strings.TrimSpace(j.Text) == "" {
+				var existing core.CommerceNotification
+				lookup := tx.Where("organization_id = ? AND order_id = ? AND customer_id = ? AND notification_type = ? AND status IN ?", actor.OrganizationID, inputs["order_id"], inputs["customer_id"], "payment_confirmed", []string{"queued", "retry_pending", "sent"}).First(&existing)
+				switch {
+				case lookup.Error == nil:
+					outputs = map[string]any{"notification_id": existing.ID.String(), "notification_status": existing.Status}
+				case !errors.Is(lookup.Error, gorm.ErrRecordNotFound):
+					return lookup.Error
+				}
+			}
+			if outputs == nil {
+				commerce := core.NewService(tx, nil)
+				commerce.ConfigureJobs(s.jobs)
+				outputs, err = NewActionRegistry(tx, commerce).ExecuteDirect(ctx, a.ActionType, rctx, inputs)
+			}
 			if err != nil {
 				return err
 			}

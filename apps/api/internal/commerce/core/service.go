@@ -1821,10 +1821,23 @@ func (s *Service) RecordNotification(ctx context.Context, actor auth.CurrentUser
 		Status:           defaultString(strings.TrimSpace(input.Status), "queued"),
 		Payload:          jsonObject(input.Payload),
 	}
-	if err := s.db.WithContext(ctx).Create(&notification).Error; err != nil {
-		return CommerceNotification{}, err
+	if notification.Status == "queued" {
+		switch {
+		case notification.ChannelID == nil || notification.Recipient == "":
+			notification.Status, notification.ErrorMessage = "skipped", "notification has no channel or recipient"
+		case s.jobs == nil:
+			notification.Status, notification.ErrorMessage = "skipped", "notification delivery is not configured"
+		}
 	}
-	if err := s.enqueueNotificationJob(ctx, notification); err != nil {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&notification).Error; err != nil {
+			return err
+		}
+		if notification.Status == "queued" {
+			return s.enqueueNotificationJobTx(tx, notification)
+		}
+		return nil
+	}); err != nil {
 		return CommerceNotification{}, err
 	}
 	return notification, nil
@@ -2305,21 +2318,6 @@ func boolPaymentStatus(paid bool) string {
 		return "success"
 	}
 	return "not_paid"
-}
-
-func (s *Service) enqueueNotificationJob(ctx context.Context, notification CommerceNotification) error {
-	if s.jobs == nil {
-		return nil
-	}
-	_, err := s.jobs.Enqueue(ctx, jobs.EnqueueInput{
-		OrganizationID: &notification.OrganizationID,
-		JobType:        jobs.JobTypeNotificationDelivery,
-		Payload:        map[string]any{"notification_id": notification.ID.String()},
-		IdempotencyKey: "notification:" + notification.ID.String(),
-		CorrelationID:  notification.ID.String(),
-		MaxAttempts:    5,
-	})
-	return err
 }
 
 func (s *Service) enqueueNotificationJobTx(tx *gorm.DB, notification CommerceNotification) error {

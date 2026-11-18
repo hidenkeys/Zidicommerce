@@ -1978,3 +1978,42 @@ func assertCommerceEventCount(t *testing.T, db *gorm.DB, organizationID, orderID
 		t.Fatalf("expected %d %s commerce events, got %d", want, eventType, count)
 	}
 }
+
+func TestRecordNotificationRequiresAddressAndAtomicDeliveryJob(t *testing.T) {
+	fx := newCommerceFixture(t, 5)
+	ctx := context.Background()
+	channelID := uuid.New()
+	input := NotificationInput{ChannelID: &channelID, Recipient: "fixture-only", Type: "store_notification", Payload: `{"message":"Fixture notification"}`}
+	withoutWorker, err := fx.service.RecordNotification(ctx, fx.actor, input)
+	if err != nil || withoutWorker.Status != "skipped" || withoutWorker.ErrorMessage == "" {
+		t.Fatalf("missing delivery worker: %v %+v", err, withoutWorker)
+	}
+	fx.service.ConfigureJobs(jobs.NewService(fx.db, nil))
+	input.Recipient = ""
+	unaddressed, err := fx.service.RecordNotification(ctx, fx.actor, input)
+	if err != nil || unaddressed.Status != "skipped" || unaddressed.ErrorMessage == "" {
+		t.Fatalf("missing recipient: %v %+v", err, unaddressed)
+	}
+	input.Recipient = "fixture-only"
+	queued, err := fx.service.RecordNotification(ctx, fx.actor, input)
+	if err != nil || queued.Status != "queued" {
+		t.Fatalf("queue: %+v %v", queued, err)
+	}
+	var deliveryJobs []jobs.Job
+	if err := fx.db.Where("organization_id = ? AND job_type = ?", fx.actor.OrganizationID, jobs.JobTypeNotificationDelivery).Find(&deliveryJobs).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveryJobs) != 1 || deliveryJobs[0].CorrelationID != queued.ID.String() {
+		t.Fatalf("unexpected delivery jobs: %+v", deliveryJobs)
+	}
+	if err := fx.db.Exec("CREATE TRIGGER reject_job BEFORE INSERT ON background_jobs BEGIN SELECT RAISE(ABORT, 'unavailable'); END").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.service.RecordNotification(ctx, fx.actor, input); err == nil {
+		t.Fatal("expected job insertion failure")
+	}
+	var rows int64
+	if err := fx.db.Model(&CommerceNotification{}).Where("organization_id = ? AND notification_type = ?", fx.actor.OrganizationID, input.Type).Count(&rows).Error; err != nil || rows != 3 {
+		t.Fatalf("orphaned row after failed enqueue: %d %v", rows, err)
+	}
+}

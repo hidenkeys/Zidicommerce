@@ -10,6 +10,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/jobs"
 	"strings"
 	"testing"
 	"time"
@@ -412,6 +413,7 @@ func TestJourneyFlowCommerceSubmissionCreatesOrderExactlyOnce(t *testing.T) {
 	}
 	// Deterministic provider verification models an independently confirmed
 	// payment; this is deliberately not evidence of a live Paystack charge.
+	fx.service.ConfigureJobs(jobs.NewService(fx.db, nil))
 	verifiedService := core.NewService(fx.db, runtimeTestPaymentProvider{name: "paystack", db: fx.db})
 	if _, err := verifiedService.VerifyPayment(ctx, fx.actor, core.PaymentVerifyInput{Reference: payment.Reference}); err != nil {
 		t.Fatal(err)
@@ -426,10 +428,43 @@ func TestJourneyFlowCommerceSubmissionCreatesOrderExactlyOnce(t *testing.T) {
 	if err != nil || jsonValue(finalReplay) != jsonValue(response) {
 		t.Fatalf("verified checkout replay changed result: %+v %v", finalReplay, err)
 	}
-	var notifications int64
-	fx.db.Model(&core.CommerceNotification{}).Where("order_id = ? AND notification_type IN ?", orders[0].ID, []string{"customer_notification", "store_notification"}).Count(&notifications)
-	if notifications != 2 {
-		t.Fatalf("expected store/customer notifications, got %d", notifications)
+	var notifications []core.CommerceNotification
+	if err := fx.db.Where("order_id = ?", orders[0].ID).Find(&notifications).Error; err != nil {
+		t.Fatal(err)
+	}
+	var queuedStore, paymentConfirmation int
+	for _, row := range notifications {
+		switch row.NotificationType {
+		case "store_notification":
+			var count int64
+			if err := fx.db.Model(&jobs.Job{}).Where("organization_id = ? AND correlation_id = ? AND job_type = ?", row.OrganizationID, row.ID.String(), jobs.JobTypeNotificationDelivery).Count(&count).Error; err != nil {
+				t.Fatal(err)
+			}
+			if row.Status != "queued" || row.Recipient != "test-store-recipient" || count != 1 {
+				t.Fatal("fixture store notification needs one addressable delivery job")
+			}
+			queuedStore++
+		case "customer_notification":
+			t.Fatal("journey duplicated the payment confirmation")
+		case "payment_confirmed":
+			paymentConfirmation++
+		}
+	}
+	if queuedStore != 1 || paymentConfirmation != 1 {
+		t.Fatal("expected one fixture store notification and one canonical payment confirmation")
+	}
+	rctx := RuntimeContext{Session: session, Variables: map[string]any{"order_id": orders[0].ID.String(), "payment_status": "paid"}, System: map[string]any{"sender": customer.Phone, "journey_turn": "custom-note"}}
+	custom := bot.JourneyStep{Key: "notify_customer", Kind: "notification", Locked: true, Text: "Please bring your pickup code."}
+	output, err := fx.service.journeyAction(ctx, bot.Action{ActionType: "notify_customer"}, custom, rctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var customRow core.CommerceNotification
+	if err := fx.db.Where("organization_id = ? AND id = ?", fx.actor.OrganizationID, output["notification_id"]).First(&customRow).Error; err != nil {
+		t.Fatal(err)
+	}
+	if customRow.NotificationType != "customer_notification" || customRow.Status != "queued" || parseJSONMap(customRow.Payload)["message"] != custom.Text {
+		t.Fatal("custom message replaced by payment confirmation")
 	}
 	if _, err := verifiedService.TransitionOrder(ctx, fx.actor, orders[0].ID, core.TransitionInput{Status: core.OrderProcessing, IdempotencyKey: "flow-prepare"}); err != nil {
 		t.Fatal(err)

@@ -78,7 +78,19 @@ type phaseCTestEnvironment struct {
 	ExecutionProfile string `json:"execution_profile"`
 }
 
+// Count model calls separately from cases resolved directly from authoritative facts.
+type phaseCObservedProvider struct {
+	provider.ChatProvider
+	calls int
+}
+
+func (p *phaseCObservedProvider) Complete(ctx context.Context, req provider.ChatRequest) (provider.ChatResponse, error) {
+	p.calls++
+	return p.ChatProvider.Complete(ctx, req)
+}
+
 type phaseCSummary struct {
+	ProviderCalls            int            `json:"provider_calls,omitempty"`
 	Provider                 string         `json:"provider"`
 	Model                    string         `json:"model"`
 	Total                    int            `json:"total"`
@@ -210,10 +222,13 @@ func TestPhaseCLiveProviderEvaluationHarness(t *testing.T) {
 		TestEnvironment: phaseCTestEnv("live provider evaluation"),
 	}
 	for _, liveProvider := range providers {
-		results := runPhaseCProviderEvaluation(t, liveProvider, phaseCScenarios())
+		observed := &phaseCObservedProvider{ChatProvider: liveProvider}
+		results := runPhaseCProviderEvaluation(t, observed, phaseCScenarios())
 		providerReport := report
 		providerReport.Results = results
-		providerReport.Summaries = []phaseCSummary{summarizePhaseCResults(liveProvider, results)}
+		summary := summarizePhaseCResults(liveProvider, results)
+		summary.ProviderCalls = observed.calls
+		providerReport.Summaries = []phaseCSummary{summary}
 		artifactPath := phaseCArtifactPath("live", liveProvider.Name(), runID, ".json")
 		providerReport.ArtifactPaths = []string{artifactPath}
 		if err := writePhaseCReport(artifactPath, providerReport); err != nil {
