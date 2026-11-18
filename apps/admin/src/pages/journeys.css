@@ -74,3 +74,24 @@
 .journey-advanced { border-top: 1px solid #dbe2e9; padding: 15px 0; margin-top: 20px; }
 @media (max-width: 1160px) { .journey-studio { grid-template-columns: minmax(180px, .8fr) minmax(240px, 1.2fr); } .journey-preview { grid-column: 1 / -1; position: static; border-top: 1px solid #dbe2e9; padding: 15px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; } .journey-preview .journey-phone { grid-column: 1 / -1; max-width: 430px; width: 100%; justify-self: center; } .journey-preview > .journey-section-heading { grid-column: 1 / -1; } .journey-editor { border-right: 0; } }
 @media (max-width: 760px) { .journey-studio { display: block; } .journey-mobile-tabs { display: block; margin-bottom: 12px; } .journey-steps, .journey-editor, .journey-preview { display: none; padding: 10px 0; border: 0; } .journey-steps.mobile-current, .journey-editor.mobile-current, .journey-preview.mobile-current { display: block; } .journey-steps ol { max-height: none; } .journey-preview { position: static; } .journey-phone { max-width: none; } .journey-field-pair { gap: 8px; } .journey-section-heading .badge { font-size: 10px; } .journey-chat, .journey-flow-screen { height: 380px; } }
+.flow-canvas {min-width:0;overflow:hidden;border:1px solid #ccdbd5;border-radius:12px;background:#fafcfb}
+.flow-canvas header,.flow-canvas header div,.flow-canvas h2 {display:flex;align-items:center;gap:8px}
+.flow-canvas header {justify-content:space-between;padding:10px 12px;border-bottom:1px solid #d6e3dd;background:white}
+.flow-canvas h2 {font-size:14px;margin:0}
+.flow-canvas header button {background:white;color:#294c40;border:1px solid #dae2dc;padding:6px;display:grid;place-items:center;border-radius:6px}
+.flow-canvas output {font-size:12px;font-variant-numeric:tabular-nums}
+.flow-viewport {height:clamp(370px,63vh,760px);overflow:auto;overscroll-behavior:contain;cursor:grab;background-image:radial-gradient(#ccd8d1 1px,transparent 1px);background-size:16px 16px}
+.flow-viewport:active {cursor:grabbing}
+.flow-links {position:absolute;inset:0;pointer-events:none}
+.flow-links text {font:11px system-ui;fill:#35594d;paint-order:stroke;stroke:#fafcfb;stroke-width:4px}
+.flow-node {position:absolute;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:5px;background:white;color:#193b30;border:1px solid #b8cfc2;border-radius:9px;padding:12px;text-align:left;box-shadow:0 2px 6px #243c3010;touch-action:none;white-space:normal;overflow:hidden}
+.flow-node[aria-pressed=true] {border-color:#157a60;box-shadow:0 0 0 2px #157a6033}
+.flow-node small {font-size:11px;font-weight:500;color:#4f6b60;text-transform:capitalize}
+.flow-node strong {font-size:14px;line-height:1.25}
+.journey-mobile-tabs {display:block;margin-bottom:12px}
+@media(min-width:761px) {
+.journey-studio {grid-template-columns:minmax(330px,1fr) minmax(230px,33%);gap:16px;border:0}
+.journey-studio .journey-steps,.journey-studio .journey-editor,.journey-studio .journey-preview {display:none;padding:0 12px;position:static;grid-column:2;border:0;max-height:74vh;overflow:auto}
+.journey-studio.panel-steps .journey-steps,.journey-studio.panel-edit .journey-editor,.journey-studio.panel-preview .journey-preview,.journey-studio.panel-canvas .journey-editor {display:block}
+}
+@media(max-width:760px){.journey-studio:not(.panel-canvas) .flow-canvas{display:none}.flow-canvas header{flex-wrap:wrap}.flow-canvas header button{min-height:36px;min-width:36px}}
