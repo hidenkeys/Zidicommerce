@@ -648,6 +648,8 @@ func TestJourneyCustomKeywordAndTenantScopedDefault(t *testing.T) {
 	ctx := context.Background()
 	d := detail.Definition
 	d.Trigger = "guided"
+	d.EntryCTA = "Start guided order"
+	d.Steps[0].Position = &bot.JourneyPosition{X: 12, Y: 34}
 	d.Mode = "guided_questions"
 	saved, err := bot.NewService(fx.db).SaveJourney(ctx, fx.actor, detail.Version.ID, d)
 	if err != nil {
@@ -657,7 +659,19 @@ func TestJourneyCustomKeywordAndTenantScopedDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := bot.NewService(fx.db).SetDefaultJourney(ctx, fx.actor, published.Bot.ID); err != nil {
+	detail, err = bot.NewService(fx.db).SetDefaultJourney(ctx, fx.actor, published.Bot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.ChannelDefault == nil || detail.ChannelDefault.VersionID != published.Version.ID || detail.ChannelDefault.Mode != d.Mode || detail.Definition.Steps[0].Position == nil || detail.Definition.Steps[0].Position.X != 12 {
+		t.Fatalf("published default or position missing: %+v", detail)
+	}
+	menu, err := fx.service.JourneyEntryMenu(ctx, fx.actor.OrganizationID, fx.channel.ID)
+	if err != nil || len(menu.Options) != 1 || menu.Options[0].Label != d.EntryCTA {
+		t.Fatalf("menu: %+v %v", menu, err)
+	}
+	legacyMenu := bot.JourneyBinding{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, BotID: uuid.New(), VersionID: uuid.New(), ConnectionID: &fx.channel.ID, Trigger: "default", Mode: "guided_chat"}
+	if err := fx.db.Create(&legacyMenu).Error; err != nil {
 		t.Fatal(err)
 	}
 	var channel core.Channel

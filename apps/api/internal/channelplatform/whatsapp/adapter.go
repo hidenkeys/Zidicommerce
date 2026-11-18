@@ -148,7 +148,11 @@ func (a *Adapter) BuildOutbound(_ context.Context, command channelplatform.Outbo
 			return channelplatform.ProviderRequest{}, errors.New("Flow launch requires a provider Flow and session token")
 		}
 		payload["type"] = "interactive"
-		payload["interactive"] = map[string]any{"type": "flow", "body": map[string]any{"text": command.Body}, "action": map[string]any{"name": "flow", "parameters": map[string]any{"flow_message_version": "3", "flow_id": id, "flow_token": token, "flow_cta": "Continue", "flow_action": "data_exchange"}}}
+		cta := valueString(command.Metadata["flow_cta"])
+		if cta == "" {
+			cta = "Open order form"
+		}
+		payload["interactive"] = map[string]any{"type": "flow", "body": map[string]any{"text": command.Body}, "action": map[string]any{"name": "flow", "parameters": map[string]any{"flow_message_version": "3", "flow_id": id, "flow_token": token, "flow_cta": cta, "flow_action": "data_exchange"}}}
 	case "location_request":
 		payload["type"] = "interactive"
 		payload["interactive"] = map[string]any{"type": "location_request_message", "body": map[string]any{"text": command.Body}, "action": map[string]any{"name": "send_location"}}

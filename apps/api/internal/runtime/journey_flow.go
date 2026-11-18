@@ -25,7 +25,7 @@ type JourneyFlowRequest struct {
 	} `json:"data"`
 }
 
-func (s *Service) launchJourneyFlow(ctx context.Context, session ConversationSession) (OutboundMessage, error) {
+func (s *Service) launchJourneyFlow(ctx context.Context, session ConversationSession, cta string) (OutboundMessage, error) {
 	var deployment bot.JourneyFlowDeployment
 	if err := s.db.WithContext(ctx).Where("organization_id = ? AND version_id = ? AND connection_id = ? AND status = ?", session.OrganizationID, session.BotVersionID, session.ChannelID, "published").First(&deployment).Error; err != nil {
 		return OutboundMessage{}, httperror.BadRequest("Journey Flow is unavailable")
@@ -39,7 +39,7 @@ func (s *Service) launchJourneyFlow(ctx context.Context, session ConversationSes
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return OutboundMessage{}, err
 	}
-	return OutboundMessage{Type: "flow", Text: "Continue your request securely in WhatsApp.", Metadata: map[string]any{"flow_id": deployment.ProviderFlowID, "flow_token": token, "flow_cta": "Continue", "flow_action": "data_exchange"}}, nil
+	return OutboundMessage{Type: "flow", Text: "Continue your request securely in WhatsApp.", Metadata: map[string]any{"flow_id": deployment.ProviderFlowID, "flow_token": token, "flow_cta": cta, "flow_action": "data_exchange"}}, nil
 }
 
 // The unguessable token binds the encrypted request to a specific tenant,
@@ -197,7 +197,9 @@ func (s *Service) journeyRoute(ctx context.Context, channel core.Channel, text s
 	err := s.db.WithContext(ctx).Where("organization_id = ? AND connection_id = ? AND trigger = ?", channel.OrganizationID, channel.ID, intent).First(&binding).Error
 	if err == gorm.ErrRecordNotFound {
 		intent = journeyEntryIntent(text)
-		err = s.db.WithContext(ctx).Where("organization_id = ? AND connection_id = ? AND trigger = ?", channel.OrganizationID, channel.ID, intent).First(&binding).Error
+		if intent != "default" {
+			err = s.db.WithContext(ctx).Where("organization_id = ? AND connection_id = ? AND trigger = ?", channel.OrganizationID, channel.ID, intent).First(&binding).Error
+		}
 	}
 	if err == gorm.ErrRecordNotFound {
 		channelConfig := parseJSONMap(channel.Config)
@@ -273,7 +275,7 @@ func (s *Service) JourneyEntryMenu(ctx context.Context, organizationID, connecti
 	}
 	message := OutboundMessage{Type: MessageList, Text: "Welcome. What would you like to do?"}
 	for _, binding := range bindings {
-		message.Options = append(message.Options, MessageOption{ID: binding.Trigger, Label: strings.Title(strings.ReplaceAll(binding.Trigger, "_", " "))})
+		message.Options = append(message.Options, MessageOption{ID: binding.Trigger, Label: bot.JourneyEntryLabel(binding.Mode, binding.EntryCTA, binding.Trigger)})
 	}
 	if len(message.Options) > 10 {
 		return message, fmt.Errorf("Entry menu exceeds the provider option limit")

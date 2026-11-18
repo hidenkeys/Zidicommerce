@@ -81,7 +81,7 @@ func (s *Service) executeConfiguredJourney(ctx context.Context, config bot.Versi
 	}
 	system = parseJSONMap(session.SystemContext)
 	if mode == "whatsapp_flow" && input.Metadata["journey_flow"] != true && system["journey_flow_launched"] != true && session.ExpectedInput != "" {
-		message, err := s.launchJourneyFlow(ctx, *session)
+		message, err := s.launchJourneyFlow(ctx, *session, bot.JourneyEntryLabel(mode, bot.JourneySettings(config.Version).EntryCTA, ""))
 		if err != nil {
 			result.Messages = append([]OutboundMessage{{Type: MessageText, Text: "The form is unavailable. We can continue safely in this chat."}}, result.Messages...)
 			return result, nil

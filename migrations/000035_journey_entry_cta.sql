@@ -1,0 +1,1 @@
+ALTER TABLE journey_bindings ADD COLUMN IF NOT EXISTS entry_cta TEXT NOT NULL DEFAULT '';

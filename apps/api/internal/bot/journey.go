@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
@@ -28,6 +31,7 @@ type JourneyDefinition struct {
 	Channel      string        `json:"channel"`
 	ConnectionID *uuid.UUID    `json:"connection_id,omitempty"`
 	Trigger      string        `json:"trigger"`
+	EntryCTA     string        `json:"entry_cta,omitempty"`
 	Start        string        `json:"start"`
 	TTLMinutes   int           `json:"ttl_minutes"`
 	Steps        []JourneyStep `json:"steps"`
@@ -40,40 +44,53 @@ type JourneyOption struct {
 	Next  string `json:"next,omitempty"`
 }
 
+type JourneyPosition struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
 type JourneyStep struct {
-	Key               string          `json:"key"`
-	Kind              string          `json:"kind"`
-	Title             string          `json:"title"`
-	Text              string          `json:"text"`
-	Help              string          `json:"help"`
-	Required          bool            `json:"required"`
-	Locked            bool            `json:"locked"`
-	AnswerType        string          `json:"answer_type"`
-	Presentation      string          `json:"presentation"`
-	Destination       string          `json:"destination,omitempty"`
-	Source            string          `json:"source"`
-	Options           []JourneyOption `json:"options"`
-	Min               *float64        `json:"min,omitempty"`
-	Max               *float64        `json:"max,omitempty"`
-	MaxLength         int             `json:"max_length"`
-	RetryMessage      string          `json:"retry_message"`
-	MaxRetries        int             `json:"max_retries"`
-	Next              string          `json:"next"`
-	Failure           string          `json:"failure"`
-	ConditionField    string          `json:"condition_field,omitempty"`
-	ConditionOperator string          `json:"condition_operator,omitempty"`
-	ConditionValue    string          `json:"condition_value,omitempty"`
-	VisibleWhen       string          `json:"visible_when,omitempty"`
-	AnalyticsLabel    string          `json:"analytics_label"`
+	Position          *JourneyPosition `json:"position,omitempty"`
+	Key               string           `json:"key"`
+	Kind              string           `json:"kind"`
+	Title             string           `json:"title"`
+	Text              string           `json:"text"`
+	Help              string           `json:"help"`
+	Required          bool             `json:"required"`
+	Locked            bool             `json:"locked"`
+	AnswerType        string           `json:"answer_type"`
+	Presentation      string           `json:"presentation"`
+	Destination       string           `json:"destination,omitempty"`
+	Source            string           `json:"source"`
+	Options           []JourneyOption  `json:"options"`
+	Min               *float64         `json:"min,omitempty"`
+	Max               *float64         `json:"max,omitempty"`
+	MaxLength         int              `json:"max_length"`
+	RetryMessage      string           `json:"retry_message"`
+	MaxRetries        int              `json:"max_retries"`
+	Next              string           `json:"next"`
+	Failure           string           `json:"failure"`
+	ConditionField    string           `json:"condition_field,omitempty"`
+	ConditionOperator string           `json:"condition_operator,omitempty"`
+	ConditionValue    string           `json:"condition_value,omitempty"`
+	VisibleWhen       string           `json:"visible_when,omitempty"`
+	AnalyticsLabel    string           `json:"analytics_label"`
+}
+
+type ChannelJourneyDefault struct {
+	JourneyID uuid.UUID `json:"journey_id"`
+	VersionID uuid.UUID `json:"version_id"`
+	Mode      string    `json:"mode"`
 }
 
 type JourneyDetail struct {
-	Bot        Bot                    `json:"journey"`
-	Version    BotVersion             `json:"version"`
-	Definition JourneyDefinition      `json:"definition"`
-	Versions   []BotVersion           `json:"versions"`
-	Binding    *JourneyBinding        `json:"binding,omitempty"`
-	Deployment *JourneyFlowDeployment `json:"deployment,omitempty"`
+	ChannelDefault *ChannelJourneyDefault `json:"channel_default,omitempty"`
+	Bot            Bot                    `json:"journey"`
+	Version        BotVersion             `json:"version"`
+	Definition     JourneyDefinition      `json:"definition"`
+	Versions       []BotVersion           `json:"versions"`
+	Binding        *JourneyBinding        `json:"binding,omitempty"`
+	Deployment     *JourneyFlowDeployment `json:"deployment,omitempty"`
 }
 
 type JourneyBinding struct {
@@ -84,6 +101,7 @@ type JourneyBinding struct {
 	ConnectionID   *uuid.UUID `gorm:"type:uuid;uniqueIndex:idx_journey_route" json:"connection_id,omitempty"`
 	Mode           string     `json:"mode"`
 	Trigger        string     `gorm:"uniqueIndex:idx_journey_route" json:"trigger"`
+	EntryCTA       string     `json:"entry_cta,omitempty"`
 	Paused         bool       `json:"paused"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
@@ -208,6 +226,24 @@ func (s *Service) GetJourney(ctx context.Context, actor auth.CurrentUser, botID 
 		detail.Binding = &binding
 	} else if err != gorm.ErrRecordNotFound {
 		return detail, err
+	}
+	if connection := detail.Definition.ConnectionID; connection != nil {
+		var channel core.Channel
+		if err := s.db.WithContext(ctx).Select("config").Where("organization_id = ? AND id = ?", actor.OrganizationID, *connection).Find(&channel).Error; err != nil {
+			return detail, err
+		}
+		var cfg struct {
+			ID uuid.UUID `json:"default_journey_id"`
+		}
+		if json.Unmarshal([]byte(channel.Config), &cfg) == nil && cfg.ID != uuid.Nil {
+			var active JourneyBinding
+			err := s.db.WithContext(ctx).Where("organization_id = ? AND connection_id = ? AND bot_id = ? AND paused = ?", actor.OrganizationID, *connection, cfg.ID, false).First(&active).Error
+			if err == nil {
+				detail.ChannelDefault = &ChannelJourneyDefault{JourneyID: active.BotID, VersionID: active.VersionID, Mode: active.Mode}
+			} else if err != gorm.ErrRecordNotFound {
+				return detail, err
+			}
+		}
 	}
 	var deployment JourneyFlowDeployment
 	if err := s.db.WithContext(ctx).Where("organization_id = ? AND version_id = ?", actor.OrganizationID, version.ID).Order("updated_at DESC").First(&deployment).Error; err == nil {
@@ -360,8 +396,14 @@ func validateJourneyInput(d JourneyDefinition) error {
 	if !journeyKey.MatchString(d.Trigger) {
 		return httperror.BadRequest("Use a lowercase entry keyword with letters, numbers or underscores")
 	}
+	if utf8.RuneCountInString(d.EntryCTA) > 20 || strings.IndexFunc(d.EntryCTA, unicode.IsControl) >= 0 || journeyMarkup.MatchString(d.EntryCTA) {
+		return httperror.BadRequest("Use a plain entry button label of up to 20 characters")
+	}
 	keys := map[string]bool{}
 	for _, j := range d.Steps {
+		if p := j.Position; p != nil && (math.IsNaN(p.X) || math.IsNaN(p.Y) || math.Abs(p.X) > 100000 || math.Abs(p.Y) > 100000) {
+			return httperror.BadRequest("Node position is outside the canvas")
+		}
 		if !journeyKey.MatchString(j.Key) || keys[j.Key] {
 			return httperror.BadRequest("Steps need unique stable identifiers")
 		}
@@ -691,13 +733,32 @@ func (s *Service) PublishJourney(ctx context.Context, actor auth.CurrentUser, ve
 		if _, err := service.PublishVersion(ctx, actor, versionID); err != nil {
 			return err
 		}
-		b := JourneyBinding{ID: uuid.New(), OrganizationID: actor.OrganizationID, BotID: botID, VersionID: versionID, ConnectionID: d.ConnectionID, Mode: d.Mode, Trigger: defaultString(d.Trigger, d.Category)}
-		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "bot_id"}}, DoUpdates: clause.AssignmentColumns([]string{"version_id", "connection_id", "mode", "trigger", "paused", "updated_at"})}).Create(&b).Error
+		b := JourneyBinding{ID: uuid.New(), OrganizationID: actor.OrganizationID, BotID: botID, VersionID: versionID, ConnectionID: d.ConnectionID, Mode: d.Mode, EntryCTA: strings.TrimSpace(d.EntryCTA), Trigger: defaultString(d.Trigger, d.Category)}
+		return saveJourneyBinding(tx, b)
 	})
 	if err != nil {
 		return JourneyDetail{}, err
 	}
 	return s.GetJourney(ctx, actor, botID, &versionID)
+}
+
+// Serializing writes on the channel lets concurrent publishers receive a merchant-facing
+// conflict while the unique binding index remains the final database invariant.
+func saveJourneyBinding(tx *gorm.DB, b JourneyBinding) error {
+	if b.ConnectionID != nil {
+		var channel core.Channel
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ? AND organization_id = ?", *b.ConnectionID, b.OrganizationID).First(&channel).Error; err != nil {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&JourneyBinding{}).Where("organization_id = ? AND connection_id = ? AND trigger = ? AND bot_id <> ?", b.OrganizationID, *b.ConnectionID, b.Trigger, b.BotID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return httperror.BadRequest("This entry keyword belongs to another journey on this channel. Choose a different keyword.")
+		}
+	}
+	return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "bot_id"}}, DoUpdates: clause.AssignmentColumns([]string{"version_id", "connection_id", "mode", "trigger", "entry_cta", "paused", "updated_at"})}).Create(&b).Error
 }
 
 func (s *Service) checkJourneyConnection(ctx context.Context, actor auth.CurrentUser, d JourneyDefinition, versionID uuid.UUID) error {
@@ -757,8 +818,8 @@ func (s *Service) ActivateJourney(ctx context.Context, actor auth.CurrentUser, b
 		if err := tx.Where("organization_id = ? AND bot_id = ? AND version_id = ?", actor.OrganizationID, botID, versionID).First(&snapshot).Error; err != nil {
 			return httperror.BadRequest("Published snapshot is missing")
 		}
-		b := JourneyBinding{ID: uuid.New(), OrganizationID: actor.OrganizationID, BotID: botID, VersionID: versionID, ConnectionID: d.ConnectionID, Mode: mode, Trigger: defaultString(d.Trigger, d.Category), Paused: paused}
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "bot_id"}}, DoUpdates: clause.AssignmentColumns([]string{"version_id", "connection_id", "trigger", "mode", "paused", "updated_at"})}).Create(&b).Error; err != nil {
+		b := JourneyBinding{ID: uuid.New(), OrganizationID: actor.OrganizationID, BotID: botID, VersionID: versionID, ConnectionID: d.ConnectionID, Mode: mode, EntryCTA: strings.TrimSpace(d.EntryCTA), Trigger: defaultString(d.Trigger, d.Category), Paused: paused}
+		if err := saveJourneyBinding(tx, b); err != nil {
 			return err
 		}
 		if err := tx.Model(&Bot{}).Where("organization_id = ? AND id = ?", actor.OrganizationID, botID).Updates(map[string]any{"published_version_id": versionID, "status": BotStatusActive}).Error; err != nil {
@@ -862,4 +923,22 @@ func (s *Service) SetDefaultJourney(ctx context.Context, actor auth.CurrentUser,
 		return JourneyDetail{}, err
 	}
 	return s.GetJourney(ctx, actor, botID, nil)
+}
+
+func JourneyEntryLabel(mode, configured, trigger string) string {
+	if label := strings.TrimSpace(configured); label != "" {
+		return label
+	}
+	switch mode {
+	case "ai":
+		return "Ask a question"
+	case "automated_commerce":
+		return "Place an order"
+	case "guided_questions":
+		return "Guided order"
+	case "whatsapp_flow":
+		return "Open order form"
+	default:
+		return strings.Title(strings.ReplaceAll(trigger, "_", " "))
+	}
 }

@@ -571,7 +571,7 @@ func (s *Service) journeyOptions(ctx context.Context, j bot.JourneyStep, rctx Ru
 			return nil, err
 		}
 		for _, row := range rows {
-			add(row.Trigger, strings.Title(strings.ReplaceAll(row.Trigger, "_", " ")))
+			add(row.Trigger, bot.JourneyEntryLabel(row.Mode, row.EntryCTA, row.Trigger))
 		}
 		add("__ai", "Product or policy question")
 		add("__human", "Human support")
