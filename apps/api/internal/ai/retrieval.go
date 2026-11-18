@@ -279,6 +279,26 @@ func (r retrievalEngine) BuildGrounding(ctx context.Context, session runtime.Con
 			}
 		}
 	}
+	if plan.Stores && !plan.Inventory && (strings.Contains(normalizedText, "pickup") || strings.Contains(normalizedText, "pick up")) {
+		eligible := map[uuid.UUID]bool{}
+		for _, store := range stores {
+			for _, mode := range store.FulfilmentModes {
+				if mode.Mode == "pickup" && mode.Enabled {
+					eligible[store.ID] = true
+				}
+			}
+		}
+		filtered := grounding.Stores[:0]
+		for _, store := range grounding.Stores {
+			if eligible[store.ID] {
+				filtered = append(filtered, store)
+			}
+		}
+		grounding.Stores = filtered
+		if len(filtered) == 0 {
+			grounding.Unknowns = append(grounding.Unknowns, UnknownFact{Kind: "location", Detail: "No active matching store has pickup enabled"})
+		}
+	}
 	if plan.Inventory {
 		if grounding.Resolved.StoreStatus == ResolutionNoMatch {
 			grounding.Unknowns = append(grounding.Unknowns, UnknownFact{Kind: "inventory", Detail: "Inventory was not checked because the requested store or branch was not found"})

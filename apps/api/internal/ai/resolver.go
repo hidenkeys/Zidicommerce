@@ -281,11 +281,23 @@ func groundedProduct(product core.Product, score float64) GroundedProduct {
 
 func rankStores(text string, stores []core.Store) []GroundedStore {
 	matches := []GroundedStore{}
+	// Common nouns in a branch name (e.g. "Staging QA Store") are not evidence
+	// of a specific location. Keep location-bearing words such as "Lekki".
+	tokens := strings.Fields(text)
+	names := tokens[:0]
+	for _, word := range tokens {
+		switch word {
+		case "store", "stores", "branch", "branches", "location", "locations", "where", "which", "what", "is", "are", "the", "a", "at", "in", "your", "do", "you", "can", "i", "offer", "pickup", "pick", "up":
+			continue
+		}
+		names = append(names, word)
+	}
+	query := strings.Join(names, " ")
 	for _, store := range stores {
 		if store.Status != core.StatusActive {
 			continue
 		}
-		score := scoreText(text, store.Name+" "+store.Code+" "+store.Address+" "+store.City)
+		score := scoreText(query, store.Name+" "+store.Code+" "+store.Address+" "+store.City)
 		if score > 0 {
 			matches = append(matches, GroundedStore{ID: store.ID, Name: store.Name, Code: store.Code, Address: store.Address, City: store.City, Score: score})
 		}

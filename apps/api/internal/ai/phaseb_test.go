@@ -311,3 +311,26 @@ func TestLiveGroqGroundedPipelineSmoke(t *testing.T) {
 		t.Fatalf("expected grounded price in Groq response or deterministic fallback, got %q", response.Message.Body)
 	}
 }
+
+func TestPickupDirectoryUsesEnabledStoresAndIgnoresGenericNames(t *testing.T) {
+	fx := newPhaseBFixture(t)
+	for _, name := range []string{"Bing Chun Mall", "Staging QA Store"} {
+		store := core.Store{ID: uuid.New(), OrganizationID: fx.orgID, Name: name, Code: uuid.NewString(), Status: core.StatusActive, Metadata: "{}"}
+		if err := fx.db.Create(&store).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := fx.db.Create(&core.StoreFulfilmentMode{ID: uuid.New(), OrganizationID: fx.orgID, StoreID: store.ID, Mode: "pickup", Enabled: true, Metadata: "{}"}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	engine := newRetrievalEngine(fx.db, core.NewService(fx.db, nil))
+	facts, _, err := engine.BuildGrounding(context.Background(), runtime.ConversationSession{OrganizationID: fx.orgID}, "Which stores offer pickup?", AIConversationState{}, SecurityDecision{})
+	if err != nil || len(facts.Stores) != 2 {
+		t.Fatalf("eligible stores: %+v %v", facts.Stores, err)
+	}
+	for _, store := range facts.Stores {
+		if store.ID == fx.storeID {
+			t.Fatal("returned store without pickup")
+		}
+	}
+}
