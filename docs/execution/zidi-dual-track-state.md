@@ -3,7 +3,7 @@
 Branch: codex/controlled-beta-release-20261111. Baseline: c57e89c.
 
 ## Staging deployments
-Railway staging API 38ccbbca-600f-4e95-94ec-570855d4aa4e is online at checkpoint 411c8a1. Admin baseline e2613463-09e5-4cb3-9457-4ac26add38d7 is online. Database health OK.
+Railway staging API bde4705a-8fa4-4cd8-8478-62311f796b6e runs bd1a4bb. Admin 350c8d14-1bf7-4025-84e6-094e31b18da7 runs 89c6de5. Both deployments succeeded. The public staging API health endpoint returned database OK.
 
 ## Contracts and decisions
 Preserve journey and version schemas, tenant scope, immutable published versions, existing permissions and audits. Studio edits draft graphs through existing journey APIs. New required APIs and migrations must be documented before integration. Only designated staging WhatsApp recipient and Paystack test payments.
@@ -48,6 +48,8 @@ Current merchant data verified in real staging Admin. Catalogue showed 30 cards,
 
 Native order ZC-20261118-8E0A1350: verified a single payment.confirmed external event with webhook_event_id (commerce event 89cad535-e6eb-4113-b704-f3c6a2932adf), then processed, marked ready and completed simulated pickup via real Admin. Reopened exact order after each transition. Staging DB showed four lifecycle notifications sent on first attempt with outbound IDs on the designated channel. Two separate generic workflow actions were queued with zero attempts; the store action had no recipient and the customer action had one. Passed this discrepancy to functional track.
 
+Revised-receipt guided checkout ZC-20261118-BBC529B5: real Admin processed, marked ready, and completed after the signed webhook (commerce event d41572b1-4ea8-4950-b056-fe682adf56aa). Staging DB verified one correction prompt and one inbound revised email after order creation, one order for its checkout key, one paid payment matching the order total, one processed provider webhook and four notifications sent on the first attempt.
+
 ## Integration, blockers, tests and remaining work
 
 - Real designated WhatsApp AI answered Strawberry Lemon Tea at NGN 3,600. Staff handoff paused AI, and release resumed it in the same chat. Explicit `guided` and `order` switched journeys without losing history.
@@ -55,4 +57,4 @@ Native order ZC-20261118-8E0A1350: verified a single payment.confirmed external 
 - Automated order ZC-20261118-59ADA6B0: full customer path from keyword to generated Paystack TEST checkout, same product and price. Webhook confirmed payment without using Check payment. Checkout returned to the staging Zidi page. Processing, ready and completed verified in Admin and in WhatsApp.
 - Native provider Flow 1157152806762991 is published. The real keyword selected its published Zidi version. Meta delivered the CTA at 07:49:34 Lagos. The designated tester completed the native screens, generating 2 accepted INIT requests, 12 accepted encrypted data exchanges, 12 persisted answer receipts and one FINISH. The signed Meta completion callback was persisted and processed exactly once at 07:55:24 Lagos. One new tenant-scoped pickup order ZC-20261118-8E0A1350 (NGN 2,400) was linked to the conversation and completed.
 - Recovery passed using PostgreSQL and a test mailbox. Real staging email delivery requires SMTP and a designated test inbox. Sign-in, signup and first workspace passed through staging UI. Scope limited to staging.
-- Go suite, race suite, API build, Admin component tests and build passed at integrated checkpoints. Final Gateway evaluation, native submission, checkout retry and staging rollout evidence remain under verification.
+- Go suite, race suite, API build, Admin component tests and build passed at integrated checkpoints. The final integrated API race suite and build passed at bd1a4bb. Gateway evaluation passed 105/105. The designated customer also completed the guided receipt-email retry without staff intervention. Native Flow and corrected guided orders each received all four lifecycle messages. Two older generic native notifications that had no work scheduled were reconciled as skipped. Custom addressed journey notifications now enqueue a delivery job in the same transaction. Live email delivery is the remaining external check.
