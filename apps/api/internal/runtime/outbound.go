@@ -222,6 +222,19 @@ func (s *Service) sendOutboundNow(ctx context.Context, organizationID, deliveryI
 		return jobs.PermanentError{Err: err}
 	}
 	message := outboundMessageFromPayload(delivery.MessageType, payload)
+	if message.Type == "flow" {
+		var active int64
+		token := stringValue(message.Metadata["flow_token"])
+		if delivery.SessionID != nil && token != "" {
+			err := s.db.WithContext(ctx).Model(&JourneyFlowSession{}).Where("organization_id = ? AND connection_id = ? AND conversation_id = ? AND token_hash = ? AND expires_at > ?", delivery.OrganizationID, delivery.ChannelID, *delivery.SessionID, flowTokenHash(token), s.now()).Count(&active).Error
+			if err != nil {
+				return err
+			}
+		}
+		if active == 0 {
+			return s.db.WithContext(ctx).Model(&delivery).Updates(map[string]any{"status": OutboundSkipped, "error_message": "Flow launch expired or superseded", "next_attempt_at": nil, "updated_at": s.now()}).Error
+		}
+	}
 	sendCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	providerResult, err := sender.Send(sendCtx, channel, delivery.Recipient, message, payload, delivery.IdempotencyKey)
 	cancel()
@@ -345,11 +358,28 @@ func (s *Service) ListOutboundMessages(ctx context.Context, organizationID uuid.
 	}
 	var rows []ChannelOutboundMessage
 	err := s.db.WithContext(ctx).Where("organization_id = ?", organizationID).Order("created_at DESC").Limit(limit).Find(&rows).Error
+	for i := range rows {
+		if rows[i].MessageType == "flow" {
+			payload := parseJSONMap(rows[i].Payload)
+			if metadata, ok := payload["metadata"].(map[string]any); ok {
+				delete(metadata, "flow_token")
+			}
+			rows[i].Payload = jsonValue(payload)
+		}
+	}
 	return rows, err
 }
 
 func (s *Service) channelPayload(_ core.Channel, recipient string, message OutboundMessage) map[string]any {
-	return map[string]any{"to": recipient, "type": message.Type, "text": message.Text, "options": message.Options, "media_url": message.MediaURL}
+	payload := map[string]any{"to": recipient, "type": message.Type, "text": message.Text, "options": message.Options, "media_url": message.MediaURL}
+	if message.Type == "flow" {
+		metadata := make(map[string]any, 4)
+		for _, key := range []string{"flow_id", "flow_token", "flow_cta", "flow_action"} {
+			metadata[key] = message.Metadata[key]
+		}
+		payload["metadata"] = metadata
+	}
+	return payload
 }
 
 func outboundMessageFromPayload(messageType string, payload map[string]any) OutboundMessage {

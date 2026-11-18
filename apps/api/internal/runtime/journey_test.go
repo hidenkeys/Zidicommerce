@@ -873,3 +873,59 @@ func TestReopenNativeFlowResumesPinnedStepAndExpiresOldToken(t *testing.T) {
 		previous = flowTokenHash(stringValue(r.Messages[0].Metadata["flow_token"]))
 	}
 }
+
+func TestFlowOutboxPreservesLaunchFieldsAndSkipsSupersededRetries(t *testing.T) {
+	fx, d := journeyFixture(t, "support")
+	ctx := context.Background()
+	session := ConversationSession{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, ChannelID: fx.channel.ID, BotVersionID: d.Version.ID}
+	deployment := bot.JourneyFlowDeployment{ID: uuid.New(), OrganizationID: session.OrganizationID, BotID: d.Bot.ID, VersionID: session.BotVersionID, ConnectionID: session.ChannelID, ProviderFlowID: "provider-flow", Status: "published"}
+	if err := fx.db.Create(&deployment).Error; err != nil {
+		t.Fatal(err)
+	}
+	sender := &MockChannelSender{Errors: []error{fmt.Errorf("provider temporarily unavailable")}}
+	fx.service.RegisterChannelSender("test", sender)
+	for _, reopen := range []bool{false, true} {
+		msg, err := fx.service.launchJourneyFlow(ctx, session, "Open form")
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg.Metadata["private"] = "omit-this"
+		del := ChannelOutboundMessage{ID: uuid.New(), OrganizationID: session.OrganizationID, ChannelID: session.ChannelID, SessionID: &session.ID, Recipient: "test-user", Provider: "test", MessageType: "flow", Status: OutboundQueued, Payload: jsonValue(fx.service.channelPayload(fx.channel, "test-user", msg)), ProviderResponse: "{}", IdempotencyKey: uuid.NewString()}
+		if err := fx.db.Create(&del).Error; err != nil {
+			t.Fatal(err)
+		}
+		if !reopen && fx.service.sendOutboundNow(ctx, session.OrganizationID, del.ID, 1, 5) == nil {
+			t.Fatal("expected retry")
+		}
+		if reopen {
+			if _, err := fx.service.launchJourneyFlow(ctx, session, "Reopen"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := fx.service.sendOutboundNow(ctx, session.OrganizationID, del.ID, 2, 5); err != nil {
+			t.Fatal(err)
+		}
+		for _, attempt := range sender.Sent {
+			out := outboundMessageFromPayload("flow", attempt["payload"].(map[string]any))
+			cmd := ChannelOutboundCommand("whatsapp", session.ChannelID, &session.ID, "test-user", "", out, "")
+			if !reopen && (len(cmd.Metadata) != 4 || cmd.Metadata["flow_token"] != msg.Metadata["flow_token"] || cmd.Metadata["flow_id"] != "provider-flow" || cmd.Metadata["flow_cta"] != "Open form" || cmd.Metadata["flow_action"] != "data_exchange") {
+				t.Fatal("incomplete provider command")
+			}
+		}
+		if len(sender.Sent) != 2 {
+			t.Fatal("unexpected number of provider attempts")
+		}
+		rows, err := fx.service.ListOutboundMessages(ctx, session.OrganizationID, 100)
+		if err != nil || len(rows) == 0 {
+			t.Fatalf("list deliveries: %v", err)
+		}
+		for _, row := range rows {
+			if strings.Contains(row.Payload, "flow_token") || strings.Contains(row.Payload, "omit-this") {
+				t.Fatal("delivery list exposed private metadata")
+			}
+			if reopen && row.ID == del.ID && row.Status != OutboundSkipped {
+				t.Fatal("superseded delivery not skipped")
+			}
+		}
+	}
+}
