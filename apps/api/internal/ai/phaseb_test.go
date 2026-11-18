@@ -334,3 +334,22 @@ func TestPickupDirectoryUsesEnabledStoresAndIgnoresGenericNames(t *testing.T) {
 		}
 	}
 }
+
+func TestPublishedCustomFAQIsFreshOutsideIntentVocabulary(t *testing.T) {
+	fx := newPhaseBFixture(t)
+	ctx := context.Background()
+	entry := bot.KnowledgeEntry{ID: uuid.New(), OrganizationID: fx.orgID, Kind: "faq", Category: "general", Title: "Workspace identifier", Question: "What is the staging QA code?", Answer: "The staging QA code is CERULEAN-42.", Keywords: "[]", Metadata: "{}", Status: "active"}
+	if err := fx.db.Create(&entry).Error; err != nil {
+		t.Fatal(err)
+	}
+	engine := newRetrievalEngine(fx.db, core.NewService(fx.db, nil))
+	for _, answer := range []string{entry.Answer, "The staging QA code is TURQUOISE-19."} {
+		if err := fx.db.Model(&entry).Update("answer", answer).Error; err != nil {
+			t.Fatal(err)
+		}
+		g, _, err := engine.BuildGrounding(ctx, runtime.ConversationSession{OrganizationID: fx.orgID}, entry.Question, AIConversationState{}, SecurityDecision{})
+		if err != nil || len(g.FAQs) != 1 || g.FAQs[0].Answer != answer {
+			t.Fatalf("missing current custom FAQ: %+v %v", g.FAQs, err)
+		}
+	}
+}

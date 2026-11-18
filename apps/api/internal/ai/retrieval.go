@@ -223,6 +223,22 @@ func (r retrievalEngine) BuildGrounding(ctx context.Context, session runtime.Con
 		grounding.Unknowns = append(grounding.Unknowns, UnknownFact{Kind: "out_of_scope", Detail: "Question is outside merchant customer-service scope"})
 		return grounding, grounding.Unknowns, nil
 	}
+	// A merchant can publish a question outside our built-in intent vocabulary.
+	// Enable normal knowledge ranking for an exact active FAQ while leaving
+	// commerce, security, conflict detection and tenant scoping authoritative.
+	if !plan.FAQ && !plan.Inventory && !plan.Orders && !plan.Stores && !needsCommerce(normalizeAIText(text)) {
+		q := strings.ToLower(strings.TrimSpace(text))
+		var exists bool
+		err := r.db.WithContext(ctx).Raw(`SELECT EXISTS (SELECT 1 FROM merchant_knowledge_entries WHERE organization_id = ? AND status = 'active' AND LOWER(question) = ?)
+            OR EXISTS (SELECT 1 FROM bot_faqs WHERE organization_id = ? AND status = 'active' AND LOWER(question) = ?)`, session.OrganizationID, q, session.OrganizationID, q).Scan(&exists).Error
+		if err != nil {
+			return GroundingContext{}, nil, err
+		}
+		if exists {
+			plan = retrievalPlan{Intent: IntentFAQ, FAQ: true}
+			grounding.Intent = plan.Intent
+		}
+	}
 	actor := auth.CurrentUser{ID: uuid.Nil, OrganizationID: session.OrganizationID, Role: authz.MerchantAdmin}
 	var products []core.Product
 	var stores []core.Store
