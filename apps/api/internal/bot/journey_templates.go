@@ -3,6 +3,11 @@ package bot
 func JourneyTemplates() []map[string]string {
 	return []map[string]string{
 		{"id": "order", "name": "Product ordering", "description": "Store, catalogue, cart, verified payment and fulfilment."},
+		{"id": "guided_order", "name": "Guided ordering", "description": "Guide shoppers into ordering, tracking or human support."},
+		{"id": "product_enquiry", "name": "Product enquiry", "description": "Answer questions using the merchant catalogue and approved knowledge."},
+		{"id": "store_locator", "name": "Store locator", "description": "Show customers the address of an active store."},
+		{"id": "returns_request", "name": "Returns request", "description": "Capture return details for a staff member to review."},
+		{"id": "blank", "name": "Blank journey", "description": "Build from a single ending."},
 		{"id": "track_order", "name": "Order tracking", "description": "Let customers check their own orders."},
 		{"id": "complaint", "name": "Complaint submission", "description": "Collect an issue and hand it to your team."},
 		{"id": "support", "name": "Human support", "description": "Connect customers with a team member."},
@@ -35,6 +40,29 @@ func JourneyTemplate(category string) (JourneyDefinition, bool) {
 	handoff := JourneyStep{Key: "handoff", Kind: "handoff", Title: "Human support", Text: "A team member will help you with this request."}
 	end := JourneyStep{Key: "end", Kind: "end", Title: "Finish", Text: "Thank you. You can send menu to start again."}
 	switch category {
+	case "guided_order":
+		d, _ = JourneyTemplate("order")
+		d.Name, d.Mode, d.Trigger = "Guided ordering", "guided_questions", "guided"
+		d.Steps[0].Next = "goal"
+		goal := question("goal", "Customer goal", "How can we help today?", "buttons", "goal", "", "store")
+		goal.Options = []JourneyOption{{ID: "buy", Label: "Place an order", Value: "buy", Next: "store"}, {ID: "track", Label: "Tracking help", Value: "tracking_help", Next: "tracking_handoff"}, {ID: "support", Label: "Talk to staff", Value: "support", Next: "handoff"}}
+		d.Steps = append(d.Steps, goal, JourneyStep{Key: "tracking_handoff", Kind: "handoff", Title: "Order tracking help", Text: "A team member will help with your existing order."})
+	case "blank":
+		d.Name, d.Category, d.Trigger, d.Start = "Blank journey", "custom", "start_flow", "end"
+		d.Steps = []JourneyStep{end}
+	case "product_enquiry":
+		d, _ = JourneyTemplate("catalogue")
+		d.Name, d.Mode, d.Trigger = "Product enquiry", "ai", "ask"
+		d.Steps[0].Text = "What would you like to know about our products, prices or availability?"
+	case "returns_request":
+		d, _ = JourneyTemplate("support")
+		d.Name, d.Trigger = "Returns request", "returns"
+		d.Steps[0].Text = "Our team can review a return request."
+		d.Steps[1].Text = "Which order or item would you like to return, and why?"
+	case "store_locator":
+		d.Name, d.Category, d.Trigger = "Store locator", "custom", "locations"
+		d.Steps = []JourneyStep{message("welcome", "Welcome", "Find an active store near you.", "store"), question("store", "Store", "Which location would you like to visit?", "store_selector", "store_id", "stores", "address"), message("address", "Location", "{{store_location}}", "end"), handoff, end}
+
 	case "order":
 		d.Name = "Product ordering"
 		d.Purpose = "Help customers place and pay for an order safely."

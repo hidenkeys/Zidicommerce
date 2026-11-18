@@ -304,6 +304,23 @@ func (s *Service) executeJourney(ctx context.Context, config bot.VersionConfigur
 					variables[defaultString(j.Destination, "answer_"+j.Key)] = value
 					system["journey_page"] = 0
 					if j.Source == "stores" {
+						storeID, err := uuid.Parse(stringValue(value))
+						if err != nil {
+							return result, httperror.BadRequest("Store is unavailable")
+						}
+						merchant := auth.CurrentUser{OrganizationID: session.OrganizationID, Role: authz.MerchantAdmin}
+						store, err := s.commerce.GetStore(ctx, merchant, storeID)
+						if err != nil {
+							return result, err
+						}
+						if store.Status != core.StatusActive {
+							return result, httperror.BadRequest("This store is no longer active")
+						}
+						location := strings.TrimSpace(store.Address)
+						if location == "" {
+							location = "Address unavailable. Contact the merchant before visiting."
+						}
+						variables["store_location"] = store.Name + " — " + location
 						delete(variables, "category_id")
 						delete(variables, "product_id")
 						delete(variables, "variant_id")

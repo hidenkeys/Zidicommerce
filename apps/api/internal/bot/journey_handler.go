@@ -20,6 +20,13 @@ func (h *Handler) registerJourneys(router fiber.Router) {
 		return u.OrganizationID.String() + ":" + u.ID.String() + ":" + c.Path()
 	}})
 	router.Get("/journeys/templates", view, func(c *fiber.Ctx) error { return respond(c, JourneyTemplates(), nil) })
+	router.Get("/journeys/templates/:id", view, func(c *fiber.Ctx) error {
+		definition, found := JourneyTemplate(c.Params("id"))
+		if !found {
+			return httperror.NotFound("Journey template not found")
+		}
+		return respond(c, definition, nil)
+	})
 	router.Get("/journeys/step-library", view, func(c *fiber.Ctx) error { return respond(c, JourneyStepLibrary(), nil) })
 	router.Get("/journeys", view, func(c *fiber.Ctx) error {
 		data, err := h.service.ListJourneys(c.UserContext(), currentUser(c))

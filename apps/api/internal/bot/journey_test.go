@@ -61,6 +61,12 @@ func TestJourneyTemplatesAndCompiler(t *testing.T) {
 				t.Fatalf("invalid template: %+v", v.Issues)
 			}
 			c := CompileJourneyFlow(d)
+			if template["id"] == "blank" {
+				if len(c.Errors) != 1 || c.Errors[0].Message != "A Flow needs at least one customer input screen" {
+					t.Fatalf("blank native Flow needs input: %+v", c.Errors)
+				}
+				return
+			}
 			if template["id"] == "entry_menu" {
 				if len(c.Errors) == 0 {
 					t.Fatal("cross-journey menu must explicitly use guided chat")
