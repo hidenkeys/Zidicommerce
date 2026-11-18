@@ -73,6 +73,9 @@ type JourneyPreviewResult struct {
 	Variables   map[string]any   `json:"variables,omitempty"`
 	Controlled  bool             `json:"controlled_test"`
 }
+
+const paymentRetryEmail = "__payment_retry_email"
+
 type JourneyAnswer struct {
 	EventID     string       `json:"event_id"`
 	Turn        string       `json:"turn"`
@@ -266,6 +269,17 @@ func (s *Service) executeJourney(ctx context.Context, config bot.VersionConfigur
 		appendText("This journey has ended. Send menu to start again.")
 		return result, nil
 	}
+	// A confirmed rejection has no checkout at the provider. Keep the order and the
+	// current payment node, so correcting an email cannot rerun cart or order creation.
+	if session.ExpectedInput == paymentRetryEmail {
+		address, err := mail.ParseAddress(strings.TrimSpace(input.Text))
+		if err != nil || address.Address != strings.TrimSpace(input.Text) {
+			appendText("Enter a valid receipt email address, or ask for human support.")
+			return result, nil
+		}
+		variables["customer_email"] = address.Address
+		session.ExpectedInput = ""
+	}
 	if session.ExpectedInput != "" {
 		step, ok := steps[session.CurrentStepKey]
 		if !ok {
@@ -430,6 +444,12 @@ func (s *Service) executeJourney(ctx context.Context, config bot.VersionConfigur
 			}
 			outputs, err := s.journeyAction(ctx, a, j, rctx, preview)
 			if err != nil {
+				if rejected, ok := err.(httperror.APIError); ok && rejected.Code == core.CheckoutEmailRejected && j.Kind == "payment" && system["journey_mode"] != "whatsapp_flow" && int64Value(system["journey_email_rejections"]) < 2 {
+					system["journey_email_rejections"] = int64Value(system["journey_email_rejections"]) + 1
+					session.ExpectedInput = paymentRetryEmail
+					appendText("Paystack could not accept the receipt email. Send a different email address to get a payment link for this same order.")
+					return result, nil
+				}
 				appendText("We could not complete this step. Your order and payment status have not been assumed.")
 				if j.Failure == "" {
 					session.Status = SessionHandoff

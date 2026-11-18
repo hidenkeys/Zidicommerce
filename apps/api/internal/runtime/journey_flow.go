@@ -258,7 +258,7 @@ func (s *Service) selectJourneyEntry(ctx context.Context, session *ConversationS
 		return nil, err
 	}
 	session.BotID, session.BotVersionID, session.CurrentStepKey, session.ExpectedInput = binding.BotID, binding.VersionID, config.Version.StartStepKey, ""
-	for _, key := range []string{"journey_options", "journey_history", "journey_turn", "journey_retries", "journey_flow_launched"} {
+	for _, key := range []string{"journey_options", "journey_history", "journey_turn", "journey_retries", "journey_flow_launched", "journey_email_rejections", "journey_write_boundary", "journey_page", "stock_checked"} {
 		delete(system, key)
 	}
 	system["journey_mode"], system["bot_id"], system["bot_version_id"] = binding.Mode, binding.BotID.String(), binding.VersionID.String()

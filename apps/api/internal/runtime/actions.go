@@ -13,6 +13,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/organization"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -697,6 +698,9 @@ func (a commerceActions) initializePayment(ctx context.Context, runtimeContext R
 	}
 	payment, err := a.commerce.InitializePayment(ctx, a.actor(runtimeContext), core.PaymentInput{OrderID: orderID, Provider: stringValue(inputs["provider"]), Email: stringValue(inputs["email"]), CallbackURL: stringValue(inputs["callback_url"]), IdempotencyKey: defaultString(stringValue(inputs["idempotency_key"]), "runtime-payment-"+orderID.String()), Source: core.CommerceEventSourceRuntime})
 	if err != nil {
+		if rejected, ok := err.(httperror.APIError); ok && rejected.Code == core.CheckoutEmailRejected {
+			return nil, rejected
+		}
 		return nil, runtimeErrorf(ErrActionFailed, "I could not initialize payment.", "initialize payment failed: %v", err)
 	}
 	return map[string]any{"payment_id": payment.ID.String(), "payment_reference": payment.Reference, "payment_status": payment.Status, "payment_url": payment.AuthorizationURL, "amount_minor": payment.AmountMinor, "currency": payment.Currency, "message": fmt.Sprintf("Use this secure payment link to complete your order:\n%s\n\nAfter payment, we will confirm your order automatically.", payment.AuthorizationURL)}, nil

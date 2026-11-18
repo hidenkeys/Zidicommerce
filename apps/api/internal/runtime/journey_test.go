@@ -9,6 +9,7 @@ import (
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/bot"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/commerce/core"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/httperror"
 	"strings"
 	"testing"
 	"time"
@@ -795,5 +796,51 @@ func TestJourneyCancelOrderUsesAuthoritativeOrderState(t *testing.T) {
 		} else if fresh.Status != core.OrderCancelled || result.SessionStatus != SessionCancelled {
 			t.Fatalf("unpaid order cancellation lost: %s %+v", fresh.Status, result)
 		}
+	}
+}
+
+func TestConfirmedReceiptEmailRejectionRetriesOnlyPayment(t *testing.T) {
+	fx, journey := journeyFixture(t, "order")
+	ctx := context.Background()
+	customer, store, _ := seedCommerce(t, fx)
+	graph, err := bot.NewService(fx.db).GetConfiguration(ctx, fx.actor, journey.Version.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.NewString()
+	session := ConversationSession{ID: uuid.New(), OrganizationID: fx.actor.OrganizationID, BotID: journey.Bot.ID, BotVersionID: journey.Version.ID, CustomerID: &customer.ID, ChannelID: fx.channel.ID, Status: SessionActive, CurrentStepKey: "payment", Variables: jsonValue(map[string]any{"order_id": id, "store_id": store.ID.String(), "customer_email": "invalid@example.test"}), SystemContext: `{"journey_mode":"guided_questions"}`}
+	calls := 0
+	fx.service.actions.Register("initialize_payment", func(_ context.Context, _ RuntimeContext, input map[string]any) (map[string]any, error) {
+		calls++
+		if input["order_id"] != id {
+			t.Fatal("payment used a different order")
+		}
+		if calls == 1 {
+			return nil, httperror.New(400, core.CheckoutEmailRejected, "rejected receipt")
+		}
+		if input["email"] != "buyer@example.com" {
+			t.Fatal("did not pass corrected address")
+		}
+		return map[string]any{"payment_url": "https://example.test/checkout", "message": "Your test link"}, nil
+	})
+	send := func(text string) RuntimeResult {
+		t.Helper()
+		r, e := fx.service.executeJourney(ctx, graph, &session, InboundMessage{Text: text})
+		if e != nil {
+			t.Fatal(e)
+		}
+		return r
+	}
+	send("")
+	if session.ExpectedInput != paymentRetryEmail || calls != 1 {
+		t.Fatal("missing payment email correction")
+	}
+	send("not an email")
+	if calls != 1 {
+		t.Fatal("invalid email reached payment provider")
+	}
+	send("buyer@example.com")
+	if calls != 2 || session.CurrentStepKey != "payment_choice" || session.ExpectedInput != "payment_choice" {
+		t.Fatalf("did not resume existing checkout: calls %d, step %s", calls, session.CurrentStepKey)
 	}
 }

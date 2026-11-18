@@ -29,6 +29,10 @@ func (SafeTestProvider) Verify(_ context.Context, reference string) (PaymentVeri
 	return PaymentVerification{Reference: reference, Paid: true, Status: "success"}, nil
 }
 
+const CheckoutEmailRejected = "CHECKOUT_EMAIL_REJECTED"
+
+var errPaystackEmailRejected = fmt.Errorf("receipt email rejected: %w", errPaystackCheckoutRejected)
+
 var errPaystackCheckoutRejected = errors.New("Paystack rejected checkout details")
 
 type PaystackProvider struct {
@@ -99,6 +103,9 @@ func (p *PaystackProvider) Initialize(ctx context.Context, req PaymentInitialize
 		!strings.Contains(detail, "reference") && !strings.Contains(detail, "duplicate") &&
 		(decoded.Type == "validation_error" || strings.Contains(detail, "invalid email address") ||
 			strings.Contains(detail, "email is not allowed to be empty")) {
+		if strings.Contains(detail, "email") {
+			return PaymentInitializeResponse{}, errPaystackEmailRejected
+		}
 		return PaymentInitializeResponse{}, errPaystackCheckoutRejected
 	}
 	if resp.StatusCode >= 400 || !decoded.Status {

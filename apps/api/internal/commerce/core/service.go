@@ -1220,6 +1220,9 @@ func (s *Service) InitializePayment(ctx context.Context, actor auth.CurrentUser,
 			return Payment{}, release.Error
 		}
 		if release.RowsAffected != 0 {
+			if errors.Is(err, errPaystackEmailRejected) {
+				return Payment{}, httperror.New(400, CheckoutEmailRejected, "Paystack rejected the receipt email address.")
+			}
 			return Payment{}, httperror.BadRequest("Paystack rejected the checkout details. Check them and retry.")
 		}
 	}
