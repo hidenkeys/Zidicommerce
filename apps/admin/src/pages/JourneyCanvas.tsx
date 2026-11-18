@@ -1,8 +1,8 @@
-import { useMemo, useRef, useState } from "react";
-import { GitBranch, Maximize2, Minus, Plus, Wand2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ClipboardPaste, Copy, GitBranch, Link2, Map as MapIcon, Maximize2, Minus, Plus, Wand2 } from "lucide-react";
 
 export type Point = { x: number; y: number };
-type Node = { key: string; title: string; kind: string; next: string; failure: string; options?: { label: string; next?: string }[]; position?: Point };
+type Node = { locked?: boolean; key: string; title: string; kind: string; next: string; failure: string; options?: { label: string; next?: string }[]; position?: Point };
 const width = 196, height = 76;
 function layout(nodes: Node[], start: string) {
   const levels = new Map<string, number>();
@@ -28,26 +28,57 @@ function layout(nodes: Node[], start: string) {
   }));
 }
 
-export function JourneyCanvas({ nodes, start, selected, editable, select, arrange }: {
+export function JourneyCanvas({ nodes, start, selected, editable, select, arrange, paste, connect }: {
   nodes: Node[]; start: string; selected: string; editable: boolean;
+  paste: (keys:string[]) => void; connect: (target:string) => void;
   select: (id: string) => void; arrange: (positions: Record<string, Point>) => void;
 }) {
   const auto = useMemo(() => layout(nodes, start), [nodes, start]);
+  const [multiple,setMultiple] = useState(false);
+  const [picked,setPicked] = useState<string[]>([]);
+  const [copied,setCopied] = useState<string[]>([]);
+  const [linking,setLinking] = useState(false);
+  const [mapOpen,setMapOpen] = useState(false);
+  const [view,setView] = useState({x:0,y:0,w:0,h:0});
   const [zoom, setZoom] = useState(1);
   const [drag, setDrag] = useState<{key:string; origin:Point; mouse:Point; at:Point}>();
   const pan = useRef<{ mouse:Point; x:number; y:number }>();
   const viewport = useRef<HTMLDivElement>(null);
+  useEffect(()=>{
+    const el=viewport.current;
+    if(!el)return;
+    const update=()=>setView({x:el.scrollLeft/zoom,y:el.scrollTop/zoom,w:el.clientWidth/zoom,h:el.clientHeight/zoom});
+    const observer=new ResizeObserver(update);observer.observe(el);
+    el.addEventListener("scroll",update,{passive:true});update();
+    return ()=>{observer.disconnect();el.removeEventListener("scroll",update);};
+  },[zoom]);
+  const group = picked.length ? picked : [selected];
+  const canCopy = editable && group.length > 0 && group.every(key=>nodes.some(n=>n.key===key&&!n.locked));
+  const canConnect=editable && nodes.some(n=>n.key===selected&&!n.locked&&!["handoff","end"].includes(n.kind));
+  function choose(key:string, multiple:boolean) {
+    if(linking){if(key!==selected){connect(key);setLinking(false);}return;}
+    if(multiple){setPicked(prev=>{const base=prev.length?prev:[selected];return base.includes(key)?base.filter(i=>i!==key):[...base,key];});return;}
+    setPicked([]);select(key);
+  }
   const points = Object.fromEntries(nodes.map(node => [node.key, drag?.key === node.key ? drag.at : node.position ?? auto[node.key]]));
   const w = Math.max(600, ...Object.values(points).map(p => p.x + width + 48));
   const h = Math.max(360, ...Object.values(points).map(p => p.y + height + 48));
-  return <section className="flow-canvas" aria-label="Workflow canvas">
+  return <section className="flow-canvas" aria-label="Workflow canvas" onKeyDown={e=>{
+    if(e.key==="Escape"){setLinking(false);setPicked([]);setMultiple(false);}
+    if(!(e.metaKey||e.ctrlKey))return;
+    if(e.key.toLowerCase()==="c"&&canCopy){e.preventDefault();setCopied([...group]);}
+    if(e.key.toLowerCase()==="v"&&editable&&copied.length){e.preventDefault();paste(copied);}
+  }}>
     <header><h2><GitBranch size={16}/>Workflow</h2><div>
       <button aria-label="Zoom out" disabled={zoom <= .2} onClick={() => setZoom(Math.max(.2, zoom - .15))}><Minus size={15}/></button>
       <output>{Math.round(zoom * 100)}%</output>
       <button aria-label="Zoom in" disabled={zoom >= 2} onClick={() => setZoom(Math.min(2, zoom + .15))}><Plus size={15}/></button>
       <button aria-label="Fit workflow to view" onClick={() => { if (viewport.current) { setZoom(Math.min(1, viewport.current.clientWidth / w, viewport.current.clientHeight / h)); viewport.current.scrollTo(0,0); } }}><Maximize2 size={15}/></button>
       {editable && <button aria-label="Auto-layout workflow" onClick={() => arrange(auto)}><Wand2 size={15}/></button>}
+      <button aria-label="Toggle minimap" aria-pressed={mapOpen} onClick={()=>setMapOpen(!mapOpen)}><MapIcon size={15}/></button>
     </div></header>
+    {editable && <div className="flow-edit-tools"><button disabled={!canConnect} aria-pressed={linking} onClick={()=>setLinking(!linking)}><Link2 size={14}/>{linking?"Choose next step":"Connect next"}</button><button disabled={!canCopy} onClick={()=>setCopied([...group])}><Copy size={14}/>Copy{group.length>1?" "+group.length:""}</button><button disabled={!copied.length} onClick={()=>paste(copied)}><ClipboardPaste size={14}/>Paste</button><button aria-pressed={multiple} onClick={()=>{setMultiple(!multiple);if(multiple)setPicked([]);}}>Select multiple</button></div>}
+    {mapOpen && <svg className="flow-minimap" role="img" aria-label="Workflow minimap" viewBox={`0 0 ${w} ${h}`}>{nodes.map(n=><rect key={n.key} x={points[n.key].x} y={points[n.key].y} width={width} height={height} rx={8} fill={n.key===selected?"#11775b":"#9bb5a7"}/>)}<rect x={view.x} y={view.y} width={Math.min(w,view.w)} height={Math.min(h,view.h)} fill="none" stroke="#123e2c" strokeWidth={8}/></svg>}
     <div className="flow-viewport" ref={viewport} tabIndex={0} aria-label="Scrollable workflow"
       onPointerDown={e => { if (e.button || (e.target as Element).closest("button")) return; pan.current = {mouse:{x:e.clientX,y:e.clientY},x:e.currentTarget.scrollLeft,y:e.currentTarget.scrollTop}; e.currentTarget.setPointerCapture(e.pointerId); }}
       onPointerMove={e => { const p = pan.current; if (p) e.currentTarget.scrollTo(p.x+p.mouse.x-e.clientX,p.y+p.mouse.y-e.clientY); }}
@@ -59,7 +90,8 @@ export function JourneyCanvas({ nodes, start, selected, editable, select, arrang
           const x=a.x+width,y=a.y+height/2,endY=b.y+height/2,bend=Math.max(42,Math.abs(b.x-x)*.45);
           return <g key={node.key+":"+index}><path d={`M${x} ${y} C${x+bend} ${y} ${b.x-bend} ${endY} ${b.x} ${endY}`} fill="none" stroke="#65857b" strokeDasharray={edge.label==="Fallback"?"4 4":undefined} markerEnd="url(#workflow-arrow)"/>{edge.label && <text x={(x+b.x)/2} y={(y+endY)/2-5} textAnchor="middle">{edge.label}</text>}</g>;
         }))}</svg>
-        {nodes.map(node=><button type="button" key={node.key} className="flow-node" aria-pressed={selected===node.key} style={{left:points[node.key].x,top:points[node.key].y,width,height}} onClick={()=>select(node.key)}
+        {nodes.map(node=><button type="button" key={node.key} className="flow-node" aria-pressed={group.includes(node.key)} style={{left:points[node.key].x,top:points[node.key].y,width,height}} onClick={e=>choose(node.key,e.shiftKey || multiple)}
+          onKeyDown={e=>{if(!editable || !e.altKey || !["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key))return;e.preventDefault();const pos=points[node.key];arrange({[node.key]:{x:Math.max(0,Math.min(10000,pos.x+(e.key==="ArrowRight"?16:e.key==="ArrowLeft"?-16:0))),y:Math.max(0,Math.min(10000,pos.y+(e.key==="ArrowDown"?16:e.key==="ArrowUp"?-16:0)))}});}}
           onPointerDown={e=>{if (!editable || e.button) return; const at=points[node.key]; e.currentTarget.setPointerCapture(e.pointerId); setDrag({key:node.key,origin:at,mouse:{x:e.clientX,y:e.clientY},at});}}
           onPointerMove={e=>{if (drag?.key!==node.key) return; const snap=(n:number)=>Math.min(10000,Math.max(0,Math.round(n/16)*16)); setDrag({...drag,at:{x:snap(drag.origin.x+(e.clientX-drag.mouse.x)/zoom),y:snap(drag.origin.y+(e.clientY-drag.mouse.y)/zoom)}});}}
           onPointerUp={e=>{if (drag?.key===node.key && Math.hypot(e.clientX-drag.mouse.x,e.clientY-drag.mouse.y)>4) arrange({[node.key]:drag.at}); setDrag(undefined);}}

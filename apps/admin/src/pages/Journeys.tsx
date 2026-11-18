@@ -7,6 +7,7 @@ import { hasPermission } from "../lib/permissions";
 import "./journeys.css";
 import { JourneyFlowPreview } from "./JourneyFlowPreview";
 
+import { JourneyTemplates } from "./JourneyTemplates";
 import { JourneyCanvas, type Point } from "./JourneyCanvas";
 
 const experienceHelp: Record<string, string> = {
@@ -137,6 +138,21 @@ export function JourneysPage() {
     if (steps[index].next && !["condition", "end", "handoff"].includes(steps[index].kind)) steps[index] = { ...steps[index], next: key };
     change({ ...draft, steps, trigger: kind === "entry_menu" ? "default" : draft.trigger }); setSelected(key); setTab("edit");
   }
+  function pasteSteps(keys: string[]) {
+    if (!draft || !editable) return;
+    const originals = draft.steps.filter(s => keys.includes(s.key));
+    if (!originals.length || originals.some(s => s.locked)) return;
+    const ids = new Map(originals.map(s => [s.key,keyFor()]));
+    const vars = new Map(originals.filter(s => s.destination && !s.source).map(s => [s.destination!, "answer_"+ids.get(s.key)]));
+    const copies = originals.map(s => ({
+      ...s, key:ids.get(s.key)!, title:s.title+" copy", destination:vars.get(s.destination ?? "") ?? s.destination,
+      condition_field:vars.get(s.condition_field ?? "") ?? s.condition_field, visible_when:vars.get(s.visible_when ?? "") ?? s.visible_when,
+      next:ids.get(s.next) ?? s.next, failure:ids.get(s.failure) ?? s.failure,
+      position:s.position ? {x:Math.min(10000,s.position.x+32),y:Math.min(10000,s.position.y+96)} : undefined,
+      options:(s.options ?? []).map(o=>({...o,next:ids.get(o.next ?? "") ?? o.next})),
+    }));
+    change({...draft,steps:[...draft.steps,...copies]});setSelected(copies[0].key);
+  }
   function deleteStep() {
     if (!draft || !step || step.locked || !editable) return;
     const steps = draft.steps.filter(s => s.key !== step.key).map(s => ({ ...s, next: s.next === step.key ? step.next : s.next, failure: s.failure === step.key ? step.failure : s.failure, options: (s.options ?? []).map(o => ({ ...o, next: o.next === step.key ? step.next : o.next })) }));
@@ -187,8 +203,8 @@ export function JourneysPage() {
   const questionActive = preview?.result.status === "active" && !(previewMode === "flow" && compilation?.errors.length);
   const flowPrompt = preview?.result.messages.map(message => message.text).filter(Boolean).join("\n\n");
 
-  if (loading) return <Page title="Journey Studio"><LoadingState label="Loading journeys" /></Page>;
-  return <Page title={detail ? draft?.name ?? "Journey Studio" : "Journey Studio"} breadcrumbs={detail ? [{ label: "Journeys", to: "/journeys" }, { label: `Version ${detail.version.version_number}` }] : undefined} actions={detail ? <>
+  if (loading) return <Page title="Flow Studio"><LoadingState label="Loading journeys" /></Page>;
+  return <Page title={detail ? draft?.name ?? "Flow Studio" : "Flow Studio"} breadcrumbs={detail ? [{ label: "Journeys", to: "/journeys" }, { label: `Version ${detail.version.version_number}` }] : undefined} actions={detail ? <>
     <Badge tone={dirty ? "warning" : detail.version.status === "published" ? "success" : "neutral"}>{dirty ? "Unsaved" : friendly(detail.version.status)}</Badge>
     <IconButton label="Journey settings" icon={Settings2} onClick={() => setSettingsOpen(true)} />
     <IconButton label="Version history" icon={History} onClick={() => setHistoryOpen(true)} />
@@ -206,7 +222,7 @@ export function JourneysPage() {
       {issues.length ? <div className="journey-issues" role="alert"><strong>{issues.length} validation {issues.length === 1 ? "issue" : "issues"}</strong>{issues.map((issue, index) => <button key={index} type="button" onClick={() => { setSelected(issue.path.replace(/^steps\./, "")); setTab("edit"); }}>{draft.steps.find(s => `steps.${s.key}` === issue.path)?.title ?? "Journey"}: {issue.message}</button>)}</div> : null}
       <div className="journey-mobile-tabs"><Tabs label="Journey panels" value={tab} onChange={setTab} items={[{ value: "canvas", label: "Canvas" }, { value: "steps", label: "Steps" }, { value: "edit", label: "Edit" }, { value: "preview", label: "Preview" }]} /></div>
       <div className={`journey-studio panel-${tab}`} data-testid="journey-studio">
-        <JourneyCanvas nodes={draft.steps} start={draft.start} editable={editable} selected={selected} select={key => { setSelected(key); setTab("edit"); }} arrange={positions => change({ ...draft, steps: draft.steps.map(s => positions[s.key] ? {...s,position:positions[s.key]} : s) })} />
+        <JourneyCanvas key={detail.version.id} paste={pasteSteps} connect={next=>patchStep({next})} nodes={draft.steps} start={draft.start} editable={editable} selected={selected} select={key => { setSelected(key); setTab("edit"); }} arrange={positions => change({ ...draft, steps: draft.steps.map(s => positions[s.key] ? {...s,position:positions[s.key]} : s) })} />
         <aside className={`journey-steps ${tab === "steps" ? "mobile-current" : ""}`} aria-label="Journey steps">
           <div className="journey-section-heading"><h2>Steps</h2><span>{draft.steps.length}</span></div>
           <ol>{draft.steps.map((s, index) => <li key={s.key} className={selected === s.key ? "selected" : ""} draggable={editable && !s.locked} onDragStart={() => setDragged(s.key)} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); move(draft.steps.findIndex(item => item.key === dragged), index); setDragged(""); }}>
@@ -257,8 +273,8 @@ export function JourneysPage() {
         </section>
       </div>
     </>}
-    <Modal open={newOpen} title="Create a journey" onClose={() => setNewOpen(false)} footer={<Button icon={Plus} loading={busy} onClick={() => void run(async () => { const response = await apiPost<Detail>("/journeys", { template: newTemplate, name: newName }); accept(response.data); await loadList(); setNewOpen(false); })}>Create journey</Button>}>
-      <label>Journey name<input value={newName} maxLength={120} placeholder="Customer ordering" onChange={e => setNewName(e.target.value)} /></label><div className="journey-templates">{templates.map(template => <label key={template.id} className={newTemplate === template.id ? "selected" : ""}><input type="radio" name="template" value={template.id} checked={newTemplate === template.id} onChange={() => setNewTemplate(template.id)} /><span><strong>{template.name}</strong><small>{template.description}</small></span></label>)}</div>
+    <Modal open={newOpen} title="Browse templates" onClose={() => setNewOpen(false)} footer={<Button icon={Plus} loading={busy} onClick={() => void run(async () => { const response = await apiPost<Detail>("/journeys", { template: newTemplate, name: newName }); accept(response.data); await loadList(); setNewOpen(false); })}>Use template</Button>}>
+      <label>Journey name<input value={newName} maxLength={120} placeholder="Customer ordering" onChange={e => setNewName(e.target.value)} /></label><JourneyTemplates templates={templates} value={newTemplate} onChange={setNewTemplate} />
     </Modal>
     <Modal open={settingsOpen && Boolean(draft)} title="Journey settings" onClose={() => setSettingsOpen(false)} footer={<Button onClick={() => setSettingsOpen(false)}>Done</Button>}>
       {draft ? <><fieldset disabled={!editable}><label>Name<input value={draft.name} maxLength={120} onChange={e => change({ ...draft, name: e.target.value })} /></label><label>Purpose<textarea value={draft.purpose} onChange={e => change({ ...draft, purpose: e.target.value })} /></label><label>Presentation<select value={draft.mode} onChange={e => change({ ...draft, mode: e.target.value })}><option value="automated_commerce">Automated Commerce</option><option value="guided_questions">Guided Questions</option><option value="guided_chat">Legacy guided chat</option><option value="whatsapp_flow">WhatsApp Flow</option><option value="ai">AI Conversation</option></select></label><p role="status">{experienceHelp[draft.mode]}</p><p>Messaging charges depend on applicable Meta rules and your provider. A Flow is not a guaranteed single charge. AI token usage and payment processing fees are separate.</p><label>Channel connection<select value={draft.connection_id ?? ""} onChange={e => { const connection = connections.find(c => c.id === e.target.value); change({ ...draft, connection_id: e.target.value || undefined, channel: connection?.provider ?? "whatsapp" }); }}><option value="">Unbound preview</option>{connections.filter(c => c.status !== "archived").map(c => <option key={c.id} value={c.id}>{c.display_name} · {c.provider}</option>)}</select></label><label>Entry button label<input maxLength={20} value={draft.entry_cta ?? ""} onChange={e => change({...draft, entry_cta:e.target.value})} /></label><label>Entry keyword<input value={draft.trigger} maxLength={48} pattern="[a-z][a-z0-9_]*" onChange={e => change({ ...draft, trigger: e.target.value })} /></label>{route("Start step", draft.start, start => change({ ...draft, start }))}<label>Session expiry (minutes)<input type="number" min={5} max={10080} value={draft.ttl_minutes} onChange={e => change({ ...draft, ttl_minutes: Number(e.target.value) })} /></label></fieldset>
