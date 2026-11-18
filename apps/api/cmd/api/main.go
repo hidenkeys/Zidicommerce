@@ -265,6 +265,7 @@ func main() {
 		Logger:       log,
 		DB:           sqlDB,
 		TokenManager: tokenManager,
+		Mailer:       mailer,
 		AuthService:  auth.NewService(userRepo, tokenManager),
 		SessionRoles: userRepo,
 		OrgHandler:   organization.NewHandler(orgRepo),

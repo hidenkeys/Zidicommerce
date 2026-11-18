@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"database/sql"
+	"github.com/hidenkeys/zidicommerce/apps/api/internal/email"
 	"log/slog"
 
 	"github.com/gofiber/fiber/v2"
@@ -21,6 +22,7 @@ import (
 )
 
 type Dependencies struct {
+	Mailer       email.Sender
 	Config       config.Config
 	Logger       *slog.Logger
 	DB           *sql.DB
@@ -55,6 +57,7 @@ func New(deps Dependencies) *fiber.App {
 
 	v1 := app.Group("/v1")
 	v1.Post("/auth/login", loginHandler(deps.AuthService))
+	registerRecovery(v1, deps)
 	v1.Post("/auth/register", registerHandler(deps.AuthService))
 	deps.Commerce.RegisterPublic(v1)
 	if deps.WhatsApp != nil {

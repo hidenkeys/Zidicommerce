@@ -1,3 +1,4 @@
+import {PasswordField} from "./PasswordField";
 import { FormEvent, useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { apiGet, apiPost, getStoredToken, setStoredToken } from "../api/client";
@@ -101,9 +102,9 @@ export function LoginPage({ mode = "login" }: { mode?: "login" | "register" }) {
         <div>
           <span className="eyebrow">{isRegister ? "New merchant" : "Welcome back"}</span>
           <h1>{isRegister ? "Create an account" : "Sign in"}</h1>
-          <p>{isRegister ? "Register a merchant admin account, then complete your business profile." : "Use your email and password. You do not need an API token."}</p>
+          <p>{isRegister ? "Create your account to set up your first commerce workspace." : "Sign in to manage orders, conversations and your stores."}</p>
         </div>
-        {error ? <p className="error-text">{error}</p> : null}
+        {error ? <p role="alert" className="error-text">{error}</p> : null}
         {isRegister ? (
           <>
             <label>
@@ -120,10 +121,8 @@ export function LoginPage({ mode = "login" }: { mode?: "login" | "register" }) {
           Email
           <input type="email" autoComplete="username" autoFocus required value={email} onChange={(event) => setEmail(event.target.value)} />
         </label>
-        <label>
-          Password
-          <input type="password" autoComplete={isRegister ? "new-password" : "current-password"} required minLength={isRegister ? 8 : undefined} value={password} onChange={(event) => setPassword(event.target.value)} />
-        </label>
+        <PasswordField label="Password" autoComplete={isRegister ? "new-password" : "current-password"} required minLength={isRegister ? 8 : undefined} value={password} onChange={(event) => setPassword(event.target.value)} />
+        {!isRegister && <Link to="/forgot-password">Forgot password?</Link>}
         <button type="submit" disabled={submitting}>
           {submitting ? (isRegister ? "Creating account..." : "Signing in...") : (isRegister ? "Create account" : "Sign in")}
         </button>

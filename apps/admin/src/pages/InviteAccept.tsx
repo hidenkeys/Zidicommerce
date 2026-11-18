@@ -1,3 +1,4 @@
+import {PasswordField} from "../components/PasswordField";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { apiGet, apiPost, setStoredToken } from "../api/client";
@@ -87,10 +88,10 @@ export function InviteAcceptPage() {
             {preview.email} · {preview.role_label || roleLabel(String(preview.role ?? ""))}
           </p>
         ) : null}
-        {error ? <p className="flash error">{error}</p> : null}
+        {error ? <p role="alert" className="flash error">{error}</p> : null}
         {blocked ? (
           <p className="muted">{preview?.accepted ? "This invitation has already been accepted." : "This invitation has expired. Ask your admin to send a new one."}</p>
-        ) : (
+        ) : !preview ? (!error && <p role="status">Checking invitation…</p>) : (
           <form onSubmit={submit}>
             {!preview?.existing_user ? (
               <>
@@ -98,9 +99,7 @@ export function InviteAcceptPage() {
                 <label>Last name<input value={lastName} onChange={(event) => setLastName(event.target.value)} /></label>
               </>
             ) : null}
-            <label>{preview?.existing_user ? "Account password" : "Create a password"}
-              <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} required />
-            </label>
+            <PasswordField label={preview?.existing_user ? "Account password" : "Create a password"} autoComplete={preview?.existing_user ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} required />
             <button type="submit" className="primary" disabled={submitting || !token}>{submitting ? "Joining..." : "Accept invitation"}</button>
           </form>
         )}

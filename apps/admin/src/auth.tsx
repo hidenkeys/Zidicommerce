@@ -27,11 +27,11 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthLayout({ children }: { children: ReactNode }) {
   return (
     <div className="login-layout">
-      <aside className="sidebar">
+      <aside className="auth-brand-panel">
         <div className="brand">
-          <ZidiCommerceLogo tone="light" subtitle="Sign in to run your store" />
+          <ZidiCommerceLogo tone="light" subtitle="Merchant workspace" />
         </div>
-        <p className="login-sidebar-copy">Orders, catalogue, customer support, and your assistant in one place.</p>
+        <p className="login-sidebar-copy">Manage the orders and conversations that keep your stores running.</p>
       </aside>
       <main className="login-panel">{children}</main>
     </div>

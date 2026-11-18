@@ -26,7 +26,7 @@ export function SetupPage() {
   const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"error" | "success">("error");
-  const [loading, setLoading] = useState(canManageSetup);
+  const [loading, setLoading] = useState(canManageSetup && organizationCreated);
   const [creating, setCreating] = useState(false);
   const [slugEdited, setSlugEdited] = useState(false);
   const [organization, setOrganization] = useState({
@@ -41,7 +41,7 @@ export function SetupPage() {
   });
 
   useEffect(() => {
-    if (!canManageSetup) return;
+    if (!canManageSetup || !organizationCreated) return;
     async function load() {
       setLoading(true);
       try {
@@ -55,7 +55,7 @@ export function SetupPage() {
       }
     }
     void load();
-  }, [canManageSetup]);
+  }, [canManageSetup, organizationCreated]);
 
   async function createOrganization(event: FormEvent) {
     event.preventDefault();
@@ -93,10 +93,11 @@ export function SetupPage() {
               />
             </label>
             <label>
-              Workspace slug
+              Workspace address
               <input
                 required
                 pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+                aria-describedby="workspace-address-help"
                 value={organization.slug}
                 onChange={(event) => {
                   setSlugEdited(true);
@@ -104,6 +105,7 @@ export function SetupPage() {
                 }}
               />
             </label>
+            <small id="workspace-address-help">Use lowercase letters, numbers and hyphens.</small>
             <div className="workspace-fields">
               <label>
                 Country code

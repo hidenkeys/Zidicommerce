@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Route, Routes } from "react-router-dom";
 import { apiGet, apiPatch, apiPost, apiPut, setStoredToken } from "./api/client";
 import { RequireAuth } from "./auth";
+import { PasswordRecovery } from "./components/PasswordRecovery";
 import { LoginPage } from "./components/LoginPage";
 import { Shell } from "./components/Shell";
 import { Page } from "./components/ui";
@@ -2419,6 +2420,8 @@ function PaymentsSettingsScreen() {
 export default function App() {
   return (
     <Routes>
+      <Route path="/forgot-password" element={<PasswordRecovery />} />
+      <Route path="/reset-password" element={<PasswordRecovery key="reset" reset />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<LoginPage mode="register" />} />
       <Route path="/invitations/accept" element={<InviteAcceptPage />} />
