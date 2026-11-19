@@ -48,7 +48,7 @@ export function BusinessPage() {
   }
 
   return (
-    <Page title="Business" description="Your public name, contact details, currency, and timezone." help="This is what the assistant and receipts use for your business.">
+    <Page title="Business settings" description="Your public name, contact details, currency, and timezone." help="This is what the assistant and receipts use for your business.">
       <Flash message={message} />
       <Flash message={flash} tone="success" />
       {loading ? <LoadingState label="Loading business settings" /> : <>
@@ -59,14 +59,14 @@ export function BusinessPage() {
       {canManageSettings ? <FormGrid onSubmit={submit}>
         <label>Business name<input value={form.name ?? ""} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
         <label>Contact name<input value={form.contact_name ?? ""} onChange={(event) => setForm({ ...form, contact_name: event.target.value })} /></label>
-        <label>Contact email<input value={form.contact_email ?? ""} onChange={(event) => setForm({ ...form, contact_email: event.target.value })} /></label>
-        <label>Contact phone<input value={form.contact_phone ?? ""} onChange={(event) => setForm({ ...form, contact_phone: event.target.value })} /></label>
+        <label>Contact email<input type="email" value={form.contact_email ?? ""} onChange={(event) => setForm({ ...form, contact_email: event.target.value })} /></label>
+        <label>Contact phone<input type="tel" value={form.contact_phone ?? ""} onChange={(event) => setForm({ ...form, contact_phone: event.target.value })} /></label>
         <label>Country<input value={form.country ?? ""} onChange={(event) => setForm({ ...form, country: event.target.value })} /></label>
         <label>Currency<input value={form.currency ?? ""} onChange={(event) => setForm({ ...form, currency: event.target.value })} /></label>
         <label>Timezone<input value={form.timezone ?? ""} onChange={(event) => setForm({ ...form, timezone: event.target.value })} placeholder="Africa/Lagos" /></label>
-        <label>Logo URL<input value={form.logo_url ?? ""} onChange={(event) => setForm({ ...form, logo_url: event.target.value })} /></label>
+        <label>Logo URL<input type="url" value={form.logo_url ?? ""} onChange={(event) => setForm({ ...form, logo_url: event.target.value })} /></label>
         <label className="full">About<textarea value={form.description ?? ""} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
-        <div className="full"><button type="submit">Save</button></div>
+        <div className="full"><button type="submit" className="primary">Save changes</button></div>
       </FormGrid> : <p className="read-only-note">Business settings are read-only for your role.</p>}
       </>}
     </Page>

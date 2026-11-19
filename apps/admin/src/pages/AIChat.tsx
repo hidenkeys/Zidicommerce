@@ -114,11 +114,11 @@ export function AIChatPage() {
   }
 
   return (
-    <Page title="AI Chat" description="Test customer questions with the configured AI provider and current business data.">
+    <Page title="AI test workspace" description="Try customer questions using your assistant and business knowledge.">
       <Flash message={flash} tone={flash.includes("started") ? "success" : "error"} />
-      <div className="two-column">
-        <Card>
-          <h3>Session</h3>
+      <div className="ai-workspace-controls">
+        <Card className="ai-session">
+          <h3>Test context</h3>
           {loading ? <p className="muted">Loading...</p> : null}
           <div className="form-grid">
             <label className="full">Organization
@@ -140,20 +140,7 @@ export function AIChatPage() {
           {selectedCustomer ? <p className="help-text">Customer context: {selectedCustomer.name || selectedCustomer.phone || selectedCustomer.email}</p> : null}
         </Card>
 
-        <Card>
-          <h3>Debug</h3>
-          {!debug ? <EmptyState title="No interaction yet" body="Send a message to inspect provider, model, latency, and tool calls." /> : (
-            <div className="stack">
-              <p><strong>{debug.provider}</strong> / {debug.model} · {debug.latency_ms}ms</p>
-              {debug.tools.length === 0 ? <p className="muted">No tools called.</p> : debug.tools.map((tool, index) => (
-                <details key={`${tool.name}-${index}`} open>
-                  <summary>{tool.name} · {tool.status} · {tool.latency_ms ?? 0}ms</summary>
-                  <pre>{pretty({ inputs: tool.inputs, result: tool.result, error: tool.error })}</pre>
-                </details>
-              ))}
-            </div>
-          )}
-        </Card>
+
       </div>
 
       <Card>
@@ -168,10 +155,23 @@ export function AIChatPage() {
           ))}
         </div>
         <form className="chat-input" onSubmit={send}>
-          <input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Ask about stores, products, stock, or order status..." disabled={!sessionID || sending} />
+          <input aria-label="Customer message" value={input} onChange={(event) => setInput(event.target.value)} placeholder="Ask about stores, products, stock, or order status..." disabled={!sessionID || sending} />
           <button type="submit" disabled={!sessionID || sending || !input.trim()}>{sending ? "Sending..." : "Send"}</button>
         </form>
       </Card>
+      <details className="ai-debug"><summary>Response details</summary>
+          {!debug ? <EmptyState title="No interaction yet" body="Send a message to inspect provider, model, latency, and tool calls." /> : (
+            <div className="stack">
+              <p><strong>{debug.provider}</strong> / {debug.model} · {debug.latency_ms}ms</p>
+              {debug.tools.length === 0 ? <p className="muted">No tools called.</p> : debug.tools.map((tool, index) => (
+                <details key={`${tool.name}-${index}`} open>
+                  <summary>{tool.name} · {tool.status} · {tool.latency_ms ?? 0}ms</summary>
+                  <pre>{pretty({ inputs: tool.inputs, result: tool.result, error: tool.error })}</pre>
+                </details>
+              ))}
+            </div>
+          )}
+      </details>
     </Page>
   );
 }

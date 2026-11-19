@@ -19,7 +19,7 @@ export function Page({
   children: ReactNode;
 }) {
   return (
-    <section className="content">
+    <section className="content" data-page={title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}>
       {breadcrumbs?.length ? (
         <nav className="breadcrumbs" aria-label="Breadcrumb">
           {breadcrumbs.map((item, index) => (
@@ -139,7 +139,7 @@ export const IconButton = forwardRef<HTMLButtonElement, Omit<ButtonHTMLAttribute
 export function Tabs({ value, onChange, items, label }: { value: string; onChange: (value: string) => void; items: Array<{ value: string; label: string; count?: number }>; label: string }) {
   return (
     <div className="tabs" role="tablist" aria-label={label}>
-      {items.map((item) => <button key={item.value} type="button" role="tab" aria-selected={value === item.value} className={value === item.value ? "active" : ""} onClick={() => onChange(item.value)}>{item.label}{item.count !== undefined ? <span>{item.count}</span> : null}</button>)}
+      {items.map((item) => <button key={item.value} type="button" role="tab" tabIndex={value === item.value ? 0 : -1} onKeyDown={(event) => { const current = items.findIndex(entry => entry.value === item.value); const next = event.key === "ArrowRight" ? (current + 1) % items.length : event.key === "ArrowLeft" ? (current - 1 + items.length) % items.length : event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : -1; if (next >= 0) { event.preventDefault(); onChange(items[next].value); (event.currentTarget.parentElement?.children[next] as HTMLElement)?.focus(); } }} aria-selected={value === item.value} className={value === item.value ? "active" : ""} onClick={() => onChange(item.value)}>{item.label}{item.count !== undefined ? <span>{item.count}</span> : null}</button>)}
     </div>
   );
 }
@@ -295,11 +295,24 @@ export function Metric({
   return <article className="metric-card">{body}</article>;
 }
 
-export function FormGrid({ children, onSubmit, title }: { children: ReactNode; onSubmit?: (event: FormEvent) => void; title?: string }) {
+export function FormGrid({ children, onSubmit, title }: { children: ReactNode; onSubmit?: (event: FormEvent) => void | Promise<void>; title?: string }) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  async function submit(event: FormEvent) {
+    if (!onSubmit) return;
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true); setError("");
+    try { await onSubmit(event); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Changes could not be saved. Please try again."); }
+    finally { setSaving(false); }
+  }
   return (
-    <form className="form-grid" onSubmit={onSubmit}>
+    <form className="form-grid" onSubmit={submit} aria-busy={saving}>
       {title ? <strong>{title}</strong> : null}
-      {children}
+      {error ? <p className="flash flash-error full" role="alert">{error}</p> : null}
+      <fieldset className="form-fields" disabled={saving}>{children}</fieldset>
+      {saving ? <span className="full muted" role="status">Saving changes…</span> : null}
     </form>
   );
 }

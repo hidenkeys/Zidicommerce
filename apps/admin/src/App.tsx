@@ -5,7 +5,7 @@ import { RequireAuth } from "./auth";
 import { PasswordRecovery } from "./components/PasswordRecovery";
 import { LoginPage } from "./components/LoginPage";
 import { Shell } from "./components/Shell";
-import { Page } from "./components/ui";
+import { Page, FormGrid } from "./components/ui";
 import { AIChatPage } from "./pages/AIChat";
 import { AssistantPage } from "./pages/Assistant";
 import { BusinessPage } from "./pages/Business";
@@ -943,23 +943,23 @@ function PaymentsScreen() {
 
   return (
     <section className="content">
-      <div className="section-heading">
-        <h2>Payments</h2>
-        <p>Initialize and verify provider payments. Verification is authoritative and retry-safe.</p>
+      <div className="page-header"><div>
+        <h1>Payment tools</h1>
+        <p>Initialize an order payment or check a provider reference.</p></div>
       </div>
       <div className="split">
-        <form className="resource-form" onSubmit={initialize}>
-          <strong>Initialize payment</strong>
-          <input placeholder="Order ID" value={init.order_id} onChange={(event) => setInit({ ...init, order_id: event.target.value })} />
-          <input placeholder="Email" value={init.email} onChange={(event) => setInit({ ...init, email: event.target.value })} />
-          <input placeholder="Provider" value={init.provider} onChange={(event) => setInit({ ...init, provider: event.target.value })} />
-          <button type="submit">Initialize</button>
-        </form>
-        <form className="resource-form" onSubmit={verifyPayment}>
-          <strong>Verify payment</strong>
-          <input placeholder="Reference" value={verify.reference} onChange={(event) => setVerify({ reference: event.target.value })} />
-          <button type="submit">Verify</button>
-        </form>
+        <FormGrid onSubmit={initialize} title="Initialize payment">
+
+          <label>Order ID<input aria-label="Order ID" placeholder="Order ID" value={init.order_id} onChange={(event) => setInit({ ...init, order_id: event.target.value })} /></label>
+          <label>Email<input aria-label="Email" placeholder="Email" value={init.email} onChange={(event) => setInit({ ...init, email: event.target.value })} /></label>
+          <label>Provider<input aria-label="Provider" placeholder="Provider" value={init.provider} onChange={(event) => setInit({ ...init, provider: event.target.value })} /></label>
+          <div className="full"><button type="submit" className="primary">Initialize payment</button></div>
+        </FormGrid>
+        <FormGrid onSubmit={verifyPayment} title="Verify payment">
+
+          <label>Reference<input aria-label="Reference" placeholder="Reference" value={verify.reference} onChange={(event) => setVerify({ reference: event.target.value })} /></label>
+          <div className="full"><button type="submit" className="primary">Verify payment</button></div>
+        </FormGrid>
       </div>
       <ResourceTable rows={rows} message={message} />
     </section>
@@ -983,14 +983,14 @@ function FulfilmentScreen() {
 
   return (
     <section className="content">
-      <div className="section-heading">
-        <h2>Fulfilment</h2>
-        <p>Lookup fulfilment records by order and update fulfilment details through the API.</p>
+      <div className="page-header"><div>
+        <h1>Fulfilment</h1>
+        <p>Find delivery and collection details using an order ID.</p></div>
       </div>
-      <form className="resource-form" onSubmit={load}>
-        <input placeholder="Order ID" value={orderId} onChange={(event) => setOrderId(event.target.value)} />
+      <FormGrid onSubmit={load}>
+        <label>Order ID<input aria-label="Order ID" placeholder="Order ID" value={orderId} onChange={(event) => setOrderId(event.target.value)} /></label>
         <button type="submit">Find fulfilment</button>
-      </form>
+      </FormGrid>
       <ResourceTable rows={row ? [row] : []} message={message} />
     </section>
   );
@@ -1032,14 +1032,14 @@ function MerchantImportScreen() {
 
   return (
     <section className="content">
-      <div className="section-heading">
-        <h2>Merchant Import</h2>
-        <p>Load stores, categories, products, images, inventory, fulfilment modes, and channels from one validated JSON document.</p>
+      <div className="page-header"><div>
+        <h1>Import business data</h1>
+        <p>Load stores, categories, products, images, inventory, fulfilment modes, and channels from one validated JSON document.</p></div>
       </div>
       {message ? <p className="error-text">{message}</p> : null}
-      <form className="resource-form wide" onSubmit={submit}>
-        <textarea rows={18} value={body} onChange={(event) => setBody(event.target.value)} />
-        <button type="submit">Import configuration</button>
+      <form className="import-form" onSubmit={submit}>
+        <label>Configuration JSON<textarea aria-label="Configuration JSON" spellCheck={false} rows={18} value={body} onChange={(event) => setBody(event.target.value)} /></label>
+        <div><button type="submit" className="primary">Import configuration</button></div>
       </form>
       {result ? <ResourceTable rows={[result]} title="Import result" /> : null}
       <ResourceTable rows={jobs} title="Recent import jobs" />
@@ -1745,16 +1745,16 @@ function BotBuilderScreen({ variant = "builder" }: { variant?: "simple" | "build
 
   return (
     <section className="content bot-builder">
-      <div className="section-heading">
-        <h2>{variant === "simple" ? "My Bot" : "Bot Builder"}</h2>
-        <p>{variant === "simple" ? "Control what customers see on WhatsApp. You do not need to know how the bot is built." : "Advanced configuration for conversation steps, actions, and published snapshots."}</p>
+      <div className="page-header"><div>
+        <h1>{variant === "simple" ? "My Bot" : "Bot Builder"}</h1>
+        <p>{variant === "simple" ? "Control what customers see on WhatsApp. You do not need to know how the bot is built." : "Advanced configuration for conversation steps, actions, and published snapshots."}</p></div>
       </div>
       {message ? <p className="error-text">{message}</p> : null}
       <div className="split">
-        <form className="resource-form" onSubmit={createSelfServiceBot}>
+        <details className="legacy-create"><summary>Create a bot</summary><form className="resource-form" onSubmit={createSelfServiceBot}>
           <strong>Create self-service bot</strong>
-          <input placeholder="Bot name" value={botForm.name} onChange={(event) => setBotForm({ ...botForm, name: event.target.value })} />
-          <input placeholder="Description" value={botForm.description} onChange={(event) => setBotForm({ ...botForm, description: event.target.value })} />
+          <input aria-label="Bot name" placeholder="Bot name" value={botForm.name} onChange={(event) => setBotForm({ ...botForm, name: event.target.value })} />
+          <input aria-label="Description" placeholder="Description" value={botForm.description} onChange={(event) => setBotForm({ ...botForm, description: event.target.value })} />
           <label>Starter flow
             <select value={botTemplate} onChange={(event) => setBotTemplate(event.target.value)}>
               <option value="field_service">Field service / handyman</option>
@@ -1763,7 +1763,7 @@ function BotBuilderScreen({ variant = "builder" }: { variant?: "simple" | "build
           </label>
           <button type="submit">Create guided bot</button>
           <button type="button" onClick={createEmptyBot}>Create empty bot</button>
-        </form>
+        </form></details>
         <div className="table-wrap bot-toolbar">
           <label>
             Bot
@@ -1901,14 +1901,14 @@ function BotBuilderScreen({ variant = "builder" }: { variant?: "simple" | "build
             <div className="split">
               <form className="resource-form" onSubmit={addFAQ}>
                 <strong>Knowledge / FAQs</strong>
-                <input placeholder="Customer question" value={faqForm.question} onChange={(event) => setFaqForm({ ...faqForm, question: event.target.value })} />
+                <input aria-label="Customer question" placeholder="Customer question" value={faqForm.question} onChange={(event) => setFaqForm({ ...faqForm, question: event.target.value })} />
                 <textarea placeholder="Answer" value={faqForm.answer} onChange={(event) => setFaqForm({ ...faqForm, answer: event.target.value })} />
-                <input placeholder="Keywords, comma separated" value={faqForm.keywords} onChange={(event) => setFaqForm({ ...faqForm, keywords: event.target.value })} />
+                <input aria-label="Keywords, comma separated" placeholder="Keywords, comma separated" value={faqForm.keywords} onChange={(event) => setFaqForm({ ...faqForm, keywords: event.target.value })} />
                 <button type="submit">Add FAQ</button>
               </form>
               <div className="table-wrap match-panel">
                 <h3>Test FAQ match</h3>
-                <input placeholder="Ask a sample question" value={faqQuery} onChange={(event) => setFaqQuery(event.target.value)} />
+                <input aria-label="Ask a sample question" placeholder="Ask a sample question" value={faqQuery} onChange={(event) => setFaqQuery(event.target.value)} />
                 <button type="button" onClick={runFAQMatch}>Match</button>
                 {faqMatch ? <pre>{JSON.stringify(faqMatch, null, 2)}</pre> : null}
               </div>
@@ -1930,19 +1930,19 @@ function BotBuilderScreen({ variant = "builder" }: { variant?: "simple" | "build
             <div className="split">
               <form className="resource-form" onSubmit={saveChannel}>
                 <strong>WhatsApp channel</strong>
-                <input placeholder="Display name" value={channelForm.display_name} onChange={(event) => setChannelForm({ ...channelForm, display_name: event.target.value })} />
-                <input placeholder="Phone number ID" value={channelForm.phone_number_id} onChange={(event) => setChannelForm({ ...channelForm, phone_number_id: event.target.value })} />
-                <input placeholder="Display number" value={channelForm.display_number} onChange={(event) => setChannelForm({ ...channelForm, display_number: event.target.value })} />
+                <input aria-label="Display name" placeholder="Display name" value={channelForm.display_name} onChange={(event) => setChannelForm({ ...channelForm, display_name: event.target.value })} />
+                <input aria-label="Phone number ID" placeholder="Phone number ID" value={channelForm.phone_number_id} onChange={(event) => setChannelForm({ ...channelForm, phone_number_id: event.target.value })} />
+                <input aria-label="Display number" placeholder="Display number" value={channelForm.display_number} onChange={(event) => setChannelForm({ ...channelForm, display_number: event.target.value })} />
                 <textarea placeholder='Public config JSON, e.g. {"webhook_path":"/runtime/webhooks/whatsapp"}' value={channelForm.config} onChange={(event) => setChannelForm({ ...channelForm, config: event.target.value })} />
                 <button type="submit">Save channel</button>
               </form>
               <form className="resource-form" onSubmit={savePayment}>
                 <strong>Payment provider</strong>
-                <input placeholder="Provider" value={paymentForm.provider} onChange={(event) => setPaymentForm({ ...paymentForm, provider: event.target.value })} />
-                <input placeholder="Display name" value={paymentForm.display_name} onChange={(event) => setPaymentForm({ ...paymentForm, display_name: event.target.value })} />
-                <input placeholder="Paystack public key" value={paymentForm.public_key} onChange={(event) => setPaymentForm({ ...paymentForm, public_key: event.target.value })} />
+                <input aria-label="Provider" placeholder="Provider" value={paymentForm.provider} onChange={(event) => setPaymentForm({ ...paymentForm, provider: event.target.value })} />
+                <input aria-label="Display name" placeholder="Display name" value={paymentForm.display_name} onChange={(event) => setPaymentForm({ ...paymentForm, display_name: event.target.value })} />
+                <input aria-label="Paystack public key" placeholder="Paystack public key" value={paymentForm.public_key} onChange={(event) => setPaymentForm({ ...paymentForm, public_key: event.target.value })} />
                 <input type="password" placeholder="Paystack secret key" value={paymentForm.secret_key} onChange={(event) => setPaymentForm({ ...paymentForm, secret_key: event.target.value })} />
-                <input placeholder="Secret source" value={paymentForm.secret_source} onChange={(event) => setPaymentForm({ ...paymentForm, secret_source: event.target.value })} />
+                <input aria-label="Secret source" placeholder="Secret source" value={paymentForm.secret_source} onChange={(event) => setPaymentForm({ ...paymentForm, secret_source: event.target.value })} />
                 <textarea value={paymentForm.public_config} onChange={(event) => setPaymentForm({ ...paymentForm, public_config: event.target.value })} />
                 <label className="inline-check"><input type="checkbox" checked={paymentForm.enabled} onChange={(event) => setPaymentForm({ ...paymentForm, enabled: event.target.checked })} /> Enabled</label>
                 <button type="submit">Save payment config</button>
@@ -1977,7 +1977,7 @@ function BotBuilderScreen({ variant = "builder" }: { variant?: "simple" | "build
                 {testMessages.map((item, index) => <p key={`${item.from}-${index}`} className={`test-message ${item.from}`}>{item.text}</p>)}
               </div>
               <form className="test-send" onSubmit={sendRuntimeTest}>
-                <input placeholder="Send a customer message" value={testInput} onChange={(event) => setTestInput(event.target.value)} />
+                <input aria-label="Send a customer message" placeholder="Send a customer message" value={testInput} onChange={(event) => setTestInput(event.target.value)} />
                 <button type="submit" disabled={!testSessionID}>Send</button>
               </form>
             </div>
@@ -2147,12 +2147,12 @@ function ResourceTable({ rows, loading, message, title }: { rows: Row[]; loading
       {rows.length > 0 ? (
         <table>
           <thead>
-            <tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr>
+            <tr>{columns.map((column) => <th key={column}>{column.replace(/_minor$/, "").replace(/_/g, " ")}</th>)}</tr>
           </thead>
           <tbody>
             {rows.map((row, index) => (
               <tr key={String(row.id ?? index)}>
-                {columns.map((column) => <td key={column}>{formatCell(row[column])}</td>)}
+                {columns.map((column) => <td key={column}>{column.endsWith("_minor") ? money(row[column], String(row.currency || "NGN")) : column.endsWith("_at") ? relativeTime(row[column]) : ["status", "action", "target_type"].includes(column) ? humanStatus(row[column]) : formatCell(row[column])}</td>)}
               </tr>
             ))}
           </tbody>
@@ -2162,19 +2162,8 @@ function ResourceTable({ rows, loading, message, title }: { rows: Row[]; loading
   );
 }
 
-function Placeholder({ title, body = "This section is reserved for a later phase." }: { title: string; body?: string }) {
-  return (
-    <section className="content">
-      <div className="section-heading">
-        <h2>{title}</h2>
-        <p>{body}</p>
-      </div>
-      <div className="empty-state">
-        <strong>Coming soon</strong>
-        <span>No bot builder or runtime has been implemented in Phase 3.</span>
-      </div>
-    </section>
-  );
+function Placeholder({ title, body = "This address does not match an available workspace page." }: { title: string; body?: string }) {
+  return <Page title={title} description={body}><a className="button primary" href="/">Return to overview</a></Page>;
 }
 
 function withDefaultFulfilment(payload: Row) {
@@ -2481,7 +2470,7 @@ export default function App() {
           <Route path="settings/readiness" element={<SetupPage />} />
           <Route path="settings/import" element={<MerchantImportScreen />} />
           <Route path="settings" element={<BusinessPage />} />
-          <Route path="*" element={<Placeholder title="This page is not available yet" />} />
+          <Route path="*" element={<Placeholder title="Page not found" />} />
         </Route>
       </Route>
     </Routes>

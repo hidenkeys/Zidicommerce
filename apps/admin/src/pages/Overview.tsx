@@ -174,14 +174,21 @@ export function OverviewPage() {
   return (
     <Page
       title={org?.name ? `${org.name}` : "Overview"}
-      description={description}
+      description="Orders, customer conversations and store operations."
     >
       <Flash message={message} />
+      <SectionHeader title="Today" />
+      <div className="metrics overview-summary">
+        <Metric label="Orders" value={todayOrders.length} to="/orders" hint={todayOrders.length === 0 ? "No orders yet" : "Created today"} />
+        <Metric label="Confirmed revenue" value={money(todayRevenue, currency)} to="/orders" hint="Excludes unpaid and cancelled" />
+        <Metric label="Pending fulfilment" value={awaitingPrep + awaitingFulfilment} to="/orders" hint="Paid through in transit" />
+        <Metric label="Unread messages" value={unreadConversations} to="/conversations" hint={waitingConversations ? `${waitingConversations} need a person` : "Inbox is covered"} />
+      </div>
+
       <section className="attention-queue" aria-labelledby="attention-title">
         <div>
-          <span className="section-kicker">Priority</span>
           <h2 id="attention-title">Needs attention</h2>
-          <p>Work that may be blocking a customer or store.</p>
+          <p>Keep orders moving and customers informed.</p>
         </div>
         {attentionClear ? (
           <div className="attention-clear"><StatusDot live label="All caught up" /><span>New orders and conversations will appear here.</span></div>
@@ -200,13 +207,6 @@ export function OverviewPage() {
         )}
       </section>
 
-      <SectionHeader title="Today" description="Live totals from orders, payments, fulfilment, and conversations." />
-      <div className="metrics">
-        <Metric label="Orders" value={todayOrders.length} to="/orders" hint={todayOrders.length === 0 ? "No orders yet" : "Created today"} />
-        <Metric label="Confirmed revenue" value={money(todayRevenue, currency)} to="/orders" hint="Excludes unpaid and cancelled" />
-        <Metric label="Pending fulfilment" value={awaitingPrep + awaitingFulfilment} to="/orders" hint="Paid through in transit" />
-        <Metric label="Unread messages" value={unreadConversations} to="/conversations" hint={waitingConversations ? `${waitingConversations} need a person` : "Inbox is covered"} />
-      </div>
 
       <div className="overview-operations">
         <Card className="recent-orders-panel">

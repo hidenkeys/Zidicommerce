@@ -1,0 +1,201 @@
+.z-access {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.86fr);
+  min-height: 100vh;
+  min-height: 100svh;
+  padding: 16px;
+  box-sizing: border-box;
+  background: var(--z-surface);
+  color: var(--z-ink);
+  font-family: var(--z-font);
+}
+.z-access *,
+.z-access *::before,
+.z-access *::after {
+  box-sizing: border-box;
+}
+.z-access__body {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+.z-access__brand {
+  padding: 22px clamp(16px, 4vw, 64px);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+.z-access__brand img,
+.z-access__brand svg {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+}
+.z-access__brand small {
+  padding-left: 12px;
+  border-left: 1px solid var(--z-line);
+  color: var(--z-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+.z-access__stage {
+  display: grid;
+  align-items: center;
+  justify-items: center;
+  min-width: 0;
+  padding: 36px 24px 90px;
+}
+.z-access .z-access__card {
+  display: grid;
+  gap: 20px;
+  width: min(100%, 370px);
+  padding: 0;
+  margin: 0;
+  border: 0;
+  box-shadow: none;
+  color: var(--z-ink);
+  background: transparent;
+  text-align: left;
+}
+.z-access__card h1 {
+  margin: 0;
+  color: var(--z-ink);
+  font: 620 clamp(30px, 3vw, 40px)/1.1 var(--z-font);
+  letter-spacing: -0.055em;
+}
+.z-access__card p {
+  margin: 0;
+  color: var(--z-muted);
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.z-access__card h1 + p,
+.z-access__card header p {
+  margin-top: 10px;
+}
+.z-access__card label,
+.z-access__card .password-field {
+  display: grid;
+  gap: 7px;
+  color: var(--z-ink);
+  font-size: 14px;
+  font-weight: 550;
+}
+.z-access__card input {
+  display: block;
+  min-width: 0;
+  width: 100%;
+  height: 46px;
+  margin: 0;
+  padding: 0 12px;
+  background: var(--z-surface);
+  color: var(--z-ink);
+  border: 1px solid var(--z-line);
+  border-radius: var(--z-radius-control);
+  font: 400 16px/1.4 var(--z-font);
+  box-shadow: none;
+}
+.z-access__card :is(input, a, button):focus-visible {
+  outline: 2px solid var(--z-focus);
+  outline-offset: 3px;
+}
+.z-access__card button[type="submit"] {
+  width: 100%;
+  min-height: 46px;
+  margin: 0;
+  border: 0;
+  border-radius: var(--z-radius-control);
+  background: var(--z-primary);
+  color: var(--z-on-primary);
+  font: 600 14px/1.4 var(--z-font);
+  cursor: pointer;
+}
+.z-access__card button[type="submit"]:hover:enabled {
+  opacity: 0.88;
+}
+.z-access__card button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.z-access__card [role="alert"] {
+  padding: 10px 12px;
+  border-radius: var(--z-radius-control);
+  color: var(--z-danger);
+  background: var(--z-danger-bg);
+  overflow-wrap: anywhere;
+}
+.z-access__card a {
+  color: var(--z-ink);
+  font-size: 14px;
+  font-weight: 550;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  justify-self: start;
+}
+.z-access__card .z-access__note {
+  padding-top: 12px;
+  border-top: 1px solid var(--z-line);
+}
+.z-access__card form {
+  display: grid;
+  gap: 16px;
+}
+.z-access__password,
+.z-access__card .password-field > div {
+  position: relative;
+  display: grid;
+  min-width: 0;
+}
+.z-access__password input,
+.z-access__card .password-field input {
+  padding-inline-end: 64px;
+}
+.z-access__password > button,
+.z-access__card .password-field button {
+  position: absolute;
+  inset: 1px 3px 1px auto;
+  min-width: 46px;
+  padding: 0 8px;
+  color: var(--z-muted);
+  font: 550 13px var(--z-font);
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+}
+.z-access__art {
+  border-radius: 12px;
+  min-height: 360px;
+  background: #a08564 url("./shop-workspace.webp") center 45% / cover no-repeat;
+}
+.z-access__names {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 800px) {
+  .z-access {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0;
+  }
+  .z-access__art {
+    display: none;
+  }
+  .z-access__brand {
+    padding: 24px;
+  }
+  .z-access__stage {
+    align-items: start;
+    padding: clamp(42px, 10vh, 90px) 24px 40px;
+  }
+}
+@media (max-width: 380px) {
+  .z-access__names {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

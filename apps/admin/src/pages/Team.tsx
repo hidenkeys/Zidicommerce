@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiGet, apiPatch, apiPost, apiPut } from "../api/client";
 import { useAuth } from "../auth";
-import { Badge, Card, ConfirmButton, EmptyState, Flash, FormGrid, LoadingState, Page, SectionHeader } from "../components/ui";
+import { Badge, Card, ConfirmButton, Drawer, EmptyState, Flash, FormGrid, LoadingState, Page, SectionHeader } from "../components/ui";
 import { humanStatus, roleLabel, type Row } from "../lib/format";
 import { hasPermission } from "../lib/permissions";
 
@@ -63,6 +63,7 @@ export function TeamPage() {
   const [assigned, setAssigned] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [flash, setFlash] = useState("");
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -76,7 +77,6 @@ export function TeamPage() {
       setMembers(memberResponse.data);
       setStores(storeResponse.data);
       setInvitations(invitationResponse.data);
-      setSelectedMember((current) => current || memberResponse.data[0]?.id || "");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load team");
     } finally {
@@ -108,6 +108,7 @@ export function TeamPage() {
       setFlash(`Invitation sent · ${invite.email} · ${roleLabel(invite.role)} · Expires in 7 days`);
       setInvite({ email: "", first_name: "", last_name: "", role: "store_staff" });
       setInviteStores([]);
+      setInviteOpen(false);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Invitation could not be sent");
     } finally {
@@ -146,10 +147,10 @@ export function TeamPage() {
   const pendingInvites = invitations.filter((invitation) => invitation.status === "pending");
 
   return (
-    <Page title="People" description="Invite staff and decide which stores they can work in." help="Owners see everything. Managers and staff only see stores you assign.">
+    <Page title="Team" description="Manage your people, roles and store access." actions={canInviteStaff ? <button className="primary" type="button" onClick={() => setInviteOpen(true)}>Invite teammate</button> : undefined}>
       <Flash message={message} />
       <Flash message={flash} tone="success" />
-      {canInviteStaff ? <FormGrid onSubmit={submit} title="Invite someone">
+      {canInviteStaff ? <Drawer open={inviteOpen} title="Invite teammate" onClose={() => setInviteOpen(false)}><Flash message={message} /><FormGrid onSubmit={submit}>
         <label>First name<input value={invite.first_name} onChange={(event) => setInvite({ ...invite, first_name: event.target.value })} required /></label>
         <label>Last name<input value={invite.last_name} onChange={(event) => setInvite({ ...invite, last_name: event.target.value })} /></label>
         <label>Email<input type="email" value={invite.email} onChange={(event) => setInvite({ ...invite, email: event.target.value })} required /></label>
@@ -162,14 +163,14 @@ export function TeamPage() {
         <div className="full">
           <p className="help-text">Store access (for managers and staff)</p>
           {stores.length === 0 ? <p className="muted">Add a store first.</p> : stores.map((store) => (
-            <label key={store.id}>
+            <label key={store.id} className="inline-check">
               <input type="checkbox" checked={inviteStores.includes(store.id)} onChange={() => setInviteStores(toggle(inviteStores, store.id))} />
               {store.name}
             </label>
           ))}
         </div>
         <div className="full"><button type="submit" disabled={sending}>{sending ? "Sending..." : "Send invitation"}</button></div>
-      </FormGrid> : <p className="read-only-note">Team membership and roles are read-only for your account.</p>}
+      </FormGrid></Drawer> : <p className="read-only-note">Team membership and roles are read-only for your account.</p>}
       <Card>
         <SectionHeader title="Pending invitations" description="Invitations expire after seven days and can be sent again." />
         {loading ? <LoadingState label="Loading invitations" /> : pendingInvites.length === 0 ? (
@@ -222,11 +223,11 @@ export function TeamPage() {
               </thead>
               <tbody>
                 {members.map((member) => (
-                  <tr key={member.id} className={selectedMember === member.id ? "selected-row click-row" : "click-row"} onClick={() => setSelectedMember(member.id)}>
-                    <td><button type="button" className="table-record-link" aria-label={`View team member ${memberName(member)}`}>{memberName(member)}</button></td>
+                  <tr key={member.id} className={selectedMember === member.id ? "selected-row" : undefined}>
+                    <td><button type="button" className="table-record-link" onClick={() => setSelectedMember(member.id)} aria-label={`View team member ${memberName(member)}`}>{memberName(member)}</button></td>
                     <td>{String(member.user?.email ?? "")}</td>
                     <td>
-                      {canUpdateStaff ? <select value={String(member.role ?? "viewer")} onChange={(event) => void updateMember(member.id, { role: event.target.value })}>
+                      {canUpdateStaff ? <select aria-label={`Role for ${memberName(member)}`} value={String(member.role ?? "viewer")} onChange={(event) => void updateMember(member.id, { role: event.target.value })}>
                         {roles.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
                       </select> : roleLabel(String(member.role ?? "viewer"))}
                     </td>
@@ -245,7 +246,8 @@ export function TeamPage() {
           </div>
         )}
       </Card>
-      <Card>
+      <Drawer open={Boolean(selectedMember)} title="Store access" onClose={() => setSelectedMember("")}>
+        <Flash message={message} />
         <SectionHeader title="Store access" description="Choose the locations this person can work in. Organization administrators retain access to every store." />
         {selectedMember ? <p><strong>{memberName(members.find((member) => member.id === selectedMember) ?? { id: "" })}</strong> · {roleLabel(String(members.find((member) => member.id === selectedMember)?.role ?? "viewer"))}</p> : null}
         <div className="store-access-grid">
@@ -259,7 +261,7 @@ export function TeamPage() {
         <div className="page-actions" style={{ marginTop: 12 }}>
           {canUpdateStaff ? <button type="button" className="primary" onClick={() => void saveAccess()}>Save access</button> : null}
         </div>
-      </Card>
+      </Drawer>
     </Page>
   );
 }

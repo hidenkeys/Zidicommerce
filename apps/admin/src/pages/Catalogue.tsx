@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiGet, apiPatch, apiPost } from "../api/client";
 import { useAuth } from "../auth";
-import { Card, Drawer, EmptyState, FilterBar, Flash, FormGrid, LoadingState, Page, SearchField } from "../components/ui";
+import { Badge, Card, Drawer, EmptyState, FilterBar, Flash, FormGrid, LoadingState, Page, SearchField } from "../components/ui";
 import { humanStatus, money, nairaToMinor, slugify, type Row } from "../lib/format";
 import { hasPermission } from "../lib/permissions";
 
@@ -15,6 +15,7 @@ export function CataloguePage() {
   const [message, setMessage] = useState("");
   const [flash, setFlash] = useState("");
   const [open, setOpen] = useState(false);
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Row | null>(null);
   const [categoryForm, setCategoryForm] = useState({ name: "" });
@@ -106,56 +107,42 @@ export function CataloguePage() {
     <Page
       title="Catalogue"
       description="The products and variants customers can order through your business."
-      help="A product is what customers see. If it has sizes or options, those are variants."
-      actions={canManageCatalogue ? <button type="button" className="primary" onClick={startCreate}>Add product</button> : undefined}
+      actions={<><button type="button" onClick={() => setCategoriesOpen(true)}>Categories</button>{canManageCatalogue ? <button type="button" className="primary" onClick={startCreate}>Add product</button> : null}</>}
     >
       <Flash message={message} />
       <Flash message={flash} tone="success" />
       <FilterBar>
         <SearchField value={query} onChange={setQuery} placeholder="Search products" />
-        <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+        <select aria-label="Filter by category" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
           <option value="all">All categories</option>
           {categories.map((category) => <option key={String(category.id)} value={String(category.id)}>{String(category.name)}</option>)}
         </select>
       </FilterBar>
-      <div className="split">
-        <Card>
-          <h3>Categories</h3>
-          {canManageCatalogue ? <form className="filter-bar" onSubmit={createCategory}>
-            <input placeholder="New category name" value={categoryForm.name} onChange={(event) => setCategoryForm({ name: event.target.value })} />
-            <button type="submit">Add</button>
-          </form> : null}
-          {categories.length === 0 ? <p className="muted">Add a category such as Drinks or Meals.</p> : (
-            <ul className="attention-links">
-              {categories.map((category) => <li key={String(category.id)}>{String(category.name)}</li>)}
-            </ul>
-          )}
-        </Card>
-        <Card>
-          <h3>{filtered.length} product{filtered.length === 1 ? "" : "s"}</h3>
-          <p className="muted">{canManageCatalogue ? "Select a product to edit its details, price, image, and availability." : "Product details and current prices are read-only for your role."}</p>
-        </Card>
-      </div>
+      <Drawer open={categoriesOpen} title="Categories" onClose={() => setCategoriesOpen(false)}>
+        {canManageCatalogue ? <FormGrid onSubmit={createCategory}>
+          <label className="full">Category name<input value={categoryForm.name} onChange={(event) => setCategoryForm({ name: event.target.value })} required /></label>
+          <div className="full"><button className="primary" type="submit">Add category</button></div>
+        </FormGrid> : null}
+        {categories.length === 0 ? <EmptyState title="No categories" body="Group your products so customers can find them." /> : <ul className="category-list">{categories.map((category) => <li key={String(category.id)}><span>{String(category.name)}</span><span className="muted">{products.filter(product => product.category_id === category.id).length} products</span></li>)}</ul>}
+      </Drawer>
+      <p className="result-count">{filtered.length} product{filtered.length === 1 ? "" : "s"}</p>
       {loading ? <LoadingState label="Loading catalogue" /> : filtered.length === 0 ? (
-        <EmptyState title="No products yet" body="Products will appear here after an administrator or store manager adds them." action={canManageCatalogue ? <button type="button" className="primary" onClick={startCreate}>Add product</button> : undefined} />
+        <EmptyState title={products.length ? "No matching products" : "No products yet"} body={products.length ? "Try another search or category." : "Add your first product to start taking orders."} action={canManageCatalogue ? <button type="button" className="primary" onClick={startCreate}>Add product</button> : undefined} />
       ) : (
-        <div className="product-grid">
-          {filtered.map((product) => {
+        <Card className="orders-register"><div className="table-wrap" style={{ border: 0, margin: 0 }}><table>
+          <thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Options</th><th>Status</th>{canManageCatalogue ? <th><span className="sr-only">Actions</span></th> : null}</tr></thead>
+          <tbody>{filtered.map((product) => {
             const variants = Array.isArray(product.variants) ? (product.variants as Row[]) : [];
             const images = Array.isArray(product.images) ? (product.images as Row[]) : [];
             const price = variants[0]?.price_minor;
             const categoryName = categories.find((entry) => entry.id === product.category_id)?.name;
-            return (
-              <button className="product-card" type="button" key={String(product.id)} disabled={!canManageCatalogue} onClick={() => canManageCatalogue && startEdit(product)}>
-                <div className="product-image">{images[0]?.url ? <img src={String(images[0].url)} alt={String(product.name)} /> : <span>No photo</span>}</div>
-                <h3>{String(product.name)}</h3>
-                <p>{String(categoryName || "Uncategorised")}</p>
-                <p className="price">{price ? money(price, String(variants[0]?.currency ?? "NGN")) : "No price"}</p>
-                <p>{humanStatus(product.status)} · {variants.length || 1} option{variants.length === 1 ? "" : "s"}</p>
-              </button>
-            );
-          })}
-        </div>
+            return <tr key={String(product.id)}>
+              <td><div className="product-cell">{images[0]?.url ? <img src={String(images[0].url)} alt="" loading="lazy" /> : <span className="product-placeholder" aria-hidden="true">{String(product.name).slice(0,1)}</span>}<span>{canManageCatalogue ? <button className="table-record-link" type="button" onClick={() => startEdit(product)}>{String(product.name)}</button> : String(product.name)}</span></div></td>
+              <td>{String(categoryName || "Uncategorised")}</td><td>{price !== undefined ? money(price, String(variants[0]?.currency ?? "NGN")) : "No price"}</td><td>{variants.length}</td><td><Badge tone={product.status === "active" ? "success" : "neutral"}>{humanStatus(product.status)}</Badge></td>
+              {canManageCatalogue ? <td><button type="button" onClick={() => startEdit(product)} aria-label={`Edit ${product.name}`}>Edit</button></td> : null}
+            </tr>;
+          })}</tbody>
+        </table></div></Card>
       )}
       <Drawer open={open} title={editing ? "Edit product" : "Add product"} onClose={() => setOpen(false)}>
         <FormGrid onSubmit={saveProduct}>
@@ -167,7 +154,7 @@ export function CataloguePage() {
               {categories.map((category) => <option key={String(category.id)} value={String(category.id)}>{String(category.name)}</option>)}
             </select>
           </label>
-          {!editing ? <label>Price (NGN)<input type="number" min="0" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} required /></label> : <label>Option name<input value={form.variant} onChange={(event) => setForm({ ...form, variant: event.target.value })} /></label>}
+          {!editing ? <label>Price (NGN)<input type="number" min="0" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} required /></label> : null}
           <label className="full">Image URL<input value={form.image_url} onChange={(event) => setForm({ ...form, image_url: event.target.value })} placeholder="https://" /></label>
           <label className="full">Available?
             <select value={form.available ? "yes" : "no"} onChange={(event) => setForm({ ...form, available: event.target.value === "yes" })}>
@@ -219,6 +206,7 @@ function VariantEditor({ product, onSaved }: { product: Row; onSaved: () => Prom
         <div key={String(variant.id)} className="filter-bar" style={{ marginBottom: 8 }}>
           <span>{String(variant.name)}</span>
           <input
+            aria-label={`Price for ${variant.name}`}
             type="number"
             min="0"
             value={editPrices[String(variant.id)] ?? String(Number(variant.price_minor ?? 0) / 100)}

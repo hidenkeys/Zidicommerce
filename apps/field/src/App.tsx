@@ -1,6 +1,7 @@
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { Login } from "./Login";
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
-import { api, clearToken, getToken, setToken } from "./api";
+import { api, clearToken, getToken } from "./api";
 
 type User = { id: string; role: string; email?: string; organization_id: string };
 const ADMIN_BASE_URL = String(import.meta.env.VITE_ADMIN_BASE_URL ?? "").replace(/\/$/, "");
@@ -12,41 +13,6 @@ function money(minor?: unknown) {
 
 function statusLabel(value?: unknown) {
   return String(value ?? "").replaceAll("_", " ");
-}
-
-function Login({ onAuthenticated }: { onAuthenticated: (user: User) => void }) {
-  const navigate = useNavigate();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    setError("");
-    try {
-      const result = await api.login(email, password) as { access_token?: string };
-      const token = result.access_token;
-      if (!token) throw new Error("No session token returned");
-      setToken(token);
-      const me = await api.me();
-      onAuthenticated(me);
-      navigate(me.role === "service_provider" ? "/provider" : "/owner");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not sign in");
-    }
-  }
-  return (
-    <div className="login">
-      <form onSubmit={onSubmit}>
-        <p className="eyebrow">Zidi Field Service</p>
-        <h1>Welcome back</h1>
-        <p>Owner dashboard or provider portal — same sign-in.</p>
-        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" />
-        {error ? <p className="error">{error}</p> : null}
-        <button className="primary" type="submit">Continue</button>
-      </form>
-    </div>
-  );
 }
 
 function useSession() {
@@ -65,47 +31,42 @@ function useSession() {
 function Shell({ user, links, children }: { user: User; links: { to: string; label: string; external?: boolean }[]; children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const navigation = useRef<HTMLElement>(null);
+  useEffect(() => { if (menuOpen) navigation.current?.querySelector<HTMLAnchorElement>("a")?.focus(); }, [menuOpen]);
+  useEffect(() => { setMenuOpen(false); }, [location.pathname]);
+  useEffect(() => { const close = (event: KeyboardEvent) => { if (event.key === "Escape") { setMenuOpen(false); menuButton.current?.focus(); } }; document.addEventListener("keydown", close); return () => document.removeEventListener("keydown", close); }, []);
+  const active = links.find(link => location.pathname === link.to || (link.to !== "/owner" && link.to !== "/provider" && location.pathname.startsWith(link.to)));
   return (
     <div className="shell">
-      <aside className="nav">
-        <strong>{user.role === "service_provider" ? "Provider" : "Business"}</strong>
-        <span>{user.email || "Signed in"}</span>
-        {links.map((link) => link.external ? (
-          <a key={link.to} href={link.to}>{link.label}</a>
+      <a className="skip-link" href="#field-main">Skip to content</a>
+      <aside ref={navigation} id="field-navigation" className={`nav ${menuOpen ? "open" : ""}`}>
+        <div className="field-brand"><span aria-hidden="true">Z</span><div><strong>Zidi Field</strong><small>{user.role === "service_provider" ? "Provider workspace" : "Business workspace"}</small></div></div>
+        <nav aria-label="Main navigation">{links.map((link) => link.external ? (
+          <a key={link.to} href={link.to}>{link.label} ↗</a>
         ) : (
-          <Link key={link.to} className={location.pathname === link.to || (link.to !== "/owner" && link.to !== "/provider" && location.pathname.startsWith(link.to)) ? "active" : ""} to={link.to}>{link.label}</Link>
-        ))}
-        <button className="ghost" onClick={() => { clearToken(); navigate("/login"); }}>Sign out</button>
+          <Link key={link.to} aria-current={active?.to === link.to ? "page" : undefined} className={active?.to === link.to ? "active" : ""} to={link.to}>{link.label}</Link>
+        ))}</nav>
+        <div className="field-account"><span>{user.email || (user.role === "service_provider" ? "Service provider" : "Business owner")}</span><button className="ghost" onClick={() => { clearToken(); navigate("/login"); }}>Sign out</button></div>
       </aside>
-      <main className="main">{children}</main>
+      <div className="field-workspace"><header className="field-topbar"><button type="button" ref={menuButton} className="field-menu" aria-expanded={menuOpen} aria-controls="field-navigation" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? "Close menu" : "Menu"}</button><span>Field Service</span><strong>{active?.label || "Job details"}</strong></header><main id="field-main" className="main">{children}</main></div>
     </div>
   );
 }
 
 function Overview() {
-  const [data, setData] = useState<Record<string, number>>({});
-  useEffect(() => { api.overview().then(setData).catch(() => undefined); }, []);
-  const cards = [
-    ["Today's requests", data.todays_requests],
-    ["Active jobs", data.active_jobs],
-    ["Available handymen", data.available_providers],
-    ["Waiting on providers", data.pending_provider_requests],
-    ["Completed", data.completed_jobs],
-    ["Outstanding quotes", data.outstanding_quotes],
-    ["Booking fees", money(data.booking_fees_minor)],
-    ["Revenue", money(data.revenue_minor)],
-  ];
-  return (
-    <div>
-      <h1>Today</h1>
-      <p>A quiet snapshot of the business — not the machinery underneath.</p>
-      <div className="grid">
-        {cards.map(([label, value]) => (
-          <div className="card" key={String(label)}><span className="muted">{label}</span><b>{value ?? 0}</b></div>
-        ))}
-      </div>
-    </div>
-  );
+  const [data, setData] = useState<Record<string, number> | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { api.overview().then(setData).catch(reason => setError(reason instanceof Error ? reason.message : "Could not load overview")); }, []);
+  const cards = data ? [["Today's requests", data.todays_requests], ["Active jobs", data.active_jobs], ["Available handymen", data.available_providers], ["Completed", data.completed_jobs]] : [];
+  return <div>
+    <div className="field-page-heading"><div><h1>Overview</h1><p>Today's jobs, team availability and customer payments.</p></div><Link className="button primary" to="/owner/jobs">View jobs</Link></div>
+    {error ? <p className="error" role="alert">{error}</p> : !data ? <p role="status">Loading overview…</p> : <>
+    <div className="field-metrics">{cards.map(([label,value]) => <div key={String(label)}><span>{label}</span><strong>{value ?? 0}</strong></div>)}</div>
+    <div className="field-overview-columns"><section className="card"><h2>Needs attention</h2><Link className="operation-link" to="/owner/jobs"><span>Waiting on providers</span><strong>{data.pending_provider_requests ?? 0} →</strong></Link><Link className="operation-link" to="/owner/quotes"><span>Outstanding quotes</span><strong>{data.outstanding_quotes ?? 0} →</strong></Link><Link className="operation-link" to="/owner/conversations"><span>Customer conversations</span><strong>Open inbox →</strong></Link></section><section className="card"><h2>Payments</h2><div className="operation-link"><span>Booking fees</span><strong>{money(data.booking_fees_minor)}</strong></div><div className="operation-link"><span>Revenue</span><strong>{money(data.revenue_minor)}</strong></div><Link className="field-inline-link" to="/owner/payments">View payment history →</Link></section></div>
+    </>}
+  </div>;
 }
 
 const LAGOS_AREAS = [
@@ -229,7 +190,7 @@ function ProviderForm({ pools, initial, onSaved, onCancel }: {
           })}
         </div>
       </div>
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <p className="error" role="alert">{error}</p> : null}
       <div className="row wrap">
         <button className="primary" disabled={saving}>{saving ? "Saving…" : editing ? "Save changes" : "Add handyman"}</button>
         <button type="button" className="ghost" onClick={onCancel}>Cancel</button>
@@ -372,7 +333,7 @@ function Services() {
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Add a service, e.g. Tiler" />
         <button className="primary">Add</button>
       </form>
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <p className="error" role="alert">{error}</p> : null}
       <div className="list" style={{ marginTop: 16 }}>
         {rows.map((row) => {
           const isEditing = editing?.id === String(row.id);
@@ -413,9 +374,11 @@ function Services() {
 
 function Requests() {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  useEffect(() => { api.requests().then(setRows).catch(() => undefined); }, []);
+  useEffect(() => { api.requests().then(setRows).catch(reason => setLoadError(reason instanceof Error ? reason.message : "Could not load records")).finally(() => setLoading(false)); }, []);
   const statuses = useMemo(() => [...new Set(rows.map((row) => String(row.status)))].sort(), [rows]);
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -429,6 +392,7 @@ function Requests() {
   return (
     <div>
       <h1>Jobs</h1>
+      {loading ? <p role="status">Loading…</p> : loadError ? <p className="error" role="alert">{loadError}</p> : rows.length === 0 ? <div className="empty-state">No jobs yet. Customer service requests will appear here.</div> : null}
       <div className="filters" aria-label="Job filters">
         <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search job, customer, phone, area or handyman" />
         <select aria-label="Filter by job status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
@@ -437,7 +401,7 @@ function Requests() {
         </select>
       </div>
       <div className="list">
-        {filteredRows.length === 0 ? <div className="card muted">No jobs match these filters.</div> : null}
+        {!loading && !loadError && rows.length > 0 && filteredRows.length === 0 ? <div className="card muted">No jobs match these filters.</div> : null}
         {filteredRows.map((row) => (
           <Link className="card row" key={String(row.public_code)} to={`/owner/jobs/${row.id}`}>
             <div>
@@ -454,13 +418,14 @@ function Requests() {
 
 function JobDetail() {
   const { id = "" } = useParams();
+  const [loadError, setLoadError] = useState("");
   const [job, setJob] = useState<Record<string, unknown> | null>(null);
   const [matches, setMatches] = useState<Array<Record<string, unknown>>>([]);
   const [messages, setMessages] = useState<Array<Record<string, unknown>>>([]);
   const [draft, setDraft] = useState("");
   const [weights, setWeights] = useState<Record<string, number>>({});
   useEffect(() => {
-    api.request(id).then(setJob).catch(() => undefined);
+    api.request(id).then(setJob).catch(reason => setLoadError(reason instanceof Error ? reason.message : "Could not load job"));
     api.matches(id).then(setMatches).catch(() => undefined);
     api.messages(id).then(setMessages).catch(() => undefined);
     api.settings().then((s) => setWeights({
@@ -471,18 +436,19 @@ function JobDetail() {
       experience: Number(s.weight_experience ?? 0.05) * 100,
     })).catch(() => undefined);
   }, [id]);
-  if (!job) return <p>Loading…</p>;
+  if (!job) return loadError ? <p className="error" role="alert">{loadError}</p> : <p role="status">Loading job…</p>;
   const share = (key: string) => Math.round(weights[key] ?? 0);
   return (
     <div>
       <h1>{String(job.public_code)}</h1>
       <p>{(job.pool as { name?: string })?.name} in {String(job.area)} — {String(job.description)}</p>
-      <div className="row wrap">
+      <div className="row wrap job-actions">
         <button onClick={() => api.takeOver(id)}>Take over</button>
         <button onClick={() => api.release(id)}>Release to handyman</button>
         <button onClick={() => api.close(id)}>Close</button>
       </div>
       <h2>Matching</h2>
+      {matches.length === 0 ? <p className="muted">No provider matches recorded for this job yet.</p> : null}
       <div className="list">
         {matches.map((match) => {
           const breakdown = JSON.parse(String(match.breakdown || "{}"));
@@ -504,6 +470,7 @@ function JobDetail() {
       </div>
       <h2>Conversation</h2>
       <div className="chat">
+        {messages.length === 0 ? <p className="muted">No messages yet.</p> : null}
         {messages.map((message) => <div key={String(message.id)} className={`bubble ${message.author_type === "provider" || message.author_type === "owner" ? "me" : ""}`}><span className="muted">{String(message.author_type)}</span><div>{String(message.body)}</div></div>)}
       </div>
       <form className="row" onSubmit={(event) => { event.preventDefault(); api.sendMessage(id, draft).then(() => { setDraft(""); return api.messages(id).then(setMessages); }); }}>
@@ -596,10 +563,13 @@ function SettingsPage() {
 
 function Quotes() {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
-  useEffect(() => { api.quotes().then(setRows).catch(() => undefined); }, []);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  useEffect(() => { api.quotes().then(setRows).catch(reason => setLoadError(reason instanceof Error ? reason.message : "Could not load records")).finally(() => setLoading(false)); }, []);
   return (
     <div>
       <h1>Quotes</h1>
+      {loading ? <p role="status">Loading…</p> : loadError ? <p className="error" role="alert">{loadError}</p> : rows.length === 0 ? <div className="empty-state">No quotes yet. Quotes sent from a job appear here.</div> : null}
       <div className="list">{rows.map((row) => <div className="card row" key={String(row.public_code)}><strong>{String(row.public_code)}</strong><span>{money(row.total_minor)} · {statusLabel(row.status)}</span></div>)}</div>
     </div>
   );
@@ -607,10 +577,13 @@ function Quotes() {
 
 function Conversations() {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
-  useEffect(() => { api.conversations().then(setRows).catch(() => undefined); }, []);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  useEffect(() => { api.conversations().then(setRows).catch(reason => setLoadError(reason instanceof Error ? reason.message : "Could not load records")).finally(() => setLoading(false)); }, []);
   return (
     <div>
       <h1>Conversations</h1>
+      {loading ? <p role="status">Loading…</p> : loadError ? <p className="error" role="alert">{loadError}</p> : rows.length === 0 ? <div className="empty-state">No conversations yet. Customer and handyman messages will appear here.</div> : null}
       <p>Customer and handyman conversation history.</p>
       <div className="list">
         {rows.map((row) => (
@@ -629,10 +602,13 @@ function Conversations() {
 
 function Payments() {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
-  useEffect(() => { api.transactions().then(setRows).catch(() => undefined); }, []);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  useEffect(() => { api.transactions().then(setRows).catch(reason => setLoadError(reason instanceof Error ? reason.message : "Could not load records")).finally(() => setLoading(false)); }, []);
   return (
     <div>
       <h1>Payments</h1>
+      {loading ? <p role="status">Loading…</p> : loadError ? <p className="error" role="alert">{loadError}</p> : rows.length === 0 ? <div className="empty-state">No payments recorded. Booking fees and quote payments will appear here.</div> : null}
       <p>Booking fees and quote payments.</p>
       <div className="list">
         {rows.map((row, index) => (
@@ -655,41 +631,42 @@ function Payments() {
 
 function ProviderHome() {
   const [data, setData] = useState<Record<string, unknown> | null>(null);
-  const load = useCallback(() => { api.home().then(setData).catch(() => undefined); }, []);
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+  const load = useCallback(() => { api.home().then(setData).catch(reason => setError(reason instanceof Error ? reason.message : "Could not load your work")); }, []);
   useEffect(() => { load(); }, [load]);
-  if (!data) return <p>Loading…</p>;
+  if (!data) return error ? <p className="error" role="alert">{error}</p> : <p role="status">Loading your work…</p>;
   const provider = data.provider as Record<string, unknown>;
   const current = data.current_job as Record<string, unknown> | undefined;
   const request = current?.request as Record<string, unknown> | undefined;
   const hasCurrentJob = Boolean(request?.id) && request?.id !== "00000000-0000-0000-0000-000000000000";
-  return (
-    <div>
-      <h1>Hi, {String(provider?.name || "there")}</h1>
-      <div className="grid">
-        <div className="card"><span className="muted">Availability</span><b>{statusLabel(provider?.availability)}</b>
-          <button style={{ marginTop: 10 }} onClick={() => api.availability(String(provider.id), provider.availability === "available" ? "offline" : "available").then(load)}>
-            {provider.availability === "available" ? "Go offline" : "Go available"}
-          </button>
-        </div>
-        <div className="card"><span className="muted">Rating</span><b>{Number(provider?.rating_average || 0).toFixed(1)}★</b></div>
-        <div className="card"><span className="muted">Jobs done</span><b>{String(provider?.jobs_completed)}</b></div>
-        <div className="card"><span className="muted">Completed today</span><b>{String(data.completed_today ?? 0)}</b></div>
-        <div className="card"><span className="muted">Earnings</span><b>{money(data.earnings_minor)}</b></div>
-      </div>
-      {hasCurrentJob ? <div className="card" style={{ marginTop: 16 }}><h2>Current job</h2><p>{String(request?.description)} · {String(request?.area)}</p><Link to={`/provider/jobs/${request?.id}`}>Open job</Link></div> : null}
-    </div>
-  );
+  async function toggleAvailability() {
+    setPending(true); setError("");
+    try { await api.availability(String(provider.id), provider.availability === "available" ? "offline" : "available"); load(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not change availability"); }
+    finally { setPending(false); }
+  }
+  return <div>
+    <div className="field-page-heading"><div><h1>Hi, {String(provider?.name || "there")}</h1><p>Manage your availability and keep today's work moving.</p></div><Link className="button primary" to="/provider/inbox">View requests</Link></div>
+    {error ? <p className="error" role="alert">{error}</p> : null}
+    <section className="availability-bar"><div><strong>{provider.availability === "available" ? "Available for new work" : "Currently offline"}</strong><p>{provider.availability === "available" ? "You can receive matching service requests." : "Go available when you are ready for requests."}</p></div><button disabled={pending} onClick={() => void toggleAvailability()}>{pending ? "Updating…" : provider.availability === "available" ? "Go offline" : "Go available"}</button></section>
+    <div className="field-metrics"><div><span>Rating</span><strong>{Number(provider?.rating_average || 0).toFixed(1)}★</strong></div><div><span>Jobs done</span><strong>{String(provider?.jobs_completed ?? 0)}</strong></div><div><span>Completed today</span><strong>{String(data.completed_today ?? 0)}</strong></div><div><span>Earnings</span><strong>{money(data.earnings_minor)}</strong></div></div>
+    <section className="card"><h2>{hasCurrentJob ? "Current job" : "Your work"}</h2>{hasCurrentJob ? <><p>{String(request?.description)} · {String(request?.area)}</p><Link className="button primary" to={`/provider/jobs/${request?.id}`}>Open job</Link></> : <><p>Your assigned jobs and updates are available in My jobs.</p><Link className="field-inline-link" to="/provider/jobs">View my jobs →</Link></>}</section>
+  </div>;
 }
 
 function ProviderInbox() {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const navigate = useNavigate();
-  useEffect(() => { api.inbox().then(setRows).catch(() => undefined); }, []);
+  useEffect(() => { api.inbox().then(setRows).catch(reason => setLoadError(reason instanceof Error ? reason.message : "Could not load records")).finally(() => setLoading(false)); }, []);
   return (
     <div>
       <h1>Requests</h1>
+      {loading ? <p role="status">Loading…</p> : loadError ? <p className="error" role="alert">{loadError}</p> : rows.length === 0 ? <div className="empty-state">No requests waiting. New matching jobs will appear here when you are available.</div> : null}
       <div className="list">
-        {rows.length === 0 ? <div className="card muted">No pending requests right now.</div> : null}
+
         {rows.map((row) => {
           const request = row.request as Record<string, unknown> | undefined;
           const pool = request?.pool as { name?: string } | undefined;
@@ -712,10 +689,13 @@ function ProviderInbox() {
 
 function ProviderJobs() {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
-  useEffect(() => { api.requests().then(setRows).catch(() => undefined); }, []);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  useEffect(() => { api.requests().then(setRows).catch(reason => setLoadError(reason instanceof Error ? reason.message : "Could not load records")).finally(() => setLoading(false)); }, []);
   return (
     <div>
       <h1>My jobs</h1>
+      {loading ? <p role="status">Loading…</p> : loadError ? <p className="error" role="alert">{loadError}</p> : rows.length === 0 ? <div className="empty-state">No assigned jobs. Accepted requests will appear here.</div> : null}
       <div className="list">
         {rows.map((row) => (
           <Link className="card" key={String(row.public_code)} to={`/provider/jobs/${row.id}`}>
@@ -753,12 +733,12 @@ function ProviderJob() {
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
   const load = useCallback(() => {
-    api.request(id).then(setJob).catch(() => undefined);
+    api.request(id).then(setJob).catch(reason => setError(reason instanceof Error ? reason.message : "Could not load job"));
     api.messages(id).then(setMessages).catch(() => undefined);
     api.quotes().then((rows) => setQuotes(rows.filter((row) => String(row.request_id) === id))).catch(() => undefined);
   }, [id]);
   useEffect(() => { load(); }, [load]);
-  if (!job) return <p>Loading…</p>;
+  if (!job) return error ? <p className="error" role="alert">{error}</p> : <p role="status">Loading job…</p>;
 
   const status = String(job.status ?? "");
   const nextSteps = NEXT_STATUSES[status] ?? [];
@@ -783,7 +763,7 @@ function ProviderJob() {
           ))}
         </div>
       ) : <p className="muted">This job is {statusLabel(status)} — nothing left to update.</p>}
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <p className="error" role="alert">{error}</p> : null}
 
       <h2>Chat</h2>
       <div className="chat">
@@ -819,8 +799,8 @@ function ProviderJob() {
             notes,
           }));
         }}>
-          <label>Labour (₦)<input value={labour} onChange={(e) => setLabour(e.target.value)} /></label>
-          <label>Materials (₦)<input value={materials} onChange={(e) => setMaterials(e.target.value)} /></label>
+          <label>Labour (₦)<input type="number" min="0" step="0.01" value={labour} onChange={(e) => setLabour(e.target.value)} /></label>
+          <label>Materials (₦)<input type="number" min="0" step="0.01" value={materials} onChange={(e) => setMaterials(e.target.value)} /></label>
           <label>Notes<textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} /></label>
           <p className="muted">Total {money(Math.round((Number(labour) + Number(materials)) * 100))}</p>
           <button className="primary">{latestQuote ? "Send a revised quote" : "Send quote"}</button>
@@ -832,10 +812,13 @@ function ProviderJob() {
 
 function SimpleList({ title, loader, line }: { title: string; loader: () => Promise<Array<Record<string, unknown>>>; line: (row: Record<string, unknown>) => string }) {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
-  useEffect(() => { loader().then(setRows).catch(() => undefined); }, [loader]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  useEffect(() => { loader().then(setRows).catch(reason => setLoadError(reason instanceof Error ? reason.message : "Could not load records")).finally(() => setLoading(false)); }, [loader]);
   return (
     <div>
       <h1>{title}</h1>
+      {loading ? <p role="status">Loading…</p> : loadError ? <p className="error" role="alert">{loadError}</p> : rows.length === 0 ? <div className="empty-state">No customers yet. Customers appear after their first service request.</div> : null}
       <div className="list">{rows.map((row, index) => <div className="card" key={String(row.id || index)}>{line(row)}</div>)}</div>
     </div>
   );
@@ -843,10 +826,13 @@ function SimpleList({ title, loader, line }: { title: string; loader: () => Prom
 
 function AuditLog() {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
-  useEffect(() => { api.audit().then(setRows).catch(() => undefined); }, []);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  useEffect(() => { api.audit().then(setRows).catch(reason => setLoadError(reason instanceof Error ? reason.message : "Could not load records")).finally(() => setLoading(false)); }, []);
   return (
     <div>
       <h1>Audit log</h1>
+      {loading ? <p role="status">Loading…</p> : loadError ? <p className="error" role="alert">{loadError}</p> : rows.length === 0 ? <div className="empty-state">No activity recorded yet. Team and business changes will appear here.</div> : null}
       <p>Important business and system activity, newest first.</p>
       <div className="list">
         {rows.map((row, index) => {
@@ -889,7 +875,7 @@ export default function App() {
     { to: "/provider/inbox", label: "Requests" },
     { to: "/provider/jobs", label: "Jobs" },
   ], []);
-  if (!ready) return null;
+  if (!ready) return <div className="session-loading" role="status">Opening your workspace…</div>;
   const providerUser = user?.role === "service_provider";
   const ownerPage = (content: ReactNode) => user && !providerUser
     ? <Shell user={user} links={ownerLinks}>{content}</Shell>

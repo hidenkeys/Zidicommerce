@@ -13,10 +13,10 @@ const labels: Record<string, { title: string; copy: string }> = {
   catalogue: { title: "Catalogue", copy: "Add products customers can buy." },
   inventory: { title: "Inventory", copy: "Set how many of each product you have." },
   payments: { title: "Payments", copy: "Enable and test how customers will pay." },
-  whatsapp: { title: "Customer channel", copy: "Optional for launch. Connect WhatsApp when you are ready to receive customer messages." },
+  whatsapp: { title: "Customer channel", copy: "Connect WhatsApp when you are ready to receive customer messages." },
   bot: { title: "Assistant", copy: "Review, test, and publish the customer assistant." },
   faqs: { title: "Business knowledge", copy: "Publish policies and answers the assistant may use." },
-  team: { title: "Team", copy: "Optional for a solo merchant. Invite staff and assign their stores." },
+  team: { title: "Team", copy: "Invite staff and assign their stores." },
 };
 
 export function SetupPage() {
@@ -28,6 +28,7 @@ export function SetupPage() {
   const [messageTone, setMessageTone] = useState<"error" | "success">("error");
   const [loading, setLoading] = useState(canManageSetup && organizationCreated);
   const [creating, setCreating] = useState(false);
+  const [retry, setRetry] = useState(0);
   const [slugEdited, setSlugEdited] = useState(false);
   const [organization, setOrganization] = useState({
     name: "",
@@ -44,6 +45,7 @@ export function SetupPage() {
     if (!canManageSetup || !organizationCreated) return;
     async function load() {
       setLoading(true);
+      setMessage("");
       try {
         const response = await apiGet<SetupStatus>("/bot-setup/status");
         setSetupStatus(response.data);
@@ -55,7 +57,7 @@ export function SetupPage() {
       }
     }
     void load();
-  }, [canManageSetup, organizationCreated]);
+  }, [canManageSetup, organizationCreated, retry]);
 
   async function createOrganization(event: FormEvent) {
     event.preventDefault();
@@ -76,10 +78,11 @@ export function SetupPage() {
 
   if (!organizationCreated) {
     return (
-      <Page title="Create your business workspace" description="Add the core details used for stores, orders, payments, and customer messages.">
+      <Page title="Set up your workspace" description="Start with your business details. You can add stores and products next.">
         <Flash message={message} tone={messageTone} />
-        <Card>
-          <form className="resource-form workspace-onboarding-form" onSubmit={createOrganization}>
+        <Card className="workspace-onboarding">
+          <form className="workspace-onboarding-form" onSubmit={createOrganization}>
+            <SectionHeader title="Business identity" />
             <label>
               Business name
               <input
@@ -106,6 +109,7 @@ export function SetupPage() {
               />
             </label>
             <small id="workspace-address-help">Use lowercase letters, numbers and hyphens.</small>
+            <SectionHeader title="Location and currency" description="Used for prices, order times and business operations." />
             <div className="workspace-fields">
               <label>
                 Country code
@@ -120,7 +124,9 @@ export function SetupPage() {
                 <input required value={organization.timezone} onChange={(event) => setOrganization((current) => ({ ...current, timezone: event.target.value }))} />
               </label>
             </div>
-            <div className="workspace-fields">
+            <details className="workspace-contact-details">
+              <summary>Contact details <span className="muted">(optional)</span></summary>
+              <div className="workspace-fields">
               <label>
                 Contact name
                 <input autoComplete="name" value={organization.contact_name} onChange={(event) => setOrganization((current) => ({ ...current, contact_name: event.target.value }))} />
@@ -133,7 +139,8 @@ export function SetupPage() {
                 Contact phone
                 <input type="tel" autoComplete="tel" value={organization.contact_phone} onChange={(event) => setOrganization((current) => ({ ...current, contact_phone: event.target.value }))} />
               </label>
-            </div>
+              </div>
+            </details>
             <button type="submit" disabled={creating || !organization.name || !organization.slug}>
               {creating ? "Creating workspace..." : "Create workspace"}
             </button>
@@ -164,15 +171,15 @@ export function SetupPage() {
     <Page
       title={ready ? "Ready for daily operations" : "Getting started"}
       description={ready ? "The required business, selling, and customer-service foundations are in place." : "Complete the required steps, then review the optional team and channel preparation."}
-      help="Readiness is calculated from current organization data. WhatsApp remains optional until you are ready to serve customers there."
     >
       <Flash message={message} tone={messageTone} />
       {loading ? <LoadingState label="Checking business readiness" /> : null}
-      <Card>
+      {!loading && !setupStatus && message ? <div className="page-actions"><button type="button" onClick={() => setRetry((value) => value + 1)}>Try again</button></div> : null}
+      {!loading && setupStatus ? <Card>
         <div className="readiness-summary"><div><span className="section-kicker">Required setup</span><strong>{requiredDone} of {requiredItems.length || 7} ready</strong></div><Badge tone={ready ? "success" : "warning"}>{ready ? "Operationally ready" : `${requiredItems.length - requiredDone} remaining`}</Badge></div>
-        <div className="progress-bar"><span style={{ width: `${requiredItems.length ? (requiredDone / requiredItems.length) * 100 : 0}%` }} /></div>
-      </Card>
-      {readinessSections.map((section) => {
+        <div className="progress-bar" role="progressbar" aria-label="Required setup completed" aria-valuemin={0} aria-valuemax={requiredItems.length} aria-valuenow={requiredDone}><span style={{ width: `${requiredItems.length ? (requiredDone / requiredItems.length) * 100 : 0}%` }} /></div>
+      </Card> : null}
+      <div className="readiness-grid">{!loading && setupStatus ? readinessSections.map((section) => {
         const sectionItems = items.filter((item) => item.group === section.key);
         if (sectionItems.length === 0) return null;
         return (
@@ -188,7 +195,7 @@ export function SetupPage() {
             </Card>
           </section>
         );
-      })}
+      }) : null}</div>
     </Page>
   );
 }

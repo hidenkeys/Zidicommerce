@@ -66,7 +66,7 @@ export function PaymentsPage() {
 
   return (
     <Page
-      title="Payments"
+      title="Payment settings"
       description="How customers pay for orders."
       help="ZidiCommerce never displays secret keys. If a key was set in the server environment, you do not need to paste it here."
     >
@@ -102,7 +102,7 @@ export function PaymentsPage() {
             <label>Secret key<input type="password" value={form.secret_key} onChange={(event) => setForm({ ...form, secret_key: event.target.value })} placeholder="Leave blank to keep current" /></label>
           </>
         ) : <p className="help-text full">Most merchants can leave keys blank if the platform already has a Paystack key.</p>}
-        <div className="full"><button type="submit">{paystack ? "Save" : "Connect Paystack"}</button></div>
+        <div className="full"><button type="submit" className="primary">{paystack ? "Save changes" : "Connect Paystack"}</button></div>
       </FormGrid> : <p className="read-only-note">Payment configuration is read-only for your role.</p>}
       </>}
     </Page>

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { PanelLeft, Search, Bell, Bot, Boxes, Building2, ClipboardCheck, CreditCard, FileClock, Home, LifeBuoy, LogOut, Menu, MessageSquareText, PackageSearch, Settings, ShieldCheck, ShoppingBag, Sparkles, Store, Users, X, type LucideIcon } from "lucide-react";
 import { apiGet } from "../api/client";
 import { hasOrganization, useAuth } from "../auth";
 import { roleLabel } from "../lib/format";
 import { hasPermission, type Permission } from "../lib/permissions";
 import { ZidiCommerceLogo } from "./brand/ZidiCommerceLogo";
+import { routeAliases } from "../lib/route-aliases";
 import { IconButton, Modal } from "./ui";
 
 type NavGroup = {
@@ -97,7 +98,7 @@ const titles: Record<string, { eyebrow: string; title: string }> = {
   "/conversations": { eyebrow: "Engagement", title: "Conversations" },
   "/knowledge": { eyebrow: "Engagement", title: "Knowledge" },
   "/journeys": { eyebrow: "Engagement", title: "Flow Studio" },
-  "/team": { eyebrow: "Operations", title: "People" },
+  "/team": { eyebrow: "Operations", title: "Team" },
   "/settings/business": { eyebrow: "Organization", title: "Business" },
   "/settings/payments": { eyebrow: "Commerce", title: "Payments" },
   "/settings/whatsapp": { eyebrow: "Organization", title: "Channels" },
@@ -110,6 +111,7 @@ const titles: Record<string, { eyebrow: string; title: string }> = {
 };
 
 function pageMeta(pathname: string) {
+  pathname = routeAliases[pathname] || pathname;
   if (titles[pathname]) return titles[pathname];
   const match = Object.keys(titles).find((path) => path !== "/" && pathname.startsWith(path));
   return match ? titles[match] : { eyebrow: "ZidiCommerce", title: "Workspace" };
@@ -119,6 +121,7 @@ export function Shell() {
   const { user, logout } = useAuth();
   const organizationReady = hasOrganization(user);
   const location = useLocation();
+  const activePath = routeAliases[location.pathname] || location.pathname;
   const [fieldService, setFieldService] = useState(false);
   const [organizationName, setOrganizationName] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -169,7 +172,7 @@ export function Shell() {
       {mobileOpen ? <button className="sidebar-scrim" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} /> : null}
       <aside className={mobileOpen ? "sidebar open" : "sidebar"} aria-label="Primary navigation">
         <div className="brand">
-          <ZidiCommerceLogo tone="light" subtitle={organizationName || (organizationReady ? "Merchant workspace" : "Workspace setup")} />
+          <ZidiCommerceLogo tone="dark" subtitle={organizationName || (organizationReady ? "Merchant workspace" : "Workspace setup")} />
           <IconButton ref={closeNav} className="sidebar-close" label="Close navigation" icon={X} onClick={() => setMobileOpen(false)} />
         </div>
 
@@ -180,7 +183,7 @@ export function Shell() {
               {group.items.map(({ label, path, external, icon: Icon }) => external ? (
                 <a key={path} href={path} title={label}><Icon size={17} aria-hidden="true" /><span>{label}</span></a>
               ) : (
-                <NavLink key={path} title={label} to={path} end={path === "/"}><Icon size={17} aria-hidden="true" /><span>{label}</span></NavLink>
+                <Link key={path} title={label} to={path} className={activePath === path ? "active" : undefined} aria-current={activePath === path ? "page" : undefined}><Icon size={17} aria-hidden="true" /><span>{label}</span></Link>
               ))}
             </section>
           ))}
@@ -192,7 +195,7 @@ export function Shell() {
           <div className="topbar-context">
             <IconButton className="desktop-nav-toggle" label={compact ? "Expand navigation" : "Collapse navigation"} icon={PanelLeft} onClick={() => {localStorage.setItem("zidi.sidebar.compact",compact ? "no":"yes");setCompact(!compact);}} /><IconButton ref={menuButton} className="mobile-menu" label="Open navigation" icon={Menu} onClick={() => setMobileOpen(true)} />
             <div>
-            <span className="eyebrow">{meta.eyebrow}</span>
+            <span className="topbar-group">{meta.eyebrow}</span>
               <strong>{meta.title}</strong>
             </div>
           </div>

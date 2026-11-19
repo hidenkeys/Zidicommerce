@@ -1,4 +1,4 @@
-import {PasswordField} from "./PasswordField";
+import { PasswordField } from "./PasswordField";
 import { FormEvent, useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { apiGet, apiPost, getStoredToken, setStoredToken } from "../api/client";
@@ -21,9 +21,10 @@ export function LoginPage({ mode = "login" }: { mode?: "login" | "register" }) {
   const navigate = useNavigate();
   const location = useLocation();
   const from = (location.state as LocationState | null)?.from;
-  const nextPath = from && from.pathname !== "/login" && from.pathname !== "/register"
-    ? `${from.pathname}${from.search}${from.hash}`
-    : "/";
+  const nextPath =
+    from && from.pathname !== "/login" && from.pathname !== "/register"
+      ? `${from.pathname}${from.search}${from.hash}`
+      : "/";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -32,7 +33,9 @@ export function LoginPage({ mode = "login" }: { mode?: "login" | "register" }) {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [redirectTo, setRedirectTo] = useState<string | null>(null);
-  const [checkingSession, setCheckingSession] = useState(() => Boolean(getStoredToken()));
+  const [checkingSession, setCheckingSession] = useState(() =>
+    Boolean(getStoredToken()),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -65,7 +68,7 @@ export function LoginPage({ mode = "login" }: { mode?: "login" | "register" }) {
   if (checkingSession) {
     return (
       <AuthLayout>
-        <div className="login-card">
+        <div className="z-access__card">
           <p className="muted">Checking session...</p>
         </div>
       </AuthLayout>
@@ -77,14 +80,15 @@ export function LoginPage({ mode = "login" }: { mode?: "login" | "register" }) {
     setError("");
     setSubmitting(true);
     try {
-      const response = mode === "register"
-        ? await apiPost<LoginResponse>("/auth/register", {
-            email,
-            password,
-            first_name: firstName,
-            last_name: lastName,
-          })
-        : await apiPost<LoginResponse>("/auth/login", { email, password });
+      const response =
+        mode === "register"
+          ? await apiPost<LoginResponse>("/auth/register", {
+              email,
+              password,
+              first_name: firstName,
+              last_name: lastName,
+            })
+          : await apiPost<LoginResponse>("/auth/login", { email, password });
       setStoredToken(response.data.access_token);
       navigate(mode === "register" ? "/setup" : nextPath, { replace: true });
     } catch (err) {
@@ -98,39 +102,78 @@ export function LoginPage({ mode = "login" }: { mode?: "login" | "register" }) {
 
   return (
     <AuthLayout>
-      <form className="login-card" onSubmit={submit}>
+      <form className="z-access__card" onSubmit={submit}>
         <div>
-          <span className="eyebrow">{isRegister ? "New merchant" : "Welcome back"}</span>
-          <h1>{isRegister ? "Create an account" : "Sign in"}</h1>
-          <p>{isRegister ? "Create your account to set up your first commerce workspace." : "Sign in to manage orders, conversations and your stores."}</p>
+          <h1>{isRegister ? "Create your account" : "Welcome back"}</h1>
+          <p>
+            {isRegister
+              ? "Create your account to set up your first commerce workspace."
+              : "Sign in to your commerce workspace."}
+          </p>
         </div>
-        {error ? <p role="alert" className="error-text">{error}</p> : null}
+        {error ? (
+          <p role="alert" className="error-text">
+            {error}
+          </p>
+        ) : null}
         {isRegister ? (
-          <>
+          <div className="z-access__names">
             <label>
               First name
-              <input autoComplete="given-name" value={firstName} onChange={(event) => setFirstName(event.target.value)} />
+              <input
+                autoComplete="given-name"
+                value={firstName}
+                onChange={(event) => setFirstName(event.target.value)}
+              />
             </label>
             <label>
               Last name
-              <input autoComplete="family-name" value={lastName} onChange={(event) => setLastName(event.target.value)} />
+              <input
+                autoComplete="family-name"
+                value={lastName}
+                onChange={(event) => setLastName(event.target.value)}
+              />
             </label>
-          </>
+          </div>
         ) : null}
         <label>
           Email
-          <input type="email" autoComplete="username" autoFocus required value={email} onChange={(event) => setEmail(event.target.value)} />
+          <input
+            type="email"
+            autoComplete="username"
+            autoFocus
+            required
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
         </label>
-        <PasswordField label="Password" autoComplete={isRegister ? "new-password" : "current-password"} required minLength={isRegister ? 8 : undefined} value={password} onChange={(event) => setPassword(event.target.value)} />
+        <PasswordField
+          label="Password"
+          autoComplete={isRegister ? "new-password" : "current-password"}
+          required
+          minLength={isRegister ? 8 : undefined}
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+        />
         {!isRegister && <Link to="/forgot-password">Forgot password?</Link>}
         <button type="submit" disabled={submitting}>
-          {submitting ? (isRegister ? "Creating account..." : "Signing in...") : (isRegister ? "Create account" : "Sign in")}
+          {submitting
+            ? isRegister
+              ? "Creating account..."
+              : "Signing in..."
+            : isRegister
+              ? "Create account"
+              : "Sign in"}
         </button>
-        <p className="login-switch">
+        <p className="z-access__note">
           {isRegister ? (
-            <>Already have an account? <Link to="/login">Sign in</Link></>
+            <>
+              Already have an account? <Link to="/login">Sign in</Link>
+            </>
           ) : (
-            <>New merchant? <Link to="/register">Create an account</Link></>
+            <>
+              New merchant? <Link to="/register">Create an account</Link>
+            </>
           )}
         </p>
       </form>

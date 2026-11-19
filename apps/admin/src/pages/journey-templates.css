@@ -5,7 +5,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid var(--line, #d3ddd6);
+  border: 1px solid var(--line, var(--z-line));
   padding: 0 12px;
   border-radius: 8px;
 }
@@ -37,22 +37,22 @@
   gap: 7px;
   min-width: 0;
   padding: 14px;
-  border: 1px solid var(--line, #d3ddd6);
+  border: 1px solid var(--line, var(--z-line));
   border-radius: 10px;
   text-align: left;
   white-space: normal;
   background: white;
-  color: var(--ink, #20372e);
+  color: var(--ink, var(--z-ink));
 }
 .template-cards button[aria-pressed="true"] {
-  border-color: #087b60;
-  box-shadow: inset 0 0 0 1px #087b60;
-  background: #f4fbf7;
+  border-color: var(--z-focus);
+  box-shadow: inset 0 0 0 1px var(--z-focus);
+  background: var(--z-selected);
 }
 .template-cards span,
 .template-cards small {
   font-weight: 400;
-  color: var(--ink-subtle, #476254);
+  color: var(--ink-subtle, var(--z-muted));
 }
 .template-preview {
   padding-top: 14px;
@@ -66,7 +66,7 @@
 }
 .template-preview li {
   font-size: 12px;
-  background: #eff4f1;
+  background: var(--z-canvas);
   border-radius: 5px;
   padding: 5px 8px;
 }

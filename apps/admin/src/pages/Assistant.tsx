@@ -360,7 +360,7 @@ export function AssistantPage() {
     >
       <Flash message={message} />
       <Flash message={flash} tone="success" />
-      <div className="metrics">
+      <div className="metrics assistant-summary">
         <article className="metric-card">
           <span>Status</span>
           <strong><StatusDot live={Boolean(bot.published_version_id) && bot.status === "active"} label={bot.published_version_id ? "Live" : "Draft"} /></strong>
@@ -396,11 +396,12 @@ export function AssistantPage() {
         <section className="workflow-section">
           <div className="section-heading">
             <div>
-              <h2>Commerce workflow</h2>
-              <p>Choose how the assistant guides customers and where verified business actions take over.</p>
+              <h2>Customer experience</h2>
+              <p>Set your greeting, service options and order handling.</p>
             </div>
             <StatusDot live={workflow.status === "active"} label={workflow.status === "active" ? "Active" : "Inactive"} />
           </div>
+          <details className="workflow-explainer"><summary>View how orders move through the assistant</summary>
           <div className="workflow-map" aria-label="Commerce workflow stages">
             {workflowStages.map((stage, index) => (
               <div className={`workflow-stage ${stage.group}`} key={stage.label}>
@@ -417,6 +418,7 @@ export function AssistantPage() {
             <span className="operations">Store operation</span>
             <span className="support">Human support</span>
           </div>
+          </details>
           <form className="workflow-config" onSubmit={saveWorkflow}>
             <fieldset className="workflow-editor-fieldset" disabled={!canManageAssistant}>
             <legend className="sr-only">Assistant workflow configuration</legend>
@@ -494,7 +496,7 @@ export function AssistantPage() {
                 ))}
               </div>
               <form className="test-send" onSubmit={sendTest}>
-                <input value={testInput} onChange={(event) => setTestInput(event.target.value)} placeholder="Type as a customer" />
+                <input aria-label="Test customer message" value={testInput} onChange={(event) => setTestInput(event.target.value)} placeholder="Type as a customer" />
                 <button type="submit">Send</button>
               </form>
             </>

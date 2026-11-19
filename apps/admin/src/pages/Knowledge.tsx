@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiDelete, apiGet, apiPatch, apiPost } from "../api/client";
 import { useAuth } from "../auth";
-import { Badge, Card, ConfirmButton, EmptyState, FilterBar, Flash, FormGrid, LoadingState, Page, Tabs } from "../components/ui";
+import { Badge, Card, ConfirmButton, Drawer, EmptyState, FilterBar, Flash, FormGrid, LoadingState, Metric, Page, Tabs } from "../components/ui";
 import { humanStatus, parseJSON, type Row } from "../lib/format";
 
 type FAQ = Row & { id: string; question: string; answer: string; keywords?: string; status: string };
@@ -136,6 +136,7 @@ export function KnowledgePage() {
   const [editingChunkID, setEditingChunkID] = useState("");
   const [chunkForm, setChunkForm] = useState<ChunkForm>(blankChunkForm);
   const [approvalForms, setApprovalForms] = useState<Record<string, ChunkApprovalForm>>({});
+  const [entryOpen, setEntryOpen] = useState(false);
   const [editingID, setEditingID] = useState("");
   const [filters, setFilters] = useState({ kind: "", category: "", status: "", search: "" });
   const [query, setQuery] = useState("");
@@ -212,10 +213,12 @@ export function KnowledgePage() {
     }
     setEditingID("");
     setForm(blankForm);
+    setEntryOpen(false);
     await load();
   }
 
   function edit(entry: KnowledgeEntry) {
+    setEntryOpen(true);
     setEditingID(entry.id);
     setForm({
       kind: entry.kind || "faq",
@@ -313,7 +316,8 @@ export function KnowledgePage() {
     <Page
       title="Business knowledge"
       description="Manage the facts, policies, and answers your assistant is allowed to use."
-      help="Only active entries are used by AI grounding. Draft and archived entries stay available for review but are not used in answers."
+      help="Your assistant uses active entries. Draft and archived entries stay private to your team."
+      actions={canManageKnowledge && view === "entries" ? <button type="button" className="primary" onClick={() => { setEditingID(""); setForm(blankForm); setEntryOpen(true); }}>Add knowledge</button> : undefined}
     >
       <Flash message={message} />
       <Flash message={flash} tone="success" />
@@ -329,32 +333,16 @@ export function KnowledgePage() {
         ]}
       />
 
-      <div className="grid" style={{ marginBottom: 16 }}>
-        <Card>
-          <strong>Active</strong>
-          <h3>{activeCount}</h3>
-        </Card>
-        <Card>
-          <strong>Draft</strong>
-          <h3>{draftCount}</h3>
-        </Card>
-        <Card>
-          <strong>Archived</strong>
-          <h3>{archivedCount}</h3>
-        </Card>
-        <Card>
-          <strong>Legacy FAQs</strong>
-          <h3>{faqs.filter((faq) => faq.status === "active").length}</h3>
-        </Card>
-        <Card>
-          <strong>Documents</strong>
-          <h3>{documentSources.filter((source) => source.status !== "archived").length}</h3>
-        </Card>
+      <div className="metrics overview-summary">
+        <Metric label="Active" value={activeCount} hint="Available to the assistant" />
+        <Metric label="Draft" value={draftCount} hint="Waiting for review" />
+        <Metric label="Archived" value={archivedCount} hint="Excluded from answers" />
+        <Metric label="Documents" value={documentSources.filter(source => source.status !== "archived").length} hint="Source material" />
       </div>
 
       {view === "entries" ? <>
       {canManageKnowledge ? (
-        <FormGrid onSubmit={submit} title={editingID ? "Edit knowledge entry" : "Add knowledge entry"}>
+        <Drawer open={entryOpen} title={editingID ? "Edit knowledge entry" : "Add knowledge entry"} onClose={() => setEntryOpen(false)}><FormGrid onSubmit={submit}>
           <label>
             Type
             <select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value })}>
@@ -389,9 +377,9 @@ export function KnowledgePage() {
           </label>
           <div className="full filter-bar">
             <button type="submit">{editingID ? "Save changes" : "Add entry"}</button>
-            {editingID ? <button type="button" className="ghost" onClick={() => { setEditingID(""); setForm(blankForm); }}>Cancel</button> : null}
+            {editingID ? <button type="button" className="ghost" onClick={() => setEntryOpen(false)}>Cancel</button> : null}
           </div>
-        </FormGrid>
+        </FormGrid></Drawer>
       ) : (
         <Card>
           <strong>Read-only access</strong>
@@ -402,16 +390,16 @@ export function KnowledgePage() {
       <Card>
         <h3>Find knowledge</h3>
         <FilterBar>
-          <input value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Search title, question, answer, keywords" />
-          <select value={filters.kind} onChange={(event) => setFilters({ ...filters, kind: event.target.value })}>
+          <input aria-label="Search knowledge" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Search title, question, answer, keywords" />
+          <select aria-label="Knowledge type" value={filters.kind} onChange={(event) => setFilters({ ...filters, kind: event.target.value })}>
             <option value="">All types</option>
             {knowledgeKinds.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
-          <select value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })}>
+          <select aria-label="Knowledge category" value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })}>
             <option value="">All categories</option>
             {categories.map((category) => <option key={category} value={category}>{humanStatus(category)}</option>)}
           </select>
-          <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
+          <select aria-label="Knowledge status" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
             <option value="">All statuses</option>
             {statuses.map((status) => <option key={status} value={status}>{humanStatus(status)}</option>)}
           </select>
@@ -423,7 +411,7 @@ export function KnowledgePage() {
         {entries.length === 0 ? (
           <EmptyState title="No knowledge entries found" body="Add policies, FAQs, delivery details, warranty notes, and other merchant facts." />
         ) : entries.map((entry) => (
-          <div key={entry.id} className={`setup-item ${entry.status === "active" ? "complete" : ""}`} style={{ marginBottom: 8, alignItems: "flex-start" }}>
+          <div key={entry.id} className="knowledge-entry">
             <span>
               <strong>{entry.title}</strong>
               <em>{entry.question || humanStatus(entry.kind)}</em>

@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Bot, CheckCircle2, Eye, EyeOff, Send, UserCheck, Users } from "lucide-react";
 import { apiGet, apiPost } from "../api/client";
 import { useAuth } from "../auth";
-import { Badge, Button, Card, EmptyState, FilterBar, Flash, IconButton, LoadingState, Page, SearchField } from "../components/ui";
+import { Badge, Button, Card, EmptyState, FilterBar, Flash, IconButton, LoadingState, Page, SearchField, Tabs } from "../components/ui";
 import { humanStatus, maskPhone, relativeTime, roleLabel, type Row } from "../lib/format";
 import { hasPermission } from "../lib/permissions";
 
@@ -130,6 +130,7 @@ export function ConversationsPage() {
   const [filter, setFilter] = useState("all");
   const [assigned, setAssigned] = useState("all");
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [mobilePane, setMobilePane] = useState("inbox");
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState("");
   const [flash, setFlash] = useState("");
@@ -311,10 +312,10 @@ export function ConversationsPage() {
       <Flash message={flash} tone="success" />
       <FilterBar>
         <SearchField value={query} onChange={setQuery} placeholder="Search customer, store, or message" />
-        <select value={filter} onChange={(event) => setFilter(event.target.value)}>
+        <select aria-label="Conversation status" value={filter} onChange={(event) => setFilter(event.target.value)}>
           {statusFilters.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
         </select>
-        <select value={assigned} onChange={(event) => setAssigned(event.target.value)}>
+        <select aria-label="Conversation owner" value={assigned} onChange={(event) => setAssigned(event.target.value)}>
           <option value="all">All owners</option>
           <option value="me">Assigned to me</option>
           <option value="unassigned">Unassigned</option>
@@ -325,7 +326,8 @@ export function ConversationsPage() {
         </label>
         <button type="button" onClick={() => void load()}>Search</button>
       </FilterBar>
-      <div className="inbox-workspace">
+      <div className="conversation-mobile-tabs"><Tabs label="Inbox panels" value={mobilePane} onChange={setMobilePane} items={[{ value: "inbox", label: "Inbox" }, { value: "thread", label: "Conversation" }, { value: "context", label: "Details" }]} /></div>
+      <div className={`inbox-workspace inbox-panel-${mobilePane}`}>
         <Card className="inbox-list">
           {loading ? <LoadingState label="Loading inbox" /> : rows.length === 0 ? (
             <EmptyState title="No conversations yet" body="Customer conversations will appear here." />
@@ -334,7 +336,7 @@ export function ConversationsPage() {
               {rows.map((row) => {
                 const status = inboxStatus(row);
                 return (
-                  <button type="button" key={row.id} className={selectedID === row.id ? "conversation-item selected" : "conversation-item"} onClick={() => setSelectedID(row.id)}>
+                  <button type="button" key={row.id} className={selectedID === row.id ? "conversation-item selected" : "conversation-item"} onClick={() => { setSelectedID(row.id); setMobilePane("thread"); }}>
                     <span className="conversation-main">
                       <strong>{String(row.customer_name || maskPhone(row.customer_phone, "Customer"))}</strong>
                       <span>{String(row.last_message || "").slice(0, 110) || "No message yet"}</span>

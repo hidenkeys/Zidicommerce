@@ -109,7 +109,7 @@ export function InventoryPage() {
     >
       <Flash message={message} />
       <Flash message={flash} tone="success" />
-      <div className="metrics compact-metrics">
+      <div className="metrics overview-summary">
         <Metric label="Healthy" value={healthyCount} hint="Above low-stock level" />
         <Metric label="Low stock" value={lowCount} hint="Restock soon" />
         <Metric label="Out of stock" value={outCount} hint="Needs attention" />
@@ -127,14 +127,14 @@ export function InventoryPage() {
       />
       <FilterBar>
         <SearchField value={query} onChange={setQuery} placeholder="Search product" />
-        <select value={storeFilter} onChange={(event) => setStoreFilter(event.target.value)}>
+        <select aria-label="Filter by store" value={storeFilter} onChange={(event) => setStoreFilter(event.target.value)}>
           <option value="all">All stores</option>
           {stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}
         </select>
       </FilterBar>
       <Card>
         {loading ? <LoadingState label="Loading inventory" /> : filtered.length === 0 ? (
-          <EmptyState title="No stock recorded" body="Set quantities after you add products." />
+          <EmptyState title={rows.length ? "No matching stock" : "No stock recorded"} body={rows.length ? "Try another product, store or status." : "Set quantities after you add products."} />
         ) : (
           <div className="table-wrap" style={{ border: 0, margin: 0 }}>
             <table>
@@ -179,7 +179,7 @@ export function InventoryPage() {
       </Card>
       {!canAdjustInventory ? <p className="read-only-note">Stock quantities are read-only for your role.</p> : null}
       <Drawer open={creating} title="Set stock" onClose={() => setCreating(false)}>
-        <FormGrid onSubmit={createStock}>
+        <Flash message={message} /><FormGrid onSubmit={createStock}>
           <label className="full">Store
             <select value={form.store_id} onChange={(event) => setForm({ ...form, store_id: event.target.value })} required>
               <option value="">Choose store</option>
@@ -201,7 +201,7 @@ export function InventoryPage() {
       </Drawer>
       <Drawer open={Boolean(adjusting)} title="Update quantity" onClose={() => setAdjusting(null)}>
         {adjusting ? (
-          <div>
+          <div><Flash message={message} />
           <p className="muted">This replaces the on-hand quantity. Reserved items stay reserved until those orders finish.</p>
           <label>
             New on-hand quantity

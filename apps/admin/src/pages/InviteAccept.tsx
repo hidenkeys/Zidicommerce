@@ -75,8 +75,7 @@ export function InviteAcceptPage() {
 
   return (
     <AuthLayout>
-      <div className="login-card">
-        <p className="eyebrow">Invitation</p>
+      <div className="z-access__card">
         <h1>{preview?.business_name ? `Join ${preview.business_name}` : "Join ZidiCommerce"}</h1>
         <p className="muted">
           {preview?.existing_user

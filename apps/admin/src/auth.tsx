@@ -1,7 +1,7 @@
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { UNAUTHORIZED_EVENT, apiGet, clearStoredToken, getStoredToken, setStoredToken } from "./api/client";
-import { ZidiCommerceLogo } from "./components/brand/ZidiCommerceLogo";
+import { ZidiCommerceSymbol } from "./components/brand/ZidiCommerceLogo";
 
 export type AuthUser = {
   id: string;
@@ -26,14 +26,12 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="login-layout">
-      <aside className="auth-brand-panel">
-        <div className="brand">
-          <ZidiCommerceLogo tone="light" subtitle="Merchant workspace" />
-        </div>
-        <p className="login-sidebar-copy">Manage the orders and conversations that keep your stores running.</p>
-      </aside>
-      <main className="login-panel">{children}</main>
+    <div className="z-access">
+      <div className="z-access__body">
+        <div className="z-access__brand"><ZidiCommerceSymbol />Zidi Commerce</div>
+        <main className="z-access__stage">{children}</main>
+      </div>
+      <div className="z-access__art" aria-hidden="true" />
     </div>
   );
 }
@@ -118,7 +116,7 @@ export function RequireAuth() {
   if (checking) {
     return (
       <AuthLayout>
-        <div className="login-card">
+        <div className="z-access__card">
           <p className="muted">Checking session...</p>
         </div>
       </AuthLayout>

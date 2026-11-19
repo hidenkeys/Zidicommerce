@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { apiGet } from "../api/client";
-import { Badge, Card, EmptyState, FilterBar, Flash, LoadingState, Page, SearchField, SectionHeader } from "../components/ui";
+import { Badge, Card, Drawer, EmptyState, FilterBar, Flash, LoadingState, Page, SearchField, SectionHeader } from "../components/ui";
 import { humanStatus, money, relativeTime, type Row } from "../lib/format";
 
 export function CustomersPage() {
@@ -28,7 +28,6 @@ export function CustomersPage() {
         setOrders(orderResponse.data);
         setTickets(ticketResponse.data);
         setConversations(conversationResponse.data);
-        setSelectedID((current) => current || String(customerResponse.data[0]?.id ?? ""));
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Could not load customers");
       } finally {
@@ -60,10 +59,10 @@ export function CustomersPage() {
       <FilterBar>
         <SearchField value={query} onChange={setQuery} placeholder="Search name, phone, or email" />
       </FilterBar>
-      <div className="detail-layout">
-        <Card>
+      <div className="orders-workspace">
+        <Card className="orders-register">
           {loading ? <LoadingState label="Loading customers" /> : filtered.length === 0 ? (
-            <EmptyState title="No customers yet" body="Customers appear here when they order or start a conversation." />
+            <EmptyState title={customers.length ? "No matching customers" : "No customers yet"} body={customers.length ? "Try a different name, phone number or email." : "Customers appear here when they order or start a conversation."} />
           ) : (
             <div className="table-wrap" style={{ border: 0, margin: 0 }}>
               <table>
@@ -90,7 +89,7 @@ export function CustomersPage() {
             </div>
           )}
         </Card>
-        <Card>
+        <Drawer open={Boolean(selectedID)} title="Customer profile" onClose={() => setSelectedID("")}>
           {!selected ? (
             <EmptyState title="Select a customer" body="See orders, spend, and support history." />
           ) : (
@@ -117,7 +116,7 @@ export function CustomersPage() {
               {chats[0] ? <Link to={`/conversations?open=${String(chats[0].id)}`}>Open latest conversation</Link> : <p className="muted">No support conversations yet.</p>}
             </>
           )}
-        </Card>
+        </Drawer>
       </div>
     </Page>
   );

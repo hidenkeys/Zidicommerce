@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { apiGet, apiPost } from "../api/client";
 import { useAuth } from "../auth";
-import { Badge, Button, Card, ConfirmButton, EmptyState, FilterBar, Flash, LoadingState, Page, SearchField, Tabs } from "../components/ui";
+import { Badge, Button, Card, ConfirmButton, Drawer, EmptyState, FilterBar, Flash, LoadingState, Page, SearchField, Tabs } from "../components/ui";
 import { fulfilmentLabel, humanStatus, money, relativeTime, type Row } from "../lib/format";
 import { hasPermission } from "../lib/permissions";
 
@@ -44,7 +44,6 @@ export function OrdersPage() {
     try {
       const response = await apiGet<Row[]>("/orders");
       setRows(response.data);
-      setSelectedID((current) => current || String(response.data[0]?.id ?? ""));
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load orders");
@@ -105,7 +104,7 @@ export function OrdersPage() {
   const events = currentDetail?.events ?? [];
 
   return (
-    <Page title="Orders" description="See what customers ordered and take the next permitted step." help={canManageOrders ? "Actions follow verified payment and fulfilment state. Invalid transitions are not offered." : "Your role has read-only order access. A store operator or administrator must perform status changes."}>
+    <Page title="Orders" description="Manage payment, preparation and collection in one place.">
       <Flash message={message} />
       <Flash message={flash} tone="success" />
       <FilterBar>
@@ -118,10 +117,10 @@ export function OrdersPage() {
         { value: "completed", label: "Completed" },
         { value: "cancelled", label: "Cancelled" },
       ]} />
-      <div className="detail-layout">
-        <Card>
+      <div className="orders-workspace">
+        <Card className="orders-register">
           {loading ? <LoadingState label="Loading orders" /> : filtered.length === 0 ? (
-            <EmptyState title="No orders yet" body="Customer orders will show up here when they are created." />
+            <EmptyState title={rows.length ? "No matching orders" : "No orders yet"} body={rows.length ? "Try another search or status." : "Customer orders appear here after checkout."} />
           ) : (
             <div className="table-wrap" style={{ border: 0, margin: 0 }}>
               <table className="order-list-table">
@@ -131,6 +130,8 @@ export function OrdersPage() {
                     <th>Customer</th>
                     <th>Status</th>
                     <th>Total</th>
+                    <th>Store</th>
+                    <th>Placed</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -142,6 +143,8 @@ export function OrdersPage() {
                         <td>{String(person.name || person.phone || "Customer")}</td>
                         <td><Badge tone={statusTone(String(order.status))}>{humanStatus(order.status)}</Badge></td>
                         <td>{money(order.total_minor, String(order.currency ?? "NGN"))}</td>
+                        <td>{String(((order.store ?? {}) as Row).name || "—")}</td>
+                        <td>{relativeTime(order.created_at)}</td>
                       </tr>
                     );
                   })}
@@ -150,7 +153,8 @@ export function OrdersPage() {
             </div>
           )}
         </Card>
-        <Card>
+        <Drawer open={Boolean(selectedID)} title="Order details" onClose={() => setSelectedID("")}>
+          <Flash message={message} />
           {loadingDetail ? <LoadingState label="Loading order details" /> : !selected ? (
             <EmptyState title="Select an order" body="Choose a row to see items, payment, and fulfilment." />
           ) : (
@@ -185,7 +189,7 @@ export function OrdersPage() {
               {!canManageOrders && !["completed", "cancelled"].includes(String(selected.status)) ? <p className="read-only-note">Viewing only. Operational actions are hidden for this role.</p> : null}
             </>
           )}
-        </Card>
+        </Drawer>
       </div>
     </Page>
   );

@@ -60,7 +60,6 @@ export function StoresPage() {
       const counts: Record<string, number> = {};
       assignments.flat().filter(Boolean).forEach((storeID) => { counts[storeID] = (counts[storeID] ?? 0) + 1; });
       setStaffCounts(counts);
-      setSelectedID((current) => current || storeResponse.data[0]?.id || "");
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load stores");
@@ -141,12 +140,12 @@ export function StoresPage() {
     >
       <Flash message={message} />
       <Flash message={flash} tone="success" />
-      <div className="detail-layout">
-        <Card>
+      <div className="store-directory">
+        <Card className="store-list-panel">
           {loading ? <LoadingState label="Loading stores" /> : stores.length === 0 ? (
             <EmptyState title="No stores yet" body="A business administrator must add the first location." action={canCreateStore ? <button type="button" className="primary" onClick={startCreate}>Add store</button> : undefined} />
           ) : stores.map((store) => (
-            <button key={store.id} type="button" className={selectedID === store.id ? "setup-item complete" : "setup-item"} onClick={() => setSelectedID(store.id)} style={{ width: "100%", marginBottom: 8 }}>
+            <button key={store.id} type="button" className="store-directory-item" onClick={() => { setSelectedID(store.id); setForm({ name: String(store.name || ""), address: String(store.address || ""), city: String(store.city || ""), country: String(store.country || "NG"), code: String(store.code || "") }); }}>
               <span>
                 <strong>{store.name}</strong>
                 <em>{String(store.city || store.address || "No address")}</em>
@@ -155,7 +154,7 @@ export function StoresPage() {
             </button>
           ))}
         </Card>
-        <Card>
+        <Drawer open={Boolean(selectedID)} title="Store details" onClose={() => setSelectedID("")}>
           {!selected ? (
             <EmptyState title="Select a store" body="See hours, fulfilment, and stock." />
           ) : (
@@ -182,17 +181,17 @@ export function StoresPage() {
                 <Link to="/inventory">Open inventory</Link>
                 {members.length ? <Link to="/team">Manage staff</Link> : null}
               </div>
-              {canUpdateStore ? <form className="form-grid" onSubmit={saveSelected}>
+              {canUpdateStore ? <FormGrid onSubmit={saveSelected}>
                 <strong>Update details</strong>
                 <label>Name<input value={form.name} placeholder={String(selected.name ?? "")} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
                 <label>Address<input value={form.address} placeholder={String(selected.address ?? "")} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label>
                 <label>City<input value={form.city} placeholder={String(selected.city ?? "")} onChange={(event) => setForm({ ...form, city: event.target.value })} /></label>
                 <label>Country<input value={form.country} onChange={(event) => setForm({ ...form, country: event.target.value })} /></label>
                 <div className="full"><button type="submit">Save store</button></div>
-              </form> : <p className="read-only-note">Store configuration is read-only for your role.</p>}
+              </FormGrid> : <p className="read-only-note">Store configuration is read-only for your role.</p>}
             </>
           )}
-        </Card>
+        </Drawer>
       </div>
       <Drawer open={open} title="Add store" onClose={() => setOpen(false)}>
         <FormGrid onSubmit={save}>
@@ -206,8 +205,8 @@ export function StoresPage() {
               {hours.map((hour, index) => (
                 <div className="hours-row" key={hour.day_of_week}>
                   <span>{days[index]}</span>
-                  <input type="time" value={hour.opens_at} disabled={hour.is_closed} onChange={(event) => setHours(hours.map((item, i) => i === index ? { ...item, opens_at: event.target.value } : item))} />
-                  <input type="time" value={hour.closes_at} disabled={hour.is_closed} onChange={(event) => setHours(hours.map((item, i) => i === index ? { ...item, closes_at: event.target.value } : item))} />
+                  <input aria-label={`${days[index]} opening time`} type="time" value={hour.opens_at} disabled={hour.is_closed} onChange={(event) => setHours(hours.map((item, i) => i === index ? { ...item, opens_at: event.target.value } : item))} />
+                  <input aria-label={`${days[index]} closing time`} type="time" value={hour.closes_at} disabled={hour.is_closed} onChange={(event) => setHours(hours.map((item, i) => i === index ? { ...item, closes_at: event.target.value } : item))} />
                   <label><input type="checkbox" checked={hour.is_closed} onChange={(event) => setHours(hours.map((item, i) => i === index ? { ...item, is_closed: event.target.checked } : item))} /> Closed</label>
                 </div>
               ))}

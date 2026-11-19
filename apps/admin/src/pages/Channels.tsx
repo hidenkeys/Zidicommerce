@@ -587,7 +587,7 @@ export function ChannelsPage() {
     <Page
       title="Channels"
       description="Customer touchpoints connected to Zidi's shared conversation and operations platform."
-      help="Each provider keeps its own identity, permissions, credentials, health, and policy while sharing Zidi's conversations, AI, commerce, and handoff runtime."
+      help="Connect a channel, check its health and manage who can message your business."
       actions={canManage ? <Button icon={Plus} className="primary" onClick={() => beginCreate(providers[0])}>Add setup record</Button> : undefined}
     >
       <Flash message={message} />
