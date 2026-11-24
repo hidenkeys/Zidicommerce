@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { apiGet, apiPatch } from "../api/client";
 import { useAuth } from "../auth";
 import { Card, Flash, FormGrid, LoadingState, Page } from "../components/ui";
+import { OrganizationDangerZone } from "../components/OrganizationDangerZone";
 import { type Row } from "../lib/format";
 import { hasPermission } from "../lib/permissions";
 
@@ -68,6 +69,7 @@ export function BusinessPage() {
         <label className="full">About<textarea value={form.description ?? ""} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
         <div className="full"><button type="submit" className="primary">Save changes</button></div>
       </FormGrid> : <p className="read-only-note">Business settings are read-only for your role.</p>}
+      {org?.id ? <OrganizationDangerZone organizationID={org.id} slug={String(org.slug ?? "")} /> : null}
       </>}
     </Page>
   );

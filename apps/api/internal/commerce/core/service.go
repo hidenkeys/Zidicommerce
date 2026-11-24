@@ -52,19 +52,22 @@ type PaymentVerification struct {
 }
 
 type Service struct {
-	db                      *gorm.DB
-	paymentProvider         PaymentProvider
-	paymentSecretStore      PaymentProviderSecretStore
-	paystackProviderFactory func(secret string) PaymentProvider
-	paystackReturnURL       string
-	paystackSecret          string
-	controlledBeta          bool
-	mailer                  email.Sender
-	appBaseURL              string
-	log                     *slog.Logger
-	jobs                    *jobs.Service
-	afterPaymentPaid        []AfterPaymentPaid
-	now                     func() time.Time
+	organizationHardDeleteOperator bool
+	organizationHardDeleteEnabled  bool
+	appEnv                         string
+	db                             *gorm.DB
+	paymentProvider                PaymentProvider
+	paymentSecretStore             PaymentProviderSecretStore
+	paystackProviderFactory        func(secret string) PaymentProvider
+	paystackReturnURL              string
+	paystackSecret                 string
+	controlledBeta                 bool
+	mailer                         email.Sender
+	appBaseURL                     string
+	log                            *slog.Logger
+	jobs                           *jobs.Service
+	afterPaymentPaid               []AfterPaymentPaid
+	now                            func() time.Time
 }
 
 type AfterPaymentPaid func(ctx context.Context, organizationID, orderID uuid.UUID, metadata string) error

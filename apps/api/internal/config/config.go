@@ -12,21 +12,22 @@ import (
 )
 
 type Config struct {
-	ControlledBeta bool
-	AppName        string
-	AppEnv         string
-	ServerHost     string
-	ServerPort     string
-	LogLevel       string
-	MigrationsDir  string
-	CORSOrigins    string
-	Database       DatabaseConfig
-	JWT            JWTConfig
-	Payment        PaymentConfig
-	Email          EmailConfig
-	FieldService   FieldServiceConfig
-	AI             AIConfig
-	Channels       ChannelConfig
+	OrganizationHardDeleteEnabled bool
+	ControlledBeta                bool
+	AppName                       string
+	AppEnv                        string
+	ServerHost                    string
+	ServerPort                    string
+	LogLevel                      string
+	MigrationsDir                 string
+	CORSOrigins                   string
+	Database                      DatabaseConfig
+	JWT                           JWTConfig
+	Payment                       PaymentConfig
+	Email                         EmailConfig
+	FieldService                  FieldServiceConfig
+	AI                            AIConfig
+	Channels                      ChannelConfig
 }
 
 // FieldServiceConfig controls the optional field-service pilot tenant. Seeding
@@ -131,14 +132,15 @@ type EmailConfig struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		ControlledBeta: boolEnv("CONTROLLED_BETA", false),
-		AppName:        getenv("APP_NAME", "zidicommerce"),
-		AppEnv:         getenv("APP_ENV", "development"),
-		ServerHost:     strings.TrimSpace(os.Getenv("SERVER_HOST")),
-		ServerPort:     getenv("SERVER_PORT", "8080"),
-		LogLevel:       getenv("LOG_LEVEL", "info"),
-		MigrationsDir:  getenv("MIGRATIONS_DIR", "migrations"),
-		CORSOrigins:    getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
+		OrganizationHardDeleteEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("ORGANIZATION_HARD_DELETE_ENABLED")), "true"),
+		ControlledBeta:                boolEnv("CONTROLLED_BETA", false),
+		AppName:                       getenv("APP_NAME", "zidicommerce"),
+		AppEnv:                        getenv("APP_ENV", "development"),
+		ServerHost:                    strings.TrimSpace(os.Getenv("SERVER_HOST")),
+		ServerPort:                    getenv("SERVER_PORT", "8080"),
+		LogLevel:                      getenv("LOG_LEVEL", "info"),
+		MigrationsDir:                 getenv("MIGRATIONS_DIR", "migrations"),
+		CORSOrigins:                   getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
 		Database: DatabaseConfig{
 			URL:      os.Getenv("DATABASE_URL"),
 			Host:     getenv("DATABASE_HOST", "localhost"),
@@ -225,6 +227,10 @@ func Load() (Config, error) {
 			TLSMode:    getenv("SMTP_TLS", "starttls"),
 			AppBaseURL: getenv("APP_BASE_URL", "http://localhost:3000"),
 		},
+	}
+
+	if cfg.OrganizationHardDeleteEnabled && strings.EqualFold(cfg.AppEnv, "production") {
+		return Config{}, errors.New("ORGANIZATION_HARD_DELETE_ENABLED cannot be enabled in production")
 	}
 
 	ttl, err := strconv.Atoi(getenv("JWT_TTL_MINUTES", "1440"))

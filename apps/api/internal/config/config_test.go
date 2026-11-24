@@ -216,3 +216,28 @@ func TestDatabaseConfigDSNRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestOrganizationHardDeleteConfiguration(t *testing.T) {
+	t.Setenv("JWT_SECRET", "config-test-secret")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("ORGANIZATION_HARD_DELETE_ENABLED", "true")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "ORGANIZATION_HARD_DELETE_ENABLED") {
+		t.Fatalf("production flag should be rejected, got %v", err)
+	}
+	t.Setenv("APP_ENV", "staging")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.OrganizationHardDeleteEnabled {
+		t.Fatal("explicit true must enable hard delete")
+	}
+	t.Setenv("ORGANIZATION_HARD_DELETE_ENABLED", "1")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OrganizationHardDeleteEnabled {
+		t.Fatal("only true may enable hard delete")
+	}
+}

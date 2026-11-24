@@ -1,7 +1,10 @@
 package core
 
 import (
+	"time"
+
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/google/uuid"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/auth"
 	"github.com/hidenkeys/zidicommerce/apps/api/internal/authz"
@@ -23,6 +26,8 @@ func (h *Handler) Register(router fiber.Router) {
 
 	router.Get("/organizations", auth.RequireRole(authz.PlatformAdmin), h.listOrganizations)
 	router.Post("/organizations", auth.RequireRole(authz.PlatformAdmin), h.createOrganization)
+	router.Get("/organizations/:id/hard-delete-capability", h.hardDeleteCapability)
+	router.Delete("/organizations/:id", limiter.New(limiter.Config{Max: 5, Expiration: time.Minute}), h.hardDeleteOrganization)
 	router.Get("/organizations/:id", h.getOrganization)
 	router.Patch("/organizations/:id", h.updateOrganization)
 	router.Get("/organizations/current/members", h.listMembers)
@@ -750,4 +755,30 @@ func respond(c *fiber.Ctx, data any, err error) error {
 		return err
 	}
 	return c.JSON(fiber.Map{"data": data})
+}
+
+func (h *Handler) hardDeleteCapability(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	return respond(c, fiber.Map{"enabled": h.service.OrganizationHardDeleteCapability(c.UserContext(), mustUser(c), id)}, nil)
+}
+func (h *Handler) hardDeleteOrganization(c *fiber.Ctx) error {
+	id, err := paramID(c, "id")
+	if err != nil {
+		return err
+	}
+	var input struct {
+		ConfirmSlug string `json:"confirm_slug"`
+	}
+	if err := bind(c, &input); err != nil {
+		return err
+	}
+	dry := c.Query("dry_run")
+	if dry != "" && dry != "true" && dry != "false" {
+		return httperror.BadRequest("dry_run must be true or false")
+	}
+	result, err := h.service.HardDeleteOrganization(c.UserContext(), mustUser(c), id, input.ConfirmSlug, dry == "true")
+	return respond(c, result, err)
 }

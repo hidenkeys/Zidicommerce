@@ -31,6 +31,7 @@ VITE_API_BASE_URL=http://127.0.0.1:4325 npm --prefix "$ROOT" run build:field >"$
 [[ ! -e "$STATE/.env" ]] || { echo 'Remove .local-acceptance/.env; only generated api.env is supported.' >&2; exit 1; }
 cat > "$STATE/api.env" <<ENV
 APP_ENV=development
+ORGANIZATION_HARD_DELETE_ENABLED=true
 SERVER_HOST=127.0.0.1
 SERVER_PORT=4325
 LOG_LEVEL=info

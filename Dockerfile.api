@@ -4,7 +4,8 @@ WORKDIR /src/apps/api
 COPY apps/api/go.mod apps/api/go.sum ./
 RUN go mod download
 COPY apps/api ./
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/zidicommerce-api ./cmd/api
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/zidicommerce-api ./cmd/api \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/org-hard-delete ./cmd/org-hard-delete
 
 FROM alpine:3.21
 
@@ -14,6 +15,7 @@ RUN apk add --no-cache ca-certificates tzdata \
 
 WORKDIR /app
 COPY --from=builder /out/zidicommerce-api ./zidicommerce-api
+COPY --from=builder /out/org-hard-delete ./org-hard-delete
 COPY migrations ./migrations
 COPY seed-profiles ./seed-profiles
 

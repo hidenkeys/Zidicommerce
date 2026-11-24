@@ -85,8 +85,8 @@ export function apiPut<T>(path: string, body: JsonBody) {
   return request<T>("PUT", path, body);
 }
 
-export function apiDelete<T>(path: string) {
-  return request<T>("DELETE", path);
+export function apiDelete<T>(path: string, body?: JsonBody) {
+  return request<T>("DELETE", path, body);
 }
 
 export { API_BASE_URL };

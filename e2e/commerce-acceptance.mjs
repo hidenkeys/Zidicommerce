@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { runField } from "./local-acceptance-field.mjs";
@@ -209,6 +211,36 @@ try {
     await request("POST", `/orders/${cancelled.id}/transition`, { status: "cancelled", reason: "Acceptance cancellation", idempotency_key: `${cancelled.id}-cancel` });
     assert.equal((await request("GET", `/orders/${cancelled.id}`)).status, "cancelled");
   });
+  // Keep deletion last: every preceding check exercises this organization.
+  await check("Hard-delete acceptance organization after dry run", async () => {
+    assert.match(orgID, /^[0-9a-f-]{36}$/i);
+    const body = { confirm_slug: `acceptance-foods-${stamp}` };
+    assert.equal((await request("GET", `/organizations/${orgID}/hard-delete-capability`)).enabled, true);
+    const preview = await request("DELETE", `/organizations/${orgID}?dry_run=true`, body);
+    assert.equal(preview.dry_run, true);
+    assert.equal(preview.counts.organizations, 1);
+    assert.ok(preview.total_rows > 1);
+    assert.equal((await request("GET", "/auth/me")).organization_id, orgID);
+    const deleted = await request("DELETE", `/organizations/${orgID}`, body);
+    assert.equal(deleted.dry_run, false);
+    assert.equal(deleted.counts.organizations, 1);
+    await request("GET", "/auth/me", undefined, 401, ownerToken);
+    await request("POST", "/auth/login", { email, password }, 401, "");
+    // Inspect every tenant column directly; a revoked token cannot query counts.
+    // Fixed local-acceptance DB only, never DATABASE_URL or a remote database.
+    const sql = `DO $check$ DECLARE t record; remaining bigint; BEGIN
+      FOR t IN SELECT table_name FROM information_schema.columns
+        WHERE table_schema='public' AND column_name='organization_id' LOOP
+        EXECUTE format('SELECT count(*) FROM public.%I WHERE organization_id=$1',t.table_name)
+          INTO remaining USING '${orgID}'::uuid;
+        IF remaining<>0 THEN RAISE EXCEPTION 'tenant rows remain in %',t.table_name; END IF;
+      END LOOP;
+      IF EXISTS(SELECT 1 FROM organizations WHERE id='${orgID}'::uuid) THEN
+        RAISE EXCEPTION 'organization remains'; END IF;
+    END $check$;`;
+    await promisify(execFile)("/opt/homebrew/bin/psql", ["-X", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1", "-p", "55450", "-U", "acceptance", "-d", "commerce_acceptance", "-c", sql], { timeout: 20000 });
+  });
+
 } finally {
   await browser.close();
   await writeFile(`${evidence}/results.json`, JSON.stringify(results, null, 2), { mode: 0o600 });
