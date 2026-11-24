@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { apiGet, apiPost } from "../../api/client";
 import { useAuth } from "../../auth";
 import { hasPermission } from "../../lib/permissions";
+import { experienceModes, experienceModeLabel as modeLabel } from "../../lib/experience-modes";
 import { Badge, Button, ConfirmButton, EmptyState, Flash, LoadingState, SectionHeader } from "../ui";
 
 type Journey = { id: string; name: string; published_version_id?: string; status: string };
@@ -15,12 +16,6 @@ export type ChannelJourney = {
   channel_default?: { journey_id: string; version_id: string; mode: string };
   publishedDefinition?: { connection_id?: string; mode: string };
 };
-const modeLabels: Record<string, string> = {
-  automated_commerce: "Automated Commerce", guided_questions: "Guided Questions", guided_chat: "Guided chat",
-  whatsapp_flow: "WhatsApp Flow", ai: "AI Conversation",
-};
-const modeLabel = (mode: string) => modeLabels[mode] || mode.replace(/_/g, " ");
-
 // The active binding can differ from the latest draft's connection. Read both.
 export async function loadChannelJourneys() {
   const rows = (await apiGet<Journey[]>("/journeys")).data;
@@ -86,7 +81,7 @@ export function ChannelExperience({ connectionId }: { connectionId: string }) {
         <h3>{row.journey.name}</h3>
         <p>{modeLabel(binding?.mode || row.definition.mode)} · {binding ? binding.paused ? "Paused for new conversations" : "Active" : "Not activated"}{isDefault ? " · Default experience" : ""}</p>
         {binding ? <Badge tone={binding.paused ? "warning" : "success"}>{binding.paused ? "Paused" : "Active"}</Badge> : null}
-        {canPublish && canActivate ? <label className="channels-mode-select">Experience mode<select value={selectedMode} disabled={busy} onChange={event => setModes(current => ({ ...current, [row.journey.id]: event.target.value }))}>{Object.entries(modeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label> : null}
+        {canPublish && canActivate ? <label className="channels-mode-select">Experience mode<select value={selectedMode} disabled={busy} onChange={event => setModes(current => ({ ...current, [row.journey.id]: event.target.value }))}>{Object.values(experienceModes).map(mode => <option key={mode.id} value={mode.id}>{mode.label}</option>)}</select></label> : null}
         <div className="channel-settings-actions">
           <Link className="button" to={`/journeys?journey=${encodeURIComponent(row.journey.id)}`}>Open in Flow Studio</Link>
           {canPublish && !busy && canActivate ? <ConfirmButton label={binding ? "Apply experience" : "Activate published version"} confirm="New conversations will use this published version. Existing conversations retain their current version." onConfirm={() => void run(() => apiPost(`/journeys/${row.journey.id}/activate`, { version_id: published.id, mode: selectedMode, paused: false }))} /> : null}

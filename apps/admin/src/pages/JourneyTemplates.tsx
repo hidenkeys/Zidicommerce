@@ -4,7 +4,7 @@ import { apiGet } from "../api/client";
 import { Flash } from "../components/ui";
 import "./journey-templates.css";
 
-type Template = { id: string; name: string; description: string };
+type Template = { id: string; name: string; description: string; mode?: string };
 type Preview = { steps: { key: string; title: string; kind: string }[] };
 const commerce = new Set([
   "order",
@@ -32,8 +32,10 @@ export function JourneyTemplates({
   templates,
   value,
   onChange,
+  mode,
 }: {
   templates: Template[];
+  mode?: string;
   value: string;
   onChange: (id: string) => void;
 }) {
@@ -46,6 +48,7 @@ export function JourneyTemplates({
     [loading, setLoading] = useState(false);
   const filtered = templates.filter(
     (t) =>
+      (!mode || !t.mode || t.mode === mode) &&
       (!search ||
         (t.name + " " + t.description)
           .toLowerCase()

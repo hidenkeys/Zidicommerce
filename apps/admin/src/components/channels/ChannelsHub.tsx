@@ -7,6 +7,7 @@ import { Badge, Button, EmptyState, Flash, SectionHeader } from "../ui";
 import { channelStatus, isTestConnection, providerAvailabilityState, type ChannelStatusInput } from "../../lib/channel-status";
 import { hasPermission } from "../../lib/permissions";
 import { relativeTime } from "../../lib/format";
+import { experienceModeLabel } from "../../lib/experience-modes";
 import "./channels.css";
 
 type Connection = ChannelStatusInput & { id: string; provider: string; display_name: string; environment: string; last_health_check_at?: string };
@@ -73,7 +74,7 @@ export function ChannelsHub({ onConnect, onConnectProvider, canManage }: { onCon
     return <div className="channels-hub-row" key={row.id}>
       <div className="channels-hub-identity"><span className="channels-hub-icon"><MessageCircle size={20} aria-hidden="true" /></span><div><Link to={`/settings/whatsapp/${row.id}`} className="channels-name">{row.display_name}</Link><small>{phone || (isTestConnection(row) ? "Local test connection" : row.provider === "whatsapp" ? identityErrors[row.id] ? "Number could not be checked" : number ? "Number not configured" : "Loading number…" : row.provider)}</small></div></div>
       <div><Badge tone={status.tone}>{status.label}</Badge><small>{status.reason}</small></div>
-      <div>{active ? <><Link to={`/journeys?journey=${active.journey.id}`}>{active.journey.name}</Link><small>{active.binding?.mode.replace(/_/g," ")}</small></> : <span className="channels-muted">{hasPermission(user.role,"bot.view") ? journeysLoading ? "Loading experience…" : journeysFailed ? "Experience could not be checked" : "No active experience found" : "Experience access restricted"}</span>}</div>
+      <div>{active ? <><Link to={`/journeys?journey=${active.journey.id}`}>{active.journey.name}</Link><small>{experienceModeLabel(active.binding?.mode)}</small></> : <span className="channels-muted">{hasPermission(user.role,"bot.view") ? journeysLoading ? "Loading experience…" : journeysFailed ? "Experience could not be checked" : "No active experience found" : "Experience access restricted"}</span>}</div>
       <div className="channels-muted">{activity ? relativeTime(activity) : "No activity recorded"}</div>
     </div>;
   }

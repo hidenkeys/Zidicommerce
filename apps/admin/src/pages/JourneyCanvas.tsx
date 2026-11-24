@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ClipboardPaste,
+  AlertCircle,
+  MessageSquare,
+  ShoppingBag,
+  HelpCircle,
+  Flag,
   Copy,
   GitBranch,
   Link2,
@@ -64,8 +69,10 @@ export function JourneyCanvas({
   arrange,
   paste,
   connect,
+  invalidKeys = [],
 }: {
   nodes: Node[];
+  invalidKeys?: string[];
   start: string;
   selected: string;
   editable: boolean;
@@ -281,7 +288,7 @@ export function JourneyCanvas({
               width={width}
               height={height}
               rx={8}
-              fill={n.key === selected ? "#11775b" : "#9bb5a7"}
+              fill={n.key === selected ? "var(--z-focus)" : "var(--z-line)"}
             />
           ))}
           <rect
@@ -290,7 +297,7 @@ export function JourneyCanvas({
             width={Math.min(w, view.w)}
             height={Math.min(h, view.h)}
             fill="none"
-            stroke="#123e2c"
+            stroke="var(--z-line)"
             strokeWidth={8}
           />
         </svg>
@@ -349,7 +356,7 @@ export function JourneyCanvas({
                   markerHeight="6"
                   orient="auto-start-reverse"
                 >
-                  <path d="M0 0L10 5L0 10" fill="#65857b" />
+                  <path d="M0 0L10 5L0 10" fill="var(--z-line)" />
                 </marker>
               </defs>
               {nodes.flatMap((node) =>
@@ -385,7 +392,7 @@ export function JourneyCanvas({
                       <path
                         d={curve}
                         fill="none"
-                        stroke="#65857b"
+                        stroke="var(--z-line)"
                         strokeDasharray={
                           edge.label === "Fallback" ? "4 4" : undefined
                         }
@@ -410,6 +417,8 @@ export function JourneyCanvas({
                 type="button"
                 key={node.key}
                 className="flow-node"
+                data-invalid={invalidKeys.includes(node.key)}
+                aria-invalid={invalidKeys.includes(node.key)}
                 aria-pressed={group.includes(node.key)}
                 style={{
                   left: points[node.key].x,
@@ -502,10 +511,12 @@ export function JourneyCanvas({
                 onPointerCancel={() => setDrag(undefined)}
               >
                 <small>
+                  {node.kind === "condition" ? <GitBranch size={13}/> : ["end", "handoff"].includes(node.kind) ? <Flag size={13}/> : node.kind.includes("selector") || ["payment", "create_order"].includes(node.kind) ? <ShoppingBag size={13}/> : ["question", "buttons", "list"].includes(node.kind) ? <HelpCircle size={13}/> : <MessageSquare size={13}/>}
                   {node.key === start ? "Start · " : ""}
                   {node.kind.replace(/_/g, " ")}
                 </small>
                 <strong>{node.title}</strong>
+                {invalidKeys.includes(node.key) && <small className="node-validation"><AlertCircle size={12}/>Needs attention</small>}
               </button>
             ))}
           </div>

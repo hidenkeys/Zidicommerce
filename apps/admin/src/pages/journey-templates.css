@@ -5,7 +5,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid var(--line, var(--z-line));
+  border: 1px solid var(--z-line);
   padding: 0 12px;
   border-radius: 8px;
 }
@@ -37,12 +37,12 @@
   gap: 7px;
   min-width: 0;
   padding: 14px;
-  border: 1px solid var(--line, var(--z-line));
+  border: 1px solid var(--z-line);
   border-radius: 10px;
   text-align: left;
   white-space: normal;
-  background: white;
-  color: var(--ink, var(--z-ink));
+  background: var(--z-surface);
+  color: var(--z-ink);
 }
 .template-cards button[aria-pressed="true"] {
   border-color: var(--z-focus);
@@ -52,7 +52,7 @@
 .template-cards span,
 .template-cards small {
   font-weight: 400;
-  color: var(--ink-subtle, var(--z-muted));
+  color: var(--z-muted);
 }
 .template-preview {
   padding-top: 14px;
