@@ -110,6 +110,7 @@ func (s *Service) executeConfiguredJourney(ctx context.Context, config bot.Versi
 		session.CurrentStepKey == config.Version.StartStepKey &&
 		!input.SimulatorStart &&
 		classifyCommand(input.Text) == commandNone &&
+		!strings.EqualFold(strings.TrimSpace(input.Text), settings.Trigger) &&
 		journeyEntryIntent(input.Text) == "default"
 	if (mode == "ai" || resumeAI) && session.ExpectedInput == "" && s.aiInbound != nil {
 		response, err := s.aiInbound(ctx, *session, input.Text)

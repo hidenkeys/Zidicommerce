@@ -56,3 +56,55 @@ func TestAIJourneyExplicitHandoffAndRelease(t *testing.T) {
 		t.Fatal("AI did not resume")
 	}
 }
+
+func TestReleasedGuidedJourneyEntryBypassesAI(t *testing.T) {
+	for _, trigger := range []string{"guided", "dessert_help"} {
+		t.Run(trigger, func(t *testing.T) {
+			fx, detail := journeyFixture(t, "guided_order")
+			customer, _, _ := seedCommerce(t, fx)
+			ctx := context.Background()
+			svc := bot.NewService(fx.db)
+			d := detail.Definition
+			d.Trigger = trigger
+			if _, err := svc.SaveJourney(ctx, fx.actor, detail.Version.ID, d); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := svc.PublishJourney(ctx, fx.actor, detail.Version.ID); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			fx.service.ConfigureAIInbound(func(context.Context, ConversationSession, string) (AIInboundResponse, error) {
+				calls++
+				return AIInboundResponse{Reply: "Grounded answer."}, nil
+			})
+			send := func(text string) RuntimeResult {
+				t.Helper()
+				r, err := fx.service.ProcessMessage(ctx, InboundMessage{ChannelID: &fx.channel.ID, Sender: customer.Phone, ExternalConversationID: "released-entry", Text: text, ExternalMessageID: uuid.NewString()})
+				if err != nil || r.Error != nil {
+					t.Fatalf("send %q: %v %+v", text, err, r.Error)
+				}
+				return r
+			}
+			started := send(trigger)
+			handoff, err := fx.service.RequestSupportHandoff(ctx, fx.actor, started.ConversationID, "Test release")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fx.service.ReleaseSupportHandoff(ctx, fx.actor, handoff.ID, SupportHandoffReleaseInput{ResumeBot: true}); err != nil {
+				t.Fatal(err)
+			}
+			send("What products are available?")
+			if calls != 1 {
+				t.Fatalf("natural question should reach AI once, got %d", calls)
+			}
+			restarted := send(trigger)
+			if calls != 1 {
+				t.Fatalf("published entry keyword reached AI: %d calls", calls)
+			}
+			stored, err := fx.service.GetConversationDetail(ctx, fx.actor, restarted.ConversationID)
+			if err != nil || stored.CurrentStepKey != "goal" || len(restarted.Messages) == 0 {
+				t.Fatalf("guided questions did not restart: %+v", restarted)
+			}
+		})
+	}
+}
