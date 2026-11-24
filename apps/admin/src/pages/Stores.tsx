@@ -39,6 +39,7 @@ export function StoresPage() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ name: "", address: "", city: "", country: "NG", code: "" });
   const [hours, setHours] = useState(defaultHours());
+  const [editHours, setEditHours] = useState<ReturnType<typeof defaultHours> | null>(null);
   const [fulfilment, setFulfilment] = useState(defaultFulfilment());
 
   async function load() {
@@ -104,9 +105,11 @@ export function StoresPage() {
       address: form.address || selected.address,
       city: form.city || selected.city,
       country: form.country || selected.country,
-      hours: (selected.hours ?? []).length ? selected.hours : hours,
-      fulfilment_modes: fulfilmentFrom(selected),
+      latitude: selected.latitude,
+      longitude: selected.longitude,
+      ...(editHours === null ? {} : { hours: editHours, fulfilment_modes: selected.fulfilment_modes ?? [] }),
     });
+    setEditHours(null);
     setFlash("Store saved.");
     await load();
   }
@@ -121,16 +124,6 @@ export function StoresPage() {
   const lowStockCount = selectedInventory.filter((row) => Number(row.on_hand ?? 0) - Number(row.reserved ?? 0) <= Number(row.reorder_threshold ?? 0)).length;
   const activeOrderCount = orders.filter((order) => String(order.store_id ?? (order.store as Row | undefined)?.id ?? "") === selectedID && !["completed", "cancelled"].includes(String(order.status))).length;
 
-  function fulfilmentFrom(store: Store) {
-    const modes = store.fulfilment_modes ?? [];
-    if (modes.length) {
-      return ["pickup", "customer_rider", "merchant_rider"].map((mode) => {
-        const existing = modes.find((item) => item.mode === mode);
-        return { mode, enabled: Boolean(existing?.enabled), delivery_fee_minor: Number(existing?.delivery_fee_minor ?? 0) };
-      });
-    }
-    return defaultFulfilment();
-  }
 
   return (
     <Page
@@ -145,7 +138,7 @@ export function StoresPage() {
           {loading ? <LoadingState label="Loading stores" /> : stores.length === 0 ? (
             <EmptyState title="No stores yet" body={canCreateStore ? "Add your first location to set up fulfilment and stock." : "Ask a business administrator to add the first location."} action={canCreateStore ? <button type="button" className="primary" onClick={startCreate}>Add store</button> : undefined} />
           ) : stores.map((store) => (
-            <button key={store.id} type="button" className="store-directory-item" onClick={() => { setSelectedID(store.id); setForm({ name: String(store.name || ""), address: String(store.address || ""), city: String(store.city || ""), country: String(store.country || "NG"), code: String(store.code || "") }); }}>
+            <button key={store.id} type="button" className="store-directory-item" onClick={() => { setSelectedID(store.id); setEditHours(null); setForm({ name: String(store.name || ""), address: String(store.address || ""), city: String(store.city || ""), country: String(store.country || "NG"), code: String(store.code || "") }); }}>
               <span>
                 <strong>{store.name}</strong>
                 <em>{String(store.city || store.address || "No address")}</em>
@@ -187,6 +180,19 @@ export function StoresPage() {
                 <label>Address<input value={form.address} placeholder={String(selected.address ?? "")} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label>
                 <label>City<input value={form.city} placeholder={String(selected.city ?? "")} onChange={(event) => setForm({ ...form, city: event.target.value })} /></label>
                 <label>Country<input value={form.country} onChange={(event) => setForm({ ...form, country: event.target.value })} /></label>
+                <div className="full">
+                  <button type="button" className="secondary" onClick={() => setEditHours((selected.hours ?? []).length ? (selected.hours ?? []).map(hour => ({day_of_week:Number(hour.day_of_week), opens_at:String(hour.opens_at ?? "09:00").slice(0,5), closes_at:String(hour.closes_at ?? "21:00").slice(0,5), is_closed:Boolean(hour.is_closed)})) : defaultHours())}>{(selected.hours ?? []).length ? "Edit opening hours" : "Set opening hours"}</button>
+                  {editHours !== null ? <fieldset className="hours-grid"><legend>Opening hours</legend>
+                    {editHours.map((hour,index) => <div className="hours-row" key={hour.day_of_week}>
+                      <span>{days[hour.day_of_week]}</span>
+                      <input aria-label={`${days[hour.day_of_week]} opening time`} type="time" value={hour.opens_at} disabled={hour.is_closed} onChange={event => setEditHours(editHours.map((item,i) => i === index ? {...item, opens_at:event.target.value} : item))}/>
+                      <input aria-label={`${days[hour.day_of_week]} closing time`} type="time" value={hour.closes_at} disabled={hour.is_closed} onChange={event => setEditHours(editHours.map((item,i) => i === index ? {...item, closes_at:event.target.value} : item))}/>
+                      <label><input type="checkbox" checked={hour.is_closed} onChange={event => setEditHours(editHours.map((item,i) => i === index ? {...item, is_closed:event.target.checked} : item))}/> Closed</label>
+                    </div>)}
+                    {!editHours.length ? <p>Opening hours will be removed when you save.</p> : null}
+                    <div className="page-actions"><button type="button" onClick={() => setEditHours([])}>Remove opening hours</button><button type="button" onClick={() => setEditHours(defaultHours())}>Use weekly hours</button><button type="button" onClick={() => setEditHours(null)}>Cancel hours changes</button></div>
+                  </fieldset> : null}
+                </div>
                 <div className="full"><button type="submit">Save store</button></div>
               </FormGrid> : <p className="read-only-note">Store configuration is read-only for your role.</p>}
             </>
