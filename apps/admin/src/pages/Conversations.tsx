@@ -10,6 +10,7 @@ import { hasPermission } from "../lib/permissions";
 type Conversation = Row & {
   id: string;
   channel_id?: string;
+  channel_provider?: string;
   external_conversation_id?: string;
   status?: string;
   conversation_status?: string;
@@ -176,7 +177,7 @@ export function ConversationsPage() {
       });
       setMessages(messageResponse.data);
       setAssigneeID(String(detailResponse.data.assigned_user_id ?? ""));
-      if (detailResponse.data.channel_id) {
+      if (detailResponse.data.channel_id && detailResponse.data.channel_provider === "whatsapp") {
         const policyResponse = await apiGet<WhatsAppPolicyContext>(`/channel-platform/connections/${detailResponse.data.channel_id}/whatsapp/conversations/${id}/policy-context`).catch(() => null);
         setPolicyContext(policyResponse?.data ?? null);
       }

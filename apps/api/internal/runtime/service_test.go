@@ -2240,3 +2240,29 @@ func TestPaymentCheckRejectsAnotherCustomersReferenceBeforeVerification(t *testi
 		t.Fatalf("another customer's payment was verified: %s, %v", current.Status, err)
 	}
 }
+
+func TestConversationProviderComesFromTenantChannel(t *testing.T) {
+	fx := newRuntimeFixture(t, bot.VersionConfiguration{})
+	session := createRuntimeSessionForScopeTest(t, fx, "provider-projection")
+	if err := fx.db.Model(&session).Update("system_context", `{"channel_provider":"whatsapp"}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, provider := range []string{"test", "whatsapp"} {
+		if err := fx.db.Model(&fx.channel).Update("provider", provider).Error; err != nil {
+			t.Fatal(err)
+		}
+		detail, err := fx.service.GetConversationDetail(context.Background(), fx.actor, session.ID)
+		if err != nil || detail.ChannelProvider != provider {
+			t.Fatalf("detail provider: got %q, want %q; err=%v", detail.ChannelProvider, provider, err)
+		}
+		rows, err := fx.service.ListConversations(context.Background(), fx.actor, ConversationFilter{})
+		if err != nil || len(rows) != 1 || rows[0].ChannelProvider != provider {
+			t.Fatalf("list provider: got %+v, want %q; err=%v", rows, provider, err)
+		}
+	}
+	foreignActor := fx.actor
+	foreignActor.OrganizationID = uuid.New()
+	if _, err := fx.service.GetConversationDetail(context.Background(), foreignActor, session.ID); err == nil {
+		t.Fatal("foreign tenant must not read conversation provider")
+	}
+}

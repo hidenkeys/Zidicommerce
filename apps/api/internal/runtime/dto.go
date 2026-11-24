@@ -135,6 +135,7 @@ type ConversationSummary struct {
 	BotID                  uuid.UUID  `json:"bot_id"`
 	BotVersionID           uuid.UUID  `json:"bot_version_id"`
 	ChannelID              uuid.UUID  `json:"channel_id"`
+	ChannelProvider        string     `json:"channel_provider"`
 	CustomerID             *uuid.UUID `json:"customer_id,omitempty"`
 	StoreID                *uuid.UUID `json:"store_id,omitempty"`
 	CustomerName           string     `json:"customer_name"`

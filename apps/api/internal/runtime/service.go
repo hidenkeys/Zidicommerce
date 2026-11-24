@@ -266,6 +266,21 @@ func (s *Service) ListConversations(ctx context.Context, actor auth.CurrentUser,
 	if err := query.Find(&sessions).Error; err != nil {
 		return nil, err
 	}
+	// Read the provider from tenant-owned channels, never from session variables.
+	channelIDs := make([]uuid.UUID, 0, len(sessions))
+	for _, session := range sessions {
+		channelIDs = append(channelIDs, session.ChannelID)
+	}
+	providers := map[uuid.UUID]string{}
+	if len(channelIDs) > 0 {
+		var channels []core.Channel
+		if err := s.db.WithContext(ctx).Select("id, provider").Where("organization_id = ? AND id IN ?", actor.OrganizationID, channelIDs).Find(&channels).Error; err != nil {
+			return nil, err
+		}
+		for _, channel := range channels {
+			providers[channel.ID] = channel.Provider
+		}
+	}
 	summaries := make([]ConversationSummary, 0, len(sessions))
 	for _, session := range sessions {
 		conversationStatus := conversationStatusForRuntime(session)
@@ -275,6 +290,7 @@ func (s *Service) ListConversations(ctx context.Context, actor auth.CurrentUser,
 			BotID:                  session.BotID,
 			BotVersionID:           session.BotVersionID,
 			ChannelID:              session.ChannelID,
+			ChannelProvider:        providers[session.ChannelID],
 			CustomerID:             session.CustomerID,
 			StoreID:                session.StoreID,
 			ExternalConversationID: session.ExternalConversationID,
@@ -385,6 +401,10 @@ func (s *Service) hydrateConversationSummary(ctx context.Context, actor auth.Cur
 		UpdatedAt:              session.UpdatedAt,
 		CreatedAt:              session.CreatedAt,
 	}
+	if err := s.db.WithContext(ctx).Model(&core.Channel{}).Select("provider").Where("organization_id = ? AND id = ?", actor.OrganizationID, session.ChannelID).Scan(&summary.ChannelProvider).Error; err != nil {
+		return summary, err
+	}
+
 	if session.CustomerID != nil {
 		var customer core.Customer
 		if err := s.db.WithContext(ctx).Where("organization_id = ? AND id = ?", actor.OrganizationID, *session.CustomerID).First(&customer).Error; err == nil {
