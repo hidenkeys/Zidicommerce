@@ -147,7 +147,7 @@ export function CataloguePage() {
       <Drawer open={open} title={editing ? "Edit product" : "Add product"} onClose={() => setOpen(false)}>
         <FormGrid onSubmit={saveProduct}>
           <label className="full">Name<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required /></label>
-          <label className="full">Description<textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
+          <label className="full">Description<textarea aria-label="Description" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
           <label>Category
             <select value={form.category_id} onChange={(event) => setForm({ ...form, category_id: event.target.value })}>
               <option value="">Uncategorised</option>

@@ -1,4 +1,6 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080/v1";
+// Accept either an API origin or an explicit versioned/path-prefixed base.
+const configuredBase = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080/v1").replace(/\/+$/, "");
+const API_BASE_URL = /^https?:\/\/[^/?#]+$/.test(configuredBase) ? `${configuredBase}/v1` : configuredBase;
 const TOKEN_KEY = "zidicommerce_field_token";
 
 export function getToken() {

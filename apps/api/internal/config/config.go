@@ -15,6 +15,7 @@ type Config struct {
 	ControlledBeta bool
 	AppName        string
 	AppEnv         string
+	ServerHost     string
 	ServerPort     string
 	LogLevel       string
 	MigrationsDir  string
@@ -133,6 +134,7 @@ func Load() (Config, error) {
 		ControlledBeta: boolEnv("CONTROLLED_BETA", false),
 		AppName:        getenv("APP_NAME", "zidicommerce"),
 		AppEnv:         getenv("APP_ENV", "development"),
+		ServerHost:     strings.TrimSpace(os.Getenv("SERVER_HOST")),
 		ServerPort:     getenv("SERVER_PORT", "8080"),
 		LogLevel:       getenv("LOG_LEVEL", "info"),
 		MigrationsDir:  getenv("MIGRATIONS_DIR", "migrations"),
@@ -321,14 +323,19 @@ func (c DatabaseConfig) DSN() string {
 	}
 	return fmt.Sprintf(
 		"host=%s user=%s password=%s dbname=%s port=%s sslmode=%s TimeZone=%s",
-		c.Host,
-		c.User,
-		c.Password,
-		c.Name,
-		c.Port,
-		c.SSLMode,
-		c.Timezone,
+		quoteDSNValue(c.Host),
+		quoteDSNValue(c.User),
+		quoteDSNValue(c.Password),
+		quoteDSNValue(c.Name),
+		quoteDSNValue(c.Port),
+		quoteDSNValue(c.SSLMode),
+		quoteDSNValue(c.Timezone),
 	)
+}
+
+// libpq keyword values must escape quotes and backslashes, including empty values.
+func quoteDSNValue(value string) string {
+	return "'" + strings.NewReplacer(`\`, `\\`, "'", `\'`).Replace(value) + "'"
 }
 
 func (c JWTConfig) TTL() time.Duration {

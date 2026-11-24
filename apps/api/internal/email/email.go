@@ -3,6 +3,7 @@ package email
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 )
 
@@ -27,6 +28,12 @@ func NewLogSender(logger *slog.Logger, from string) *LogSender {
 }
 
 func (s *LogSender) Send(message Message) error {
+	if s.logger != nil && os.Getenv("APP_ENV") == "development" && os.Getenv("LOCAL_ACCEPTANCE_EMAIL_LOG") == "true" {
+		// Explicit disposable localhost acceptance only. Normal log mode keeps
+		// invitation/reset credentials redacted; production cannot enable this.
+		s.logger.Info("local acceptance email", "to", message.To, "text", message.Text)
+		return nil
+	}
 	if s.logger != nil {
 		s.logger.Info("email delivery disabled in logging mode", "to_domain", recipientDomain(message.To), "subject", message.Subject, "from", s.from)
 	}

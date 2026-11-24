@@ -188,7 +188,7 @@ export function Shell() {
       {mobileOpen ? <button className="sidebar-scrim" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} /> : null}
       <aside className={mobileOpen ? "sidebar open" : "sidebar"} aria-label="Primary navigation">
         <div className="brand">
-          <ZidiCommerceLogo tone="dark" subtitle={organizationName || (organizationReady ? "Merchant workspace" : "Workspace setup")} />
+          <ZidiCommerceLogo sidebar tone="dark" subtitle={organizationName || (organizationReady ? "Merchant workspace" : "Workspace setup")} />
           <IconButton ref={closeNav} className="sidebar-close" label="Close navigation" icon={X} onClick={() => setMobileOpen(false)} />
         </div>
 

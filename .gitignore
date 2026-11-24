@@ -19,3 +19,6 @@ apps/api/ai-evaluations/**/*.json
 
 # Local staging UI evidence (may contain merchant data).
 .staging-evidence/
+
+# Disposable local acceptance database, credentials, logs, and evidence.
+.local-acceptance/

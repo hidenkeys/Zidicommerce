@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestDatabaseConfigDSNUsesDatabaseURLWhenProvided(t *testing.T) {
@@ -28,7 +30,7 @@ func TestDatabaseConfigDSNBuildsFromParts(t *testing.T) {
 	}
 
 	got := cfg.DSN()
-	for _, part := range []string{"host=localhost", "user=postgres", "password=secret", "dbname=zidicommerce", "port=5432", "sslmode=disable"} {
+	for _, part := range []string{"host='localhost'", "user='postgres'", "password='secret'", "dbname='zidicommerce'", "port='5432'", "sslmode='disable'"} {
 		if !strings.Contains(got, part) {
 			t.Fatalf("expected DSN to contain %q, got %q", part, got)
 		}
@@ -197,5 +199,20 @@ func TestControlledBetaFlowsRequireStagingAndDesignatedTester(t *testing.T) {
 	t.Setenv("WHATSAPP_TESTER_NUMBERS", "")
 	if _, err := Load(); err == nil {
 		t.Fatal("unrestricted Flow beta accepted")
+	}
+}
+
+func TestDatabaseConfigDSNRoundTrip(t *testing.T) {
+	for _, password := range []string{"", "space quote' and slash\\"} {
+		t.Run(password, func(t *testing.T) {
+			cfg := DatabaseConfig{Host: "localhost", Port: "5432", User: "test user", Password: password, Name: "acceptance db", SSLMode: "disable", Timezone: "Africa/Lagos"}
+			parsed, err := pgconn.ParseConfig(cfg.DSN())
+			if err != nil {
+				t.Fatal("DSN should parse")
+			}
+			if parsed.Password != password || parsed.Database != cfg.Name || parsed.User != cfg.User || parsed.RuntimeParams["TimeZone"] != cfg.Timezone {
+				t.Fatal("DSN values did not round-trip")
+			}
+		})
 	}
 }

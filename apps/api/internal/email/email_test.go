@@ -1,6 +1,7 @@
 package email
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log/slog"
@@ -127,5 +128,28 @@ func TestSMTPSenderRequiresSTARTTLS(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret-password") {
 		t.Fatal("smtp error leaked password")
+	}
+}
+
+func TestLocalAcceptanceEmailLogIsExplicitAndDevelopmentOnly(t *testing.T) {
+	for _, tc := range []struct {
+		env, enabled string
+		capture      bool
+	}{
+		{"development", "true", true}, {"production", "true", false}, {"staging", "true", false}, {"development", "false", false},
+	} {
+		t.Run(tc.env+tc.enabled, func(t *testing.T) {
+			t.Setenv("APP_ENV", tc.env)
+			t.Setenv("LOCAL_ACCEPTANCE_EMAIL_LOG", tc.enabled)
+			var output bytes.Buffer
+			sender := NewLogSender(slog.New(slog.NewJSONHandler(&output, nil)), "acceptance@local.invalid")
+			err := sender.Send(Message{To: "staff@local.invalid", Text: "local-invitation-secret"})
+			if strings.Contains(output.String(), "local-invitation-secret") != tc.capture {
+				t.Fatal("acceptance credentials must appear only in explicitly enabled development logs")
+			}
+			if (err == nil) != tc.capture {
+				t.Fatal("only explicit local capture counts as delivered")
+			}
+		})
 	}
 }

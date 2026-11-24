@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -298,7 +299,7 @@ func main() {
 	}
 
 	log.Info("starting ZidiCommerce API", "port", cfg.ServerPort, "env", cfg.AppEnv)
-	if err := app.Listen(":" + cfg.ServerPort); err != nil {
+	if err := app.Listen(net.JoinHostPort(cfg.ServerHost, cfg.ServerPort)); err != nil {
 		log.Error("server stopped", "error", err)
 		os.Exit(1)
 	}

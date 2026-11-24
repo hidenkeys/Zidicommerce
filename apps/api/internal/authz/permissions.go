@@ -207,6 +207,14 @@ func PolicyForRuntimeAction(action string) RuntimeActionPolicy {
 		return RuntimeActionPolicy{Action: action, Mode: RuntimeActionWrite, Permission: PermissionPaymentsManage, Class: RuntimeActionClassHighRiskCommerce, Confirmation: RuntimeActionConfirmationProviderProof}
 	case "get_order", "get_order_status", "get_customer_orders", "select_order":
 		return RuntimeActionPolicy{Action: action, Mode: RuntimeActionRead, Permission: PermissionOrdersView, Class: RuntimeActionClassRead, Confirmation: RuntimeActionConfirmationNone}
+	case "get_service_welcome", "list_service_pools", "select_service_pool":
+		return RuntimeActionPolicy{Action: action, Mode: RuntimeActionRead, Permission: PermissionCatalogueView, Class: RuntimeActionClassRead, Confirmation: RuntimeActionConfirmationNone}
+	case "create_service_request":
+		return RuntimeActionPolicy{Action: action, Mode: RuntimeActionWrite, Permission: PermissionOrdersManage, Class: RuntimeActionClassCommerceMutation, Confirmation: RuntimeActionConfirmationCustomerIntent}
+	case "initialize_booking_fee", "check_booking_payment":
+		return RuntimeActionPolicy{Action: action, Mode: RuntimeActionWrite, Permission: PermissionPaymentsManage, Class: RuntimeActionClassHighRiskCommerce, Confirmation: RuntimeActionConfirmationProviderProof}
+	case "submit_service_rating":
+		return RuntimeActionPolicy{Action: action, Mode: RuntimeActionWrite, Permission: PermissionConversationsManage, Class: RuntimeActionClassSafeDeterministic, Confirmation: RuntimeActionConfirmationCustomerIntent}
 	case "match_faq":
 		return RuntimeActionPolicy{Action: action, Mode: RuntimeActionRead, Permission: PermissionKnowledgeView, Class: RuntimeActionClassRead, Confirmation: RuntimeActionConfirmationNone}
 	case "create_complaint":

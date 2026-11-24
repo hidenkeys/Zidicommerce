@@ -3,6 +3,7 @@ type ZidiCommerceLogoProps = {
   compact?: boolean;
   tone?: "dark" | "light";
   subtitle?: string;
+  sidebar?: boolean;
 };
 
 const markPath = "M12 12H52L44 22H12ZM40 26H52L24 38H12ZM20 42H52V52H12Z";
@@ -15,16 +16,19 @@ export function ZidiCommerceSymbol({ className = "", tone = "dark" }: Pick<ZidiC
   </svg>;
 }
 
-export function ZidiCommerceLogo({ className = "", compact = false, tone = "dark", subtitle }: ZidiCommerceLogoProps) {
+export function ZidiCommerceLogo({ className = "", compact = false, tone = "dark", subtitle, sidebar = false }: ZidiCommerceLogoProps) {
   if (compact) return <ZidiCommerceSymbol className={className} tone={tone} />;
-  return <div className={`zidi-commerce-logo ${className}`.trim()}>
+  return <div className={`zidi-commerce-logo${sidebar ? " zidi-commerce-logo--sidebar" : ""} ${className}`.trim()}>
     <span aria-hidden="true" style={{ display: "flex", flex: "0 0 auto", margin: 0 }}><ZidiCommerceSymbol className="zidi-commerce-logo__symbol" tone={tone} /></span>
     <div className="zidi-commerce-logo__wordmark">
-      <svg viewBox="0 0 100 64" className="zidi-commerce-logo__lettering" width="100" height="64" role="img" aria-label="Zidi Commerce" fill={tone === "light" ? "var(--z-neutral-50)" : "var(--z-on-brand)"} fillRule="evenodd">
+      {sidebar ? <div className="zidi-commerce-logo__sidebar-lettering" role="img" aria-label="Zidi Commerce">
+        <svg viewBox="0 0 88 38" className="zidi-commerce-logo__name" aria-hidden="true" fill={tone === "light" ? "var(--z-neutral-50)" : "var(--z-on-brand)"} fillRule="evenodd"><path d={wordPath} /></svg>
+        <svg viewBox="0 -1 81 16" className="zidi-commerce-logo__descriptor" aria-hidden="true" fill={tone === "light" ? "var(--z-neutral-50)" : "var(--z-on-brand)"} fillRule="evenodd">{descriptor.map(({ x, d }, i) => <path key={i} transform={`translate(${x} 0)`} d={d} />)}</svg>
+      </div> : <svg viewBox="0 0 100 64" className="zidi-commerce-logo__lettering" width="100" height="64" role="img" aria-label="Zidi Commerce" fill={tone === "light" ? "var(--z-neutral-50)" : "var(--z-on-brand)"} fillRule="evenodd">
         <path d={wordPath} />
         <g transform="translate(0 41) scale(1.08)">{descriptor.map(({ x, d }, i) => <path key={i} transform={`translate(${x} 0)`} d={d} />)}</g>
-      </svg>
-      {subtitle ? <small>{subtitle}</small> : null}
+      </svg>}
+      {subtitle ? <small title={subtitle}>{subtitle}</small> : null}
     </div>
   </div>;
 }

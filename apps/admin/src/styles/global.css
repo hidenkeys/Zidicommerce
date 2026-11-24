@@ -3537,10 +3537,18 @@ button.table-record-link:hover,button.table-record-link:focus-visible{text-decor
   .compact-sidebar .brand .zidi-commerce-logo__symbol { width: 36px; height: 36px; }
 }
 
-/* Sidebar lockup: keep organization text aligned beneath the wordmark. */
-.sidebar .zidi-commerce-logo { height: 40px; gap: 8px; }
+/* Independent sidebar lettering keeps the descriptor legible at compact sizes. */
+.sidebar .zidi-commerce-logo--sidebar { gap: 8px; align-items: flex-start; }
 .sidebar .zidi-commerce-logo__symbol { width: 28px; height: 28px; }
 .zidi-commerce-logo__lettering { display: block; width: 100px; height: 64px; }
-.sidebar .zidi-commerce-logo__lettering { width: 47px; height: 30px; }
-.sidebar .zidi-commerce-logo__wordmark small { margin-top: 0; font-size: 10px; line-height: 1; }
+.zidi-commerce-logo__sidebar-lettering { display: grid; gap: 2px; width: 65px; }
+.zidi-commerce-logo__name { display: block; width: 42px; height: 18px; }
+.zidi-commerce-logo__descriptor { display: block; width: 65px; height: 13px; }
+.sidebar .zidi-commerce-logo__wordmark small {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: normal;
+}
 @media(min-width:1025px) { .compact-sidebar .brand .zidi-commerce-logo__symbol { width: 28px; height: 28px; } }
