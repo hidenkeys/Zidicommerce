@@ -113,3 +113,7 @@
 }
 .flow-canvas header button[aria-pressed=true]{background:var(--z-selected)}
 @media(max-width:760px){.content:has(.journey-studio) .page-header .page-actions{display:flex;flex-wrap:wrap;gap:6px}.content:has(.journey-studio) .page-header .page-actions button{width:auto}.flow-canvas header div{gap:4px}}
+
+.journey-preview .journey-scenario .tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.journey-preview .journey-scenario .tabs button { flex: 1 1 40%; font-size: 11px; padding: 6px 8px; }
+@media(min-width:761px) { .preview-desktop .wa-phone { max-width: 760px; border-radius: 20px; } .preview-desktop .wa-message { max-width: 70%; } }

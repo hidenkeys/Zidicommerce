@@ -1,3 +1,5 @@
+import { WhatsAppPhone } from "../components/whatsapp/WhatsAppPhone";
+import { WhatsAppThread } from "../components/whatsapp/WhatsAppThread";
 import { FormEvent, useEffect, useState, type ComponentType } from "react";
 import { Activity, Archive, Camera, Check, Clipboard, Headphones, KeyRound, Link2, MessageCircle, MessageSquareText, Music2, Pencil, Plus, RefreshCw, Send, ShieldCheck, Unplug, X, type LucideProps } from "lucide-react";
 import { API_BASE_URL, apiDelete, apiGet, apiPatch, apiPost } from "../api/client";
@@ -871,7 +873,7 @@ export function ChannelsPage() {
 		  <label>Sample values<input value={templateForm.sample_values} onChange={(event) => setTemplateForm({ ...templateForm, sample_values: event.target.value })} placeholder="name=Ada, order_code=ZC-100" /></label>
 		  <label>Meta template reference<input value={templateForm.provider_template_id} onChange={(event) => setTemplateForm({ ...templateForm, provider_template_id: event.target.value })} autoComplete="off" /></label>
 		  <label>Rejection note<input value={templateForm.rejection_reason} onChange={(event) => setTemplateForm({ ...templateForm, rejection_reason: event.target.value })} /></label>
-		  <div className="full whatsapp-template-preview"><small>Preview</small><p>{templatePreview() || "Template preview appears here."}</p></div>
+		  <div className="full"><WhatsAppPhone businessName="Business"><WhatsAppThread lines={[{ from: "bot", message: { type: "text", text: templatePreview() || "Template preview appears here." } }]} /></WhatsAppPhone></div>
 		</form>
 	  </Modal>
     </Page>

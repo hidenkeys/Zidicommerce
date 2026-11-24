@@ -5,6 +5,8 @@ import { useAuth } from "../auth";
 import { Card, EmptyState, Flash, LoadingState, Page, StatusDot, Tabs } from "../components/ui";
 import { moduleHelp, parseJSON, relativeTime, type Row } from "../lib/format";
 import { hasPermission } from "../lib/permissions";
+import { WhatsAppPhone } from "../components/whatsapp/WhatsAppPhone";
+import { WhatsAppThread } from "../components/whatsapp/WhatsAppThread";
 import { isUsableChannelStatus } from "../lib/channels";
 
 type Bot = Row & { id: string; name: string; status: string; published_version_id?: string; updated_at?: string };
@@ -12,7 +14,7 @@ type BotVersion = Row & { id: string; bot_id: string; version_number: number; st
 type BotModule = Row & { id: string; module_key: string; name: string; parameters?: string; metadata?: string; sort_order?: number; description?: string };
 type BotConfig = { version: BotVersion; modules: BotModule[] };
 type Channel = Row & { provider: string; display_name: string; display_number?: string; status: string };
-type RuntimeMessage = { from: "customer" | "bot" | "debug"; text: string };
+type RuntimeMessage = { from: "customer" | "bot" | "debug"; text: string; message?: unknown };
 type FieldMessage = Row & { id: string; author_type: string; body: string };
 type WorkflowConfig = Row & {
   status: string;
@@ -311,7 +313,7 @@ export function AssistantPage() {
       ...items,
       ...outbound.map((msg) => ({
         from: "bot" as const,
-        text: [String(msg.text ?? ""), Array.isArray(msg.options) ? (msg.options as Row[]).map((option) => option.label ?? option.id).join(" · ") : ""].filter(Boolean).join("\n"),
+        text: String(msg.text ?? ""), message: msg,
       })),
     ]);
   }
@@ -490,11 +492,9 @@ export function AssistantPage() {
           <p className="muted">This uses the published version if one exists, otherwise the draft. It does not contact real customers.</p>
           {!canManageAssistant ? <p className="read-only-note">Testing and publishing are managed by an organization administrator.</p> : !testSessionID ? <button type="button" onClick={() => void startTest()}>Start test</button> : (
             <>
-              <div className="test-transcript">
-                {testMessages.map((item, index) => (
-                  <div key={index} className={`test-message ${item.from}`}>{item.text}</div>
-                ))}
-              </div>
+              <WhatsAppPhone businessName={bot.name}>
+                <WhatsAppThread lines={testMessages.map(item => ({ from: item.from === "customer" ? "customer" : "bot", message: item.message ?? { type: item.from === "debug" ? "notice" : "text", text: item.text } }))} />
+              </WhatsAppPhone>
               <form className="test-send" onSubmit={sendTest}>
                 <input aria-label="Test customer message" value={testInput} onChange={(event) => setTestInput(event.target.value)} placeholder="Type as a customer" />
                 <button type="submit">Send</button>

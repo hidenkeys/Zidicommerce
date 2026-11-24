@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowDown, ArrowLeft, ArrowUp, Copy, GitBranch, GripVertical, History, Lock, MessageSquare, Pause, Play, Plus, Redo2, RotateCcw, Save, Send, Settings2, ShieldCheck, Smartphone, Trash2, Undo2 } from "lucide-react";
 import { apiDelete, apiGet, apiPost, apiPut } from "../api/client";
 import { useAuth } from "../auth";
@@ -6,6 +6,8 @@ import { Badge, Button, EmptyState, Flash, IconButton, LoadingState, Modal, Page
 import { hasPermission } from "../lib/permissions";
 import "./journeys.css";
 import { JourneyFlowPreview } from "./JourneyFlowPreview";
+import { WhatsAppPhone } from "../components/whatsapp/WhatsAppPhone";
+import { WhatsAppThread } from "../components/whatsapp/WhatsAppThread";
 
 import { inspectJourney } from "./journey-insights";
 import { JourneyTemplates } from "./JourneyTemplates";
@@ -29,7 +31,7 @@ type Detail = { channel_default?: {journey_id:string; version_id:string; mode:st
 type Issue = { path: string; message: string };
 type Validation = { valid: boolean; issues: Issue[] };
 type Compilation = { json: Record<string, unknown>; errors: Issue[]; warnings: Issue[] };
-type Message = { type: string; text: string; options?: { id: string; label: string }[]; metadata?: { answer_type?: string; help?: string } };
+type Message = { type: string; text: string; options?: { id: string; label: string }[]; media_url?: string; location_request?: boolean; metadata?: { answer_type?: string; help?: string; [key: string]: unknown } };
 type Preview = { variables?: Record<string, unknown>; session_id: string; current_step: string; turn: string; flow_screen: string; controlled_test?: boolean; result: { status: string; messages: Message[]; handoff?: boolean }; cart: { name: string; quantity: number; unit_price_minor: number; currency: string }[] };
 type Library = { kind: string; name: string; answer_type?: string };
 type Connection = { id: string; provider: string; display_name: string; status: string };
@@ -81,7 +83,6 @@ export function JourneysPage() {
   const [scenario, setScenario] = useState("normal");
   const [compilation, setCompilation] = useState<Compilation>();
   const [dragged, setDragged] = useState("");
-  const scrollRef = useRef<HTMLDivElement>(null);
   const dirty = Boolean(draft && JSON.stringify(draft) !== saved);
   const editable = canEdit && (detail?.version.status === "draft" || detail?.version.status === "validated") && detail?.deployment?.status !== "published" && detail?.deployment?.status !== "deprecated";
   const step = draft?.steps.find(s => s.key === selected);
@@ -127,7 +128,6 @@ export function JourneysPage() {
     document.addEventListener("click", navigate, true);
     return () => { window.removeEventListener("beforeunload", handler); document.removeEventListener("click", navigate, true); };
   }, [dirty]);
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [lines]);
 
   function change(next: Definition) {
     if (!draft || !editable) return;
@@ -286,12 +286,12 @@ export function JourneysPage() {
         <section className={`journey-preview ${tab === "preview" ? "mobile-current" : ""}`} aria-label="Interactive journey preview">
           <div className="journey-section-heading"><h2>Preview</h2><IconButton label="Restart preview" icon={RotateCcw} disabled={busy || dirty} onClick={() => void run(startPreview)} /></div>
           <div className="journey-preview-switch" role="group" aria-label="Preview presentation"><button type="button" className={previewMode === "chat" ? "active" : ""} onClick={() => setPreviewMode("chat")}><MessageSquare size={15} />Chat</button><button type="button" className={previewMode === "flow" ? "active" : ""} onClick={() => setPreviewMode("flow")}><Smartphone size={15} />Flow</button></div>
-          <label className="journey-scenario">Preview device<select value={previewContext} onChange={e=>setPreviewContext(e.target.value)}><option value="phone">Phone</option><option value="desktop">Desktop</option></select></label>
-          <label className="journey-scenario">Scenario<select value={scenario} onChange={e => { setScenario(e.target.value); setPreview(undefined); setLines([]); }}>{["normal", "empty_catalogue", "unavailable_stock", "payment_failure", "handoff", "unsupported_channel"].map(value => <option key={value} value={value}>{friendly(value)}</option>)}</select></label>
-          <div className="journey-phone"><div className="journey-phone-header"><strong>{draft.name}</strong><Badge tone={preview?.controlled_test ? "warning" : "info"}>{preview?.controlled_test ? "Test records" : "Preview only"}</Badge></div>
-            {preview ? previewMode === "chat" ? <div className="journey-chat" ref={scrollRef}>{lines.map((line, index) => <div key={index} className={`journey-bubble ${line.from}`}><p>{line.message.text}</p>{line.message.metadata?.help ? <small>{line.message.metadata.help}</small> : null}{index === lines.length - 1 && questionActive ? line.message.options?.map(option => <button key={option.id} type="button" disabled={busy} onClick={() => void run(() => send(option.id, option.label))}>{option.label}</button>) : null}</div>)}</div> : compilation?.errors.length ? <Flash message="This journey cannot be rendered as a Flow. Resolve the compilation errors first." /> : <JourneyFlowPreview compilation={compilation?.json} screenId={preview.flow_screen} prompt={flowPrompt} options={currentPrompt?.options} busy={busy} submit={(id, label) => void run(() => send(id, label))} /> : <div className="journey-preview-empty"><Button icon={Play} disabled={busy || dirty} onClick={() => void run(startPreview)}>Start preview</Button></div>}
-            {questionActive && !currentPrompt?.options?.length ? <form className="journey-answer" onSubmit={e => { e.preventDefault(); void run(() => send(answer)); }}><input aria-label="Customer answer" value={answer} disabled={busy} type={currentPrompt?.metadata?.answer_type === "date" ? "date" : currentPrompt?.metadata?.answer_type === "email" ? "email" : "text"} onChange={e => setAnswer(e.target.value)} /><IconButton label="Send preview answer" icon={Send} type="submit" disabled={busy || !answer.trim()} /></form> : null}
-          </div>
+          <Tabs label="Preview device" value={previewContext} onChange={setPreviewContext} items={[{value:"phone",label:"Phone"},{value:"desktop",label:"Desktop"}]} />
+          <div className="journey-scenario"><span>Scenario</span><Tabs label="Preview scenario" value={scenario} onChange={value => { setScenario(value); setPreview(undefined); setLines([]); }} items={["normal", "empty_catalogue", "unavailable_stock", "payment_failure", "handoff", "unsupported_channel"].map(value => ({value,label:friendly(value)}))} /></div>
+          <WhatsAppPhone businessName={draft.name} label={preview?.controlled_test ? "Test records" : "Preview only"}>
+            {preview ? previewMode === "chat" ? <WhatsAppThread lines={preview.result.handoff ? [...lines, { from: "bot", message: { type: "notice", text: "Conversation handed to the team" } }] : lines} busy={busy} active={questionActive} onReply={(id, label) => void run(() => send(id, label))} onOpenFlow={() => setPreviewMode("flow")} /> : compilation?.errors.length ? <Flash message="This journey cannot be rendered as a Flow. Resolve the compilation errors first." /> : <JourneyFlowPreview resetKey={preview.turn} compilation={compilation?.json} screenId={preview.flow_screen} prompt={flowPrompt} options={currentPrompt?.options} busy={busy} submit={(id, label) => void run(() => send(id, label))} onClose={() => setPreviewMode("chat")} /> : <div className="journey-preview-empty"><Button icon={Play} disabled={busy || dirty} onClick={() => void run(startPreview)}>Start preview</Button></div>}
+            {previewMode === "chat" && questionActive && !currentPrompt?.options?.length ? <form className="journey-answer" onSubmit={e => { e.preventDefault(); void run(() => send(answer)); }}><input aria-label="Customer answer" value={answer} disabled={busy} type={currentPrompt?.metadata?.answer_type === "date" ? "date" : currentPrompt?.metadata?.answer_type === "email" ? "email" : "text"} onChange={e => setAnswer(e.target.value)} /><IconButton label="Send preview answer" icon={Send} type="submit" disabled={busy || !answer.trim()} /></form> : null}
+          </WhatsAppPhone>
           {preview ? <><div className="journey-preview-controls"><IconButton label="Back in preview" icon={ArrowLeft} disabled={busy} onClick={() => void run(() => send("back", "Back", "back"))} /><IconButton label="Restart journey" icon={RotateCcw} disabled={busy} onClick={() => void run(() => send("restart", "Restart", "restart"))} /><Button className="secondary" disabled={busy} onClick={() => void run(() => send("cancel", "Cancel", "cancel"))}>Cancel</Button><Badge>{friendly(preview.result.status)}</Badge></div><p className="muted journey-current">{draft.steps.find(s => s.key === preview.current_step)?.title ?? "Finished"}</p></> : null}
           {preview?.variables && <details className="journey-vars"><summary>Test variables</summary>{Object.entries(preview.variables).length ? <dl>{Object.entries(preview.variables).map(([key,value])=><div key={key}><dt>{key}</dt><dd>{typeof value==="string"?value:JSON.stringify(value)}</dd></div>)}</dl> : <p>No answers recorded yet.</p>}</details>}
           {preview?.cart?.length ? <div className="journey-cart"><h3>Preview cart</h3>{preview.cart.map((item, index) => <p key={index}>{item.quantity} × {item.name}<strong>{new Intl.NumberFormat("en-NG", { style: "currency", currency: item.currency ?? "NGN" }).format(item.quantity * item.unit_price_minor / 100)}</strong></p>)}</div> : null}

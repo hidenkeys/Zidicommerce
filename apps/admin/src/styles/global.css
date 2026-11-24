@@ -4462,3 +4462,11 @@ button.table-record-link:hover,button.table-record-link:focus-visible{text-decor
 @media (min-width: 1025px) {
   .compact-sidebar .brand .zidi-commerce-logo__symbol { width: 36px; height: 36px; }
 }
+
+/* Sidebar lockup: keep organization text aligned beneath the wordmark. */
+.sidebar .zidi-commerce-logo { height: 40px; gap: 8px; }
+.sidebar .zidi-commerce-logo__symbol { width: 28px; height: 28px; }
+.zidi-commerce-logo__lettering { display: block; width: 100px; height: 64px; }
+.sidebar .zidi-commerce-logo__lettering { width: 47px; height: 30px; }
+.sidebar .zidi-commerce-logo__wordmark small { margin-top: 0; font-size: 10px; line-height: 1; }
+@media(min-width:1025px) { .compact-sidebar .brand .zidi-commerce-logo__symbol { width: 28px; height: 28px; } }

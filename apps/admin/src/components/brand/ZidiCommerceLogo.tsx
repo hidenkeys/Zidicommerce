@@ -20,7 +20,7 @@ export function ZidiCommerceLogo({ className = "", compact = false, tone = "dark
   return <div className={`zidi-commerce-logo ${className}`.trim()}>
     <span aria-hidden="true" style={{ display: "flex", flex: "0 0 auto", margin: 0 }}><ZidiCommerceSymbol className="zidi-commerce-logo__symbol" tone={tone} /></span>
     <div className="zidi-commerce-logo__wordmark">
-      <svg viewBox="0 0 100 64" width="100" height="64" style={{ display: "block", width: "100px", height: "64px" }} role="img" aria-label="Zidi Commerce" fill={tone === "light" ? "var(--z-neutral-50)" : "var(--z-on-brand)"} fillRule="evenodd">
+      <svg viewBox="0 0 100 64" className="zidi-commerce-logo__lettering" width="100" height="64" role="img" aria-label="Zidi Commerce" fill={tone === "light" ? "var(--z-neutral-50)" : "var(--z-on-brand)"} fillRule="evenodd">
         <path d={wordPath} />
         <g transform="translate(0 41) scale(1.08)">{descriptor.map(({ x, d }, i) => <path key={i} transform={`translate(${x} 0)`} d={d} />)}</g>
       </svg>
