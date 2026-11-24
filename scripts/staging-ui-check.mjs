@@ -12,13 +12,13 @@ function clean(value) {
   return text.replace(tokenPattern, '[REDACTED]');
 }
 function pathname(url) {
-  try { return clean(new URL(url).pathname); } catch { return '[unavailable]'; }
+  try { return new URL(url).pathname.split('/').map(segment => clean(segment)).join('/'); } catch { return '[unavailable]'; }
 }
 const out = path.resolve(process.env.OUT_DIR || `.staging-evidence/${new Date().toISOString().replaceAll(':', '-')}`);
 const summary = { startedAt: new Date().toISOString(), organizations: {}, results: [], notes: [
   'Console messages and page-error messages are omitted for confidentiality; locations/names and counts are retained.',
   'Request/response bodies, headers, query strings, auth state and browser traces are never recorded.',
-  'Hidden desktop journey tab navigation is temporarily revealed for tab captures.',
+  'Mode-specific editor and read-only contextual panels are captured without changing application styles.',
 ] };
 let browser;
 let stage = 'configuration';
@@ -150,7 +150,7 @@ try {
     if (active && message.type() === 'error') active.consoleErrors.push({ path: pathname(message.location().url), line: message.location().lineNumber, message: '[omitted: may contain sensitive data]' });
   });
   page.on('pageerror', () => active?.pageErrors.push({ message: '[omitted: may contain sensitive data]' }));
-  page.on('response', response => { if (active && response.status() >= 400) active.failedRequests.push({ path: pathname(response.url()), status: response.status() }); });
+  page.on('response', response => { if (active && response.status() >= 400) active.failedRequests.push({ path: pathname(response.url()), origin: new URL(response.url()).origin, pathSegments: new URL(response.url()).pathname.split('/').filter(Boolean).map(clean), resourceType: response.request().resourceType(), status: response.status() }); });
   page.on('requestfailed', request => active?.failedRequests.push({ path: pathname(request.url()), status: null }));
   await mkdir(out, { recursive: true, mode: 0o700 });
   stage = 'login';
@@ -181,6 +181,7 @@ try {
       try { await page.goto(new URL(route, base).href); await capture(row); }
       catch { row.captureError = 'Navigation or capture failed (raw diagnostics omitted).'; if (/^\/login\/?$/.test(new URL(page.url()).pathname)) { stage = 'login/session'; throw new Error(); } }
     }
+    if(process.env.SKIP_EDITOR === '1') continue;
     const row = start('/journeys [first Open]', width);
     try {
       await page.goto(new URL('/journeys', base).href);
@@ -190,22 +191,19 @@ try {
       await open.click();
       await settle();
       await capture(row);
-      for (const tab of ['Canvas', 'Steps', 'Edit', 'Preview']) {
-        const tabRow = start(`/journeys [${tab}]`, width);
+      // Mode-specific editors replaced the old Canvas/Steps/Edit/Preview tabs.
+      // Open real read-only contextual controls; never manufacture hidden UI.
+      for (const name of ['Inspect step', 'Experience settings', 'Version history']) {
+        const panelRow = start(`/journeys [${name}]`, width);
         try {
-          const target = page.getByRole('tab', { name: tab, exact: true });
-          if (!await target.isVisible()) await page.addStyleTag({ content: '.journey-mobile-tabs { display: block !important; }' });
+          const target = page.getByRole('button', { name, exact: true });
+          if (!await target.isVisible()) throw new Error('Required editor control is unavailable');
           await target.click();
-          await capture(tabRow);
-          if (tab === 'Preview') {
-            const flow = page.getByRole('button', { name: 'Flow', exact: true });
-            if (await flow.isVisible()) {
-              const flowRow = start('/journeys [Preview / Flow]', width);
-              await flow.click();
-              await capture(flowRow);
-            }
-          }
-        } catch { active.captureError = 'Tab unavailable or capture failed (raw diagnostics omitted).'; }
+          await page.getByRole('dialog').last().waitFor();
+          await capture(panelRow);
+          await page.keyboard.press('Escape');
+          await page.getByRole('dialog').waitFor({ state: 'hidden' });
+        } catch { panelRow.captureError = 'Editor panel unavailable or capture failed (raw diagnostics omitted).'; }
       }
     } catch { active.captureError = 'Journey unavailable or capture failed (raw diagnostics omitted).'; }
   }
@@ -216,6 +214,7 @@ try {
   if (browser) await browser.close().catch(() => {});
 }
 summary.finishedAt = new Date().toISOString();
+if (summary.results.some(row => row.captureError || row.pageErrors.length || row.failedRequests.length || row.overflow?.detected)) process.exitCode = 1;
 try {
   await mkdir(out, { recursive: true, mode: 0o700 });
   await writeFile(path.join(out, 'summary.json'), JSON.stringify(summary, (_key, value) => typeof value === 'string' ? clean(value) : value, 2), { mode: 0o600 });
