@@ -246,7 +246,7 @@ export function OAuthChannelPanel({
 
   const hasPendingAssets = assets.some((asset) => !asset.selected);
   const steps = [
-    { label: "Setup record", complete: true },
+    { label: "Connection created", complete: true },
     { label: "Provider authorization", complete: detail.credentials.some((credential) => credential.status === "present") },
     { label: `Select ${copy.account}`, complete: Boolean(activeAccount) },
     { label: "Review permissions", complete: grantedScopes.length > 0 && missingScopes.length === 0 },
@@ -300,7 +300,7 @@ export function OAuthChannelPanel({
         <div className="oauth-account-summary">
           <div><span>Connected account</span><strong>{activeAccount?.display_name || activeAccount?.business_name || copy.account}</strong></div>
           <div><span>Provider identity</span><strong>{activeIdentity?.external_handle ? `@${activeIdentity.external_handle.replace(/^@/, "")}` : activeIdentity?.display_name || humanStatus(activeIdentity?.identity_type || "connected")}</strong></div>
-          <div><span>Credential health</span><strong>{humanStatus(connection.credential_status)}</strong></div>
+          <div><span>Credential health</span><strong>{connection.credential_status === "present" ? "Configured" : humanStatus(connection.credential_status)}</strong></div>
           <div><span>Token expiry</span><strong>{tokenExpiry ? relativeTime(tokenExpiry) : "Provider managed"}</strong></div>
           <div><span>Webhook health</span><strong>{connection.provider === "tiktok" ? "Not applicable" : humanStatus(detail.health.status === "not_checked" ? "subscription configured" : detail.health.status)}</strong></div>
           <div><span>Last inbound</span><strong>{latestInbound ? relativeTime(latestInbound.received_at) : connection.provider === "tiktok" ? "Not supported" : "Awaiting test"}</strong></div>
@@ -315,7 +315,7 @@ export function OAuthChannelPanel({
             <Badge tone={tone(capability.status)}>{humanStatus(capability.status)}</Badge>
             {capability.missing_scopes?.length ? <small className="oauth-scope-note">Missing: {capability.missing_scopes.join(", ")}</small> : null}
           </div>
-        )) : <EmptyState title="Capability status is not available" body="Refresh this connection after migrations have initialized its provider capability records." />}
+        )) : <EmptyState title="Capability status is not available" body="Refresh the connection after completing provider authorization." />}
       </section>
 
       {connected && connection.provider !== "tiktok" ? (

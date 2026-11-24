@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { ArrowDown, ArrowLeft, ArrowUp, Copy, GitBranch, GripVertical, History, Lock, MessageSquare, Pause, Play, Plus, Redo2, RotateCcw, Save, Send, Settings2, ShieldCheck, Smartphone, Trash2, Undo2 } from "lucide-react";
 import { apiDelete, apiGet, apiPost, apiPut } from "../api/client";
 import { useAuth } from "../auth";
@@ -46,6 +47,9 @@ const destinationLabel = (value: string | undefined, steps: Step[]) => steps.fin
 
 export function JourneysPage() {
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
+  const linkedJourney = searchParams.get("journey") || "";
+  const openedLink = useRef("");
   const canEdit = hasPermission(user.role, "bot.manage");
   const canPublish = hasPermission(user.role, "bot.publish");
   const canDeploy = canPublish && hasPermission(user.role, "channels.manage");
@@ -117,6 +121,19 @@ export function JourneysPage() {
       .finally(()=>{ if(current)setLoading(false); });
     return () => { current = false; };
   }, [user.organization_id, user.role, reload]);
+  useEffect(() => {
+    if (loading || loadFailure || !linkedJourney || !hasPermission(user.role, "bot.view")) return;
+    const key = `${user.organization_id}:${linkedJourney}`;
+    if (openedLink.current === key) return;
+    openedLink.current = key;
+    if (!rows.some(row => row.id === linkedJourney)) { setError("This journey is unavailable in this workspace."); return; }
+    let current = true;
+    let settled = false;
+    void apiGet<Detail>(`/journeys/${encodeURIComponent(linkedJourney)}`)
+      .then(response => { settled = true; if (current) accept(response.data); })
+      .catch(reason => { settled = true; if (current) setError(reason instanceof Error ? reason.message : "Could not open the linked journey."); });
+    return () => { current = false; if (!settled && openedLink.current === key) openedLink.current = ""; };
+  }, [linkedJourney, loading, loadFailure, user.organization_id, user.role]);
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => { if (dirty) { event.preventDefault(); event.returnValue = ""; } };
     const navigate = (event: MouseEvent) => {

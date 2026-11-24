@@ -2432,6 +2432,7 @@ export default function App() {
           <Route path="settings/business" element={<BusinessPage />} />
           <Route path="settings/payments" element={<PaymentsPage />} />
           <Route path="settings/whatsapp" element={<ChannelsPage />} />
+          <Route path="settings/whatsapp/:connectionId" element={<ChannelsPage />} />
           <Route path="advanced/bot-builder" element={<BotBuilderScreen variant="builder" />} />
           <Route path="advanced/payments" element={<PaymentsScreen />} />
           <Route path="advanced/delivery" element={<FulfilmentScreen />} />
