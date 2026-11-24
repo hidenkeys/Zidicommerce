@@ -32,6 +32,8 @@ type EmbeddedSignupConfig struct {
 	ConfigurationID    string
 	GraphAPIVersion    string
 	WebhookVerifyToken string
+	SandboxWABAID      string
+	SandboxPhoneID     string
 }
 
 type MetaAccessGrant struct {
@@ -44,10 +46,15 @@ type MetaBusinessAssets struct {
 	DisplayPhoneNumber string
 }
 
+type webhookSubscriptionOverride struct {
+	CallbackURL string `json:"override_callback_uri"`
+	VerifyToken string `json:"verify_token"`
+}
+
 type EmbeddedSignupClient interface {
 	ExchangeCode(context.Context, string) (MetaAccessGrant, error)
 	ValidateAssets(context.Context, string, string, string) (MetaBusinessAssets, error)
-	SubscribeApp(context.Context, string, string) error
+	SubscribeApp(context.Context, string, string, *webhookSubscriptionOverride) error
 }
 
 type metaHTTPClient interface {
@@ -149,13 +156,23 @@ func (c *MetaGraphClient) ValidateAssets(ctx context.Context, accessToken, wabaI
 	return MetaBusinessAssets{}, errors.New("The selected phone number does not belong to the authorized WhatsApp Business Account")
 }
 
-func (c *MetaGraphClient) SubscribeApp(ctx context.Context, accessToken, wabaID string) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(url.PathEscape(wabaID)+"/subscribed_apps"), strings.NewReader(""))
+func (c *MetaGraphClient) SubscribeApp(ctx context.Context, accessToken, wabaID string, override *webhookSubscriptionOverride) error {
+	var body io.Reader
+	if override != nil {
+		payload, err := json.Marshal(override)
+		if err != nil {
+			return errors.New("could not prepare Meta webhook override")
+		}
+		body = strings.NewReader(string(payload))
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(url.PathEscape(wabaID)+"/subscribed_apps"), body)
 	if err != nil {
 		return errors.New("could not prepare Meta webhook subscription")
 	}
 	request.Header.Set("Authorization", "Bearer "+accessToken)
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if override != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	var response struct {
 		Success bool `json:"success"`
 	}
@@ -213,6 +230,12 @@ func (s *Service) ConfigureEmbeddedSignup(config EmbeddedSignupConfig, client Em
 
 func (s *Service) embeddedSignupAvailable() bool {
 	config := s.embeddedConfig
+	if config.SandboxWABAID != "" || config.SandboxPhoneID != "" {
+		if !validMetaID(config.SandboxWABAID) || !validMetaID(config.SandboxPhoneID) || !strings.HasPrefix(s.publicURL, "https://") {
+			return false
+		}
+	}
+
 	return s.encrypted != nil && s.embeddedClient != nil && validMetaID(config.AppID) && config.AppSecret != "" && validMetaID(config.ConfigurationID) && validGraphVersion(config.GraphAPIVersion) && config.WebhookVerifyToken != ""
 }
 
@@ -305,6 +328,19 @@ func (s *Service) CompleteEmbeddedSignup(ctx context.Context, actor auth.Current
 	if len(input.AttemptToken) < 32 || input.AuthorizationCode == "" || len(input.AuthorizationCode) > 4096 || !validMetaID(input.WhatsAppBusinessAccountID) || !validMetaID(input.PhoneNumberID) {
 		return EmbeddedSignupCompletion{}, httperror.BadRequest("Meta Embedded Signup did not return complete authorization information")
 	}
+	var override *webhookSubscriptionOverride
+	if s.embeddedConfig.SandboxWABAID != "" {
+		if detail.Connection.Environment != channelplatform.EnvironmentSandbox ||
+			input.WhatsAppBusinessAccountID != s.embeddedConfig.SandboxWABAID ||
+			input.PhoneNumberID != s.embeddedConfig.SandboxPhoneID {
+			return EmbeddedSignupCompletion{}, httperror.BadRequest("Select the designated sandbox WhatsApp account and phone number")
+		}
+		override = &webhookSubscriptionOverride{
+			CallbackURL: s.publicURL + webhookPath,
+			VerifyToken: s.embeddedConfig.WebhookVerifyToken,
+		}
+	}
+
 	var attempt MetaSignupAttempt
 	if err := s.db.WithContext(ctx).Where("organization_id = ? AND channel_connection_id = ? AND token_hash = ?", actor.OrganizationID, connectionID, signupTokenHash(input.AttemptToken)).Order("created_at DESC").First(&attempt).Error; err != nil {
 		return EmbeddedSignupCompletion{}, mapNotFound(err, "Meta signup attempt was not found or does not belong to this connection")
@@ -349,7 +385,7 @@ func (s *Service) CompleteEmbeddedSignup(ctx context.Context, actor auth.Current
 	if err != nil {
 		return fail("asset_validation_failed", httperror.BadRequest("Meta could not validate the selected WhatsApp business and phone number"))
 	}
-	if err := s.embeddedClient.SubscribeApp(ctx, grant.AccessToken, input.WhatsAppBusinessAccountID); err != nil {
+	if err := s.embeddedClient.SubscribeApp(ctx, grant.AccessToken, input.WhatsAppBusinessAccountID, override); err != nil {
 		return fail("webhook_subscription_failed", httperror.BadRequest("Meta authorization succeeded, but Zidi could not subscribe to WhatsApp events; reconnect and try again"))
 	}
 	accessReference, err := s.encrypted.Save(ctx, actor.OrganizationID, connectionID, CredentialAccessToken, grant.AccessToken)

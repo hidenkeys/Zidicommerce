@@ -100,6 +100,8 @@ type ChannelConfig struct {
 	MetaAppID                    string
 	MetaAppSecret                string
 	MetaEmbeddedConfigurationID  string
+	MetaSignupSandboxWABAID      string
+	MetaSignupSandboxPhoneID     string
 	MetaGraphAPIVersion          string
 	MetaWebhookVerifyToken       string
 	MetaAdvancedAccess           bool
@@ -195,6 +197,8 @@ func Load() (Config, error) {
 			MetaAppID:                    strings.TrimSpace(os.Getenv("META_APP_ID")),
 			MetaAppSecret:                strings.TrimSpace(os.Getenv("META_APP_SECRET")),
 			MetaEmbeddedConfigurationID:  strings.TrimSpace(os.Getenv("META_EMBEDDED_SIGNUP_CONFIGURATION_ID")),
+			MetaSignupSandboxWABAID:      strings.TrimSpace(os.Getenv("META_SIGNUP_SANDBOX_WABA_ID")),
+			MetaSignupSandboxPhoneID:     strings.TrimSpace(os.Getenv("META_SIGNUP_SANDBOX_PHONE_ID")),
 			MetaGraphAPIVersion:          strings.TrimSpace(os.Getenv("META_GRAPH_API_VERSION")),
 			MetaWebhookVerifyToken:       strings.TrimSpace(os.Getenv("META_WEBHOOK_VERIFY_TOKEN")),
 			MetaAdvancedAccess:           boolEnv("META_ADVANCED_ACCESS", false),

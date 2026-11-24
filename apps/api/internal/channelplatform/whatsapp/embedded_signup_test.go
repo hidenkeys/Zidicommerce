@@ -48,7 +48,7 @@ func (f *fakeEmbeddedSignupClient) ValidateAssets(_ context.Context, token, waba
 	return f.assets, f.validationErr
 }
 
-func (f *fakeEmbeddedSignupClient) SubscribeApp(_ context.Context, token, wabaID string) error {
+func (f *fakeEmbeddedSignupClient) SubscribeApp(_ context.Context, token, wabaID string, _ *webhookSubscriptionOverride) error {
 	f.subscribeCalls++
 	f.lastToken = token
 	f.lastWABA = wabaID
@@ -297,12 +297,18 @@ func TestMetaGraphClientExchangesValidatesAndSubscribesWithoutURLTokenLeak(t *te
 	if err != nil || assets.BusinessName != "Bing Chun" || assets.DisplayPhoneNumber == "" {
 		t.Fatalf("unexpected asset validation: assets=%+v err=%v", assets, err)
 	}
-	if err := client.SubscribeApp(context.Background(), grant.AccessToken, "1000000001"); err != nil {
+	if err := client.SubscribeApp(context.Background(), grant.AccessToken, "1000000001", &webhookSubscriptionOverride{CallbackURL: "https://staging.example.test/v1/runtime/webhooks/whatsapp", VerifyToken: "test-webhook-token"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(httpClient.requests) != 4 {
 		t.Fatalf("expected four Meta API calls, got %d", len(httpClient.requests))
 	}
+	var override webhookSubscriptionOverride
+	if err := json.NewDecoder(httpClient.requests[3].Body).Decode(&override); err != nil ||
+		override.CallbackURL != "https://staging.example.test/v1/runtime/webhooks/whatsapp" || override.VerifyToken != "test-webhook-token" {
+		t.Fatal("subscription did not send the staging callback override")
+	}
+
 	for index, request := range httpClient.requests {
 		if strings.Contains(request.URL.String(), "graph-access-token") || strings.Contains(request.URL.String(), "meta-secret") || strings.Contains(request.URL.String(), "short-code") {
 			t.Fatalf("request %d leaked credential material in its URL", index)
@@ -321,5 +327,31 @@ func TestMetaGraphClientSanitizesProviderErrorBody(t *testing.T) {
 	_, err := client.ExchangeCode(context.Background(), "short-code")
 	if err == nil || strings.Contains(err.Error(), "graph-access-token") || !strings.Contains(err.Error(), "code 190") {
 		t.Fatalf("expected sanitized provider error, got %v", err)
+	}
+}
+
+func TestEmbeddedSignupSandboxRejectsOtherAssetsBeforeCallingMeta(t *testing.T) {
+	fx := newWhatsAppFixture(t)
+	client := configureEmbeddedSignup(t, fx)
+	fx.service.ConfigureWebhookPublicBaseURL("https://staging.example.test")
+	fx.service.embeddedConfig.SandboxWABAID = "1000000001"
+	fx.service.embeddedConfig.SandboxPhoneID = "2000000001"
+
+	ctx := context.Background()
+	attempt, err := fx.service.InitiateEmbeddedSignup(ctx, fx.actor, fx.connection.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, selection := range [][2]string{{"1000000002", "2000000001"}, {"1000000001", "2000000002"}} {
+		_, err := fx.service.CompleteEmbeddedSignup(ctx, fx.actor, fx.connection.ID, EmbeddedSignupCompletionInput{
+			AttemptToken: attempt.AttemptToken, AuthorizationCode: "sandbox-code",
+			WhatsAppBusinessAccountID: selection[0], PhoneNumberID: selection[1],
+		})
+		if err == nil {
+			t.Fatalf("accepted non-designated assets %v", selection)
+		}
+	}
+	if client.exchangeCalls != 0 || client.subscribeCalls != 0 {
+		t.Fatal("unexpected Meta call for non-designated assets")
 	}
 }

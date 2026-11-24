@@ -105,6 +105,8 @@ func main() {
 	whatsAppService.ConfigureEmbeddedSignup(whatsappadapter.EmbeddedSignupConfig{
 		AppID: cfg.Channels.MetaAppID, AppSecret: cfg.Channels.MetaAppSecret,
 		ConfigurationID:    cfg.Channels.MetaEmbeddedConfigurationID,
+		SandboxWABAID:      cfg.Channels.MetaSignupSandboxWABAID,
+		SandboxPhoneID:     cfg.Channels.MetaSignupSandboxPhoneID,
 		GraphAPIVersion:    cfg.Channels.MetaGraphAPIVersion,
 		WebhookVerifyToken: cfg.Channels.MetaWebhookVerifyToken,
 	}, whatsappadapter.NewMetaGraphClient(cfg.Channels.WhatsAppGraphBaseURL, cfg.Channels.MetaAppID, cfg.Channels.MetaAppSecret, cfg.Channels.MetaGraphAPIVersion, nil))
