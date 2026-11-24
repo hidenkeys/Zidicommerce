@@ -137,6 +137,13 @@ META_WEBHOOK_VERIFY_TOKEN=<server-only shared verify token>
 
 Embedded Signup remains disabled when any required value or encrypted channel secret storage is missing. The API and existing manual connections continue to run.
 
+For staging with a shared Meta app, set both `META_SIGNUP_SANDBOX_WABA_ID` and
+`META_SIGNUP_SANDBOX_PHONE_ID`. Zidi accepts only that account and phone on a
+Sandbox connection. It asks Meta to send that account's webhook events to
+the staging API using a per-account callback override and the staging verify
+token. The Meta app's default callback continues to serve its existing integration.
+An incomplete sandbox configuration or a public URL without HTTPS disables signup.
+
 Do not guess a Graph version. Configure a version supported by the deployed Meta app and update it through an intentional provider compatibility change.
 
 ## Meta prerequisites
