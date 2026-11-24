@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { PackagePlus } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "../api/client";
 import { useAuth } from "../auth";
@@ -134,7 +135,7 @@ export function InventoryPage() {
       </FilterBar>
       <Card>
         {loading ? <LoadingState label="Loading inventory" /> : filtered.length === 0 ? (
-          <EmptyState title={rows.length ? "No matching stock" : "No stock recorded"} body={rows.length ? "Try another product, store or status." : "Set quantities after you add products."} />
+          <EmptyState title={rows.length ? "No matching stock" : "No stock recorded"} body={rows.length ? "Try another product, store or status." : products.length && stores.length ? "Set opening quantities for the products at your store." : "Add products and a store before setting opening quantities."} action={!rows.length ? products.length && stores.length && canAdjustInventory ? <Button onClick={() => setCreating(true)}>Set stock</Button> : !products.length && hasPermission(user.role, "catalogue.view") ? <Link className="button" to="/catalogue">Open catalogue</Link> : !stores.length && hasPermission(user.role, "stores.view") ? <Link className="button" to="/stores">Open stores</Link> : undefined : undefined} />
         ) : (
           <div className="table-wrap" style={{ border: 0, margin: 0 }}>
             <table>

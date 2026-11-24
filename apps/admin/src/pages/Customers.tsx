@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { useAuth } from "../auth";
+import { hasPermission } from "../lib/permissions";
 import { apiGet } from "../api/client";
 import { Badge, Card, Drawer, EmptyState, FilterBar, Flash, LoadingState, Page, SearchField, SectionHeader } from "../components/ui";
 import { humanStatus, money, relativeTime, type Row } from "../lib/format";
 
 export function CustomersPage() {
+  const { user } = useAuth();
   const [params] = useSearchParams();
   const [customers, setCustomers] = useState<Row[]>([]);
   const [orders, setOrders] = useState<Row[]>([]);
@@ -62,7 +65,7 @@ export function CustomersPage() {
       <div className="orders-workspace">
         <Card className="orders-register">
           {loading ? <LoadingState label="Loading customers" /> : filtered.length === 0 ? (
-            <EmptyState title={customers.length ? "No matching customers" : "No customers yet"} body={customers.length ? "Try a different name, phone number or email." : "Customers appear here when they order or start a conversation."} />
+            <EmptyState title={customers.length ? "No matching customers" : "No customers yet"} body={customers.length ? "Try a different name, phone number or email." : "Connect WhatsApp so customers can start a conversation or place an order."} action={!customers.length && hasPermission(user.role, "channels.view") ? <Link className="button" to="/settings/whatsapp">Open channels</Link> : undefined} />
           ) : (
             <div className="table-wrap" style={{ border: 0, margin: 0 }}>
               <table>

@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiGet } from "../api/client";
 import { useAuth } from "../auth";
-import { Badge, Card, EmptyState, Flash, LoadingState, Metric, Page, SectionHeader, SetupItem, StatusDot } from "../components/ui";
+import { Badge, Card, EmptyState, Flash, LoadingState, Metric, Page, SectionHeader, StatusDot } from "../components/ui";
 import { humanStatus, isToday, money, relativeTime, setupHref, type Row } from "../lib/format";
 import { hasPermission, isOrganizationAdmin } from "../lib/permissions";
-import { merchantReadinessItems, type SetupStatus } from "../lib/readiness";
+import { checklistProgress, type SetupStatus } from "../lib/readiness";
 import { isUsableChannelStatus } from "../lib/channels";
 
 type Organization = Row & { name?: string; currency?: string; metadata?: string };
@@ -21,6 +21,7 @@ export function OverviewPage() {
   const canSeeBot = hasPermission(user.role, "bot.view");
   const canManageBot = hasPermission(user.role, "bot.manage");
   const canManageSetup = isOrganizationAdmin(user.role);
+  const [readinessCollapsed, setReadinessCollapsed] = useState(false);
   const [org, setOrg] = useState<Organization | null>(null);
   const [orders, setOrders] = useState<Row[]>([]);
   const [conversations, setConversations] = useState<Row[]>([]);
@@ -114,9 +115,7 @@ export function OverviewPage() {
   const paymentConfiguration = payments.find((row) => row.enabled && row.status === "active") ?? payments[0];
   const bot = bots.find((row) => row.published_version_id) ?? bots[0];
   const currency = String(org?.currency ?? todayOrders[0]?.currency ?? "NGN");
-  const merchantItems = merchantReadinessItems(setupStatus);
-  const requiredItems = merchantItems.filter((item) => item.required);
-  const setupDone = requiredItems.filter((item) => item.complete).length;
+  const readiness = checklistProgress(setupStatus);
   const attentionClear = !message && awaitingPayment === 0 && awaitingPrep === 0 && awaitingFulfilment === 0 && waitingConversations === 0 && lowStock.length === 0
     && (!canSeeChannels || isUsableChannelStatus(customerChannel?.status))
     && (!canSeePayments || Boolean(paymentConfiguration?.enabled && paymentConfiguration.status === "active"))
@@ -177,6 +176,13 @@ export function OverviewPage() {
       description="Orders, customer conversations and store operations."
     >
       <Flash message={message} />
+      {canManageSetup && readiness.next && <section className="onboarding-readiness" data-tour-region="readiness" aria-label="Store readiness">
+        {readinessCollapsed ? <button type="button" onClick={() => setReadinessCollapsed(false)}>Setup: {readiness.done} of {readiness.total} complete</button> : <>
+          <h2>Get your store ready</h2><p>{readiness.done} of {readiness.total} complete · Next: {readiness.next.label}</p>
+          <progress aria-label="Store readiness" value={readiness.done} max={readiness.total} />
+          <div className="page-actions"><Link to={setupHref(readiness.next.key)}>{readiness.next.label}</Link><Link to="/setup">View setup checklist</Link><button type="button" onClick={() => setReadinessCollapsed(true)}>Minimise setup</button></div>
+        </>}
+      </section>}
       <SectionHeader title="Today" />
       <div className="metrics overview-summary">
         <Metric label="Orders" value={todayOrders.length} to="/orders" hint={todayOrders.length === 0 ? "No orders yet" : "Created today"} />
@@ -185,7 +191,7 @@ export function OverviewPage() {
         <Metric label="Unread messages" value={unreadConversations} to="/conversations" hint={waitingConversations ? `${waitingConversations} need a person` : "Inbox is covered"} />
       </div>
 
-      <section className="attention-queue" aria-labelledby="attention-title">
+      <section data-tour-region="attention" className="attention-queue" aria-labelledby="attention-title">
         <div>
           <h2 id="attention-title">Needs attention</h2>
           <p>Keep orders moving and customers informed.</p>
@@ -242,15 +248,7 @@ export function OverviewPage() {
             </div>
             <div className="page-actions compact-actions">{canSeeBot ? <Link className="button" to="/journeys">Flow Studio</Link> : null}<Link className="button" to="/conversations">Inbox</Link></div>
           </Card>
-          {canManageSetup && setupStatus && !setupStatus.ready ? (
-            <Card>
-              <div className="panel-heading"><div><h3>Setup progress</h3><p>{setupDone} of {requiredItems.length} required steps ready.</p></div><Link to="/setup">Continue</Link></div>
-              <div className="progress-bar"><span style={{ width: `${requiredItems.length ? (setupDone / requiredItems.length) * 100 : 0}%` }} /></div>
-              <div className="setup-list compact-setup">
-                {requiredItems.filter((item) => !item.complete).slice(0, 3).map((item) => <SetupItem key={item.key} complete={false} label={item.label} to={setupHref(item.key)} description={item.description} />)}
-              </div>
-            </Card>
-          ) : null}
+
         </div>
       </div>
     </Page>

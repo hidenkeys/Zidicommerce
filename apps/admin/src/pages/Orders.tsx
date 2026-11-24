@@ -120,7 +120,7 @@ export function OrdersPage() {
       <div className="orders-workspace">
         <Card className="orders-register">
           {loading ? <LoadingState label="Loading orders" /> : filtered.length === 0 ? (
-            <EmptyState title={rows.length ? "No matching orders" : "No orders yet"} body={rows.length ? "Try another search or status." : "Customer orders appear here after checkout."} />
+            <EmptyState title={rows.length ? "No matching orders" : "No orders yet"} body={rows.length ? "Try another search or status." : "Add products to your catalogue so customers can place their first order."} action={!rows.length && hasPermission(user.role, "catalogue.view") ? <Link className="button" to="/catalogue">Open catalogue</Link> : undefined} />
           ) : (
             <div className="table-wrap" style={{ border: 0, margin: 0 }}>
               <table className="order-list-table">

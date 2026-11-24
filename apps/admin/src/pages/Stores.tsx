@@ -143,7 +143,7 @@ export function StoresPage() {
       <div className="store-directory">
         <Card className="store-list-panel">
           {loading ? <LoadingState label="Loading stores" /> : stores.length === 0 ? (
-            <EmptyState title="No stores yet" body="A business administrator must add the first location." action={canCreateStore ? <button type="button" className="primary" onClick={startCreate}>Add store</button> : undefined} />
+            <EmptyState title="No stores yet" body={canCreateStore ? "Add your first location to set up fulfilment and stock." : "Ask a business administrator to add the first location."} action={canCreateStore ? <button type="button" className="primary" onClick={startCreate}>Add store</button> : undefined} />
           ) : stores.map((store) => (
             <button key={store.id} type="button" className="store-directory-item" onClick={() => { setSelectedID(store.id); setForm({ name: String(store.name || ""), address: String(store.address || ""), city: String(store.city || ""), country: String(store.country || "NG"), code: String(store.code || "") }); }}>
               <span>

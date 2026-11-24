@@ -179,7 +179,7 @@ export function SetupPage() {
         <div className="readiness-summary"><div><span className="section-kicker">Required setup</span><strong>{requiredDone} of {requiredItems.length || 7} ready</strong></div><Badge tone={ready ? "success" : "warning"}>{ready ? "Operationally ready" : `${requiredItems.length - requiredDone} remaining`}</Badge></div>
         <div className="progress-bar" role="progressbar" aria-label="Required setup completed" aria-valuemin={0} aria-valuemax={requiredItems.length} aria-valuenow={requiredDone}><span style={{ width: `${requiredItems.length ? (requiredDone / requiredItems.length) * 100 : 0}%` }} /></div>
       </Card> : null}
-      <div className="readiness-grid">{!loading && setupStatus ? readinessSections.map((section) => {
+      <div data-tour-region="setup-checklist" className="readiness-grid">{!loading && setupStatus ? readinessSections.map((section) => {
         const sectionItems = items.filter((item) => item.group === section.key);
         if (sectionItems.length === 0) return null;
         return (

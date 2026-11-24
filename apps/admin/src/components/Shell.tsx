@@ -8,6 +8,8 @@ import { hasPermission, type Permission } from "../lib/permissions";
 import { ZidiCommerceLogo } from "./brand/ZidiCommerceLogo";
 import { routeAliases } from "../lib/route-aliases";
 import { IconButton, Modal } from "./ui";
+import { ProductTour } from "./onboarding/ProductTour";
+import { availableTourSteps, tourSteps, tourStorageKey, shouldStartTour, persistTour, type TourFlag } from "../lib/onboarding";
 
 type NavGroup = {
   label: string;
@@ -122,6 +124,19 @@ export function Shell() {
   const organizationReady = hasOrganization(user);
   const location = useLocation();
   const activePath = routeAliases[location.pathname] || location.pathname;
+  const [tourOpen, setTourOpen] = useState(false);
+  const [orgLoaded, setOrgLoaded] = useState("");
+  const tourSession = useRef("");
+  const tourKey = tourStorageKey(user.id, user.organization_id);
+  useEffect(() => {
+    if (!organizationReady || orgLoaded !== user.organization_id || tourSession.current === tourKey) return;
+    tourSession.current = tourKey;
+    let start = true;
+    try { start = shouldStartTour(window.localStorage, tourKey); } catch { /* Storage unavailable. */ }
+    setTourOpen(start);
+    if (start) { try { persistTour(window.localStorage, tourKey, "started"); } catch { /* Storage unavailable. */ } }
+  }, [organizationReady, orgLoaded, tourKey]);
+  function closeTour(flag: TourFlag) { setTourOpen(false); try { persistTour(window.localStorage, tourKey, flag); } catch { /* Storage unavailable. */ } }
   const [fieldService, setFieldService] = useState(false);
   const [organizationName, setOrganizationName] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -154,7 +169,7 @@ export function Shell() {
       const metadata = String(response.data.metadata ?? "").toLowerCase();
       setFieldService(metadata.includes("field_service") || metadata.includes("handyman"));
       setOrganizationName(String(response.data.name ?? ""));
-    }).catch(() => undefined);
+    }).catch(() => undefined).finally(() => setOrgLoaded(user.organization_id));
   }, [user.organization_id]);
   useEffect(() => setMobileOpen(false), [location.pathname]);
   const visibleGroups = (organizationReady ? groups : [])
@@ -165,6 +180,7 @@ export function Shell() {
   if (fieldService && fieldPortalURL) {
     visibleGroups.splice(1, 0, { label: "Field service", items: [{ label: "Operations", path: `${fieldPortalURL.replace(/\/$/, "")}/owner`, external: true, icon: ShieldCheck }] });
   }
+  const steps = availableTourSteps(visibleGroups.flatMap(group => group.items.map(item => item.path)));
   const meta = pageMeta(location.pathname);
 
   return (
@@ -183,7 +199,7 @@ export function Shell() {
               {group.items.map(({ label, path, external, icon: Icon }) => external ? (
                 <a key={path} href={path} title={label}><Icon size={17} aria-hidden="true" /><span>{label}</span></a>
               ) : (
-                <Link key={path} title={label} to={path} className={activePath === path ? "active" : undefined} aria-current={activePath === path ? "page" : undefined}><Icon size={17} aria-hidden="true" /><span>{label}</span></Link>
+                <Link data-tour={tourSteps.find(step => step.path === path)?.id} key={path} title={label} to={path} className={activePath === path ? "active" : undefined} aria-current={activePath === path ? "page" : undefined}><Icon size={17} aria-hidden="true" /><span>{label}</span></Link>
               ))}
             </section>
           ))}
@@ -205,12 +221,13 @@ export function Shell() {
             <button className="account-button" onClick={()=>setPanel("account")} aria-label="Open account menu">{String(user.email || roleLabel(user.role)).slice(0,1).toUpperCase()}</button>
           </div>
         </header>
-        <Outlet />
+        <div data-tour-region={tourSteps.find(step => step.path === activePath)?.id}><Outlet /></div>
         <Modal open={Boolean(panel)} title={panel==="find" ? "Find a page" : panel==="notifications" ? "Conversation activity" : "Your account"} onClose={()=>setPanel(undefined)}>
           {panel==="find" && <><label>Search navigation<input type="search" value={query} onChange={e=>setQuery(e.target.value)} /></label><div className="shell-results">{visibleGroups.flatMap(group=>group.items.filter(item=>!item.external && (group.label+" "+item.label).toLowerCase().includes(query.trim().toLowerCase())).map(item=><NavLink key={item.path} to={item.path} onClick={()=>setPanel(undefined)}><item.icon size={16}/>{item.label}<small>{group.label}</small></NavLink>))}{!visibleGroups.some(group=>group.items.some(item=>!item.external && (group.label+" "+item.label).toLowerCase().includes(query.trim().toLowerCase()))) && <p>No matching pages.</p>}</div></>}
           {panel==="notifications" && <><p role="status">{inboxError || (handoffs===undefined ? "Loading conversations…" : handoffs===0 ? "No conversations are waiting for your team." : handoffs+" conversations need your team.")}</p><NavLink to="/conversations" onClick={()=>setPanel(undefined)}>Open conversations</NavLink></>}
-          {panel==="account" && <><strong>{user.email}</strong><p>{roleLabel(user.role)} · {organizationName}</p><button onClick={logout}><LogOut size={16}/> Sign out</button></>}
+          {panel==="account" && <><strong>{user.email}</strong><p>{roleLabel(user.role)} · {organizationName}</p><button type="button" onClick={()=>{setPanel(undefined);setTourOpen(true);}}>Take the tour</button><button onClick={logout}><LogOut size={16}/> Sign out</button></>}
         </Modal>
+        {tourOpen && steps.length > 0 && <ProductTour key={tourKey} steps={steps} onClose={closeTour} />}
       </main>
     </div>
   );

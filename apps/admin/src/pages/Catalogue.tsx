@@ -127,7 +127,7 @@ export function CataloguePage() {
       </Drawer>
       <p className="result-count">{filtered.length} product{filtered.length === 1 ? "" : "s"}</p>
       {loading ? <LoadingState label="Loading catalogue" /> : filtered.length === 0 ? (
-        <EmptyState title={products.length ? "No matching products" : "No products yet"} body={products.length ? "Try another search or category." : "Add your first product to start taking orders."} action={canManageCatalogue ? <button type="button" className="primary" onClick={startCreate}>Add product</button> : undefined} />
+        <EmptyState title={products.length ? "No matching products" : "No products yet"} body={products.length ? "Try another search or category." : "Add your first product to start taking orders."} action={canManageCatalogue ? <button type="button" className="primary" onClick={startCreate}>{products.length ? "Add product" : "Add your first product"}</button> : undefined} />
       ) : (
         <Card className="orders-register"><div className="table-wrap" style={{ border: 0, margin: 0 }}><table>
           <thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Options</th><th>Status</th>{canManageCatalogue ? <th><span className="sr-only">Actions</span></th> : null}</tr></thead>

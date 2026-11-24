@@ -32,3 +32,8 @@ export function merchantReadinessItems(status: SetupStatus | null) {
     .map((key) => status.items.find((item) => item.key === key))
     .filter((item): item is ReadinessItem => Boolean(item));
 }
+
+export function checklistProgress(status: SetupStatus | null) {
+  const items = merchantReadinessItems(status);
+  return { total: items.length, done: items.filter(item => item.complete).length, next: items.find(item => !item.complete) };
+}

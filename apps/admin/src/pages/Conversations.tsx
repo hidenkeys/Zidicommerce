@@ -330,7 +330,7 @@ export function ConversationsPage() {
       <div className={`inbox-workspace inbox-panel-${mobilePane}`}>
         <Card className="inbox-list">
           {loading ? <LoadingState label="Loading inbox" /> : rows.length === 0 ? (
-            <EmptyState title="No conversations yet" body="Customer conversations will appear here." />
+            <EmptyState title="No conversations yet" body="Connect WhatsApp and invite a customer to message your business to start the first conversation." action={hasPermission(user.role, "channels.view") ? <Link className="button" to="/settings/whatsapp">Open channels</Link> : undefined} />
           ) : (
             <div className="conversation-list">
               {rows.map((row) => {
