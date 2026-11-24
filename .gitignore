@@ -16,3 +16,6 @@ apps/api/ai-evaluations/**/*.json
 
 # Local Railway links are machine-specific.
 .railway/
+
+# Local staging UI evidence (may contain merchant data).
+.staging-evidence/
