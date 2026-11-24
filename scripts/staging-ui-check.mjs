@@ -165,6 +165,13 @@ try {
   }
   loginAllowed = false;
   await settle();
+  const tour = page.locator('[role=dialog][aria-labelledby="tour-title"]');
+  if (await tour.isVisible().catch(() => false)) {
+    summary.productTour = { shownOnFirstVisit: true, title: clean(await page.locator('#tour-title').innerText().catch(() => '')) };
+    await page.screenshot({ path: path.join(out, '000-tour.png') });
+    await tour.getByRole('button', { name: 'Skip tour' }).click();
+    await settle();
+  } else summary.productTour = { shownOnFirstVisit: false };
   await organizations();
   stage = 'capture';
   for (const width of widths) {
