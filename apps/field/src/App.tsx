@@ -42,7 +42,7 @@ function Shell({ user, links, children }: { user: User; links: { to: string; lab
     <div className="shell">
       <a className="skip-link" href="#field-main">Skip to content</a>
       <aside ref={navigation} id="field-navigation" className={`nav ${menuOpen ? "open" : ""}`}>
-        <div className="field-brand"><img src="/zidi-commerce-symbol.svg" width="36" height="36" alt="" /><div><strong>Zidi Field</strong><small>{user.role === "service_provider" ? "Provider workspace" : "Business workspace"}</small></div></div>
+        <div className="field-brand"><span className="field-brand__mark" aria-hidden="true"><img src="/zidi-commerce-symbol.svg" width="22" height="22" alt="" /></span><div><strong>Zidi Field</strong><small>{user.role === "service_provider" ? "Provider workspace" : "Business workspace"}</small></div></div>
         <nav aria-label="Main navigation">{links.map((link) => link.external ? (
           <a key={link.to} href={link.to}>{link.label} ↗</a>
         ) : (

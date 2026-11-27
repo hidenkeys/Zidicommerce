@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiGet, apiPatch, apiPost } from "../api/client";
 import { useAuth } from "../auth";
-import { Badge, Card, Drawer, EmptyState, FilterBar, Flash, FormGrid, LoadingState, Page, SearchField } from "../components/ui";
+import { Badge, Drawer, EmptyState, FilterBar, Flash, FormGrid, LoadingState, Page, SearchField } from "../components/ui";
 import { humanStatus, money, nairaToMinor, slugify, type Row } from "../lib/format";
 import { hasPermission } from "../lib/permissions";
 
@@ -129,20 +129,27 @@ export function CataloguePage() {
       {loading ? <LoadingState label="Loading catalogue" /> : filtered.length === 0 ? (
         <EmptyState title={products.length ? "No matching products" : "No products yet"} body={products.length ? "Try another search or category." : "Add your first product to start taking orders."} action={canManageCatalogue ? <button type="button" className="primary" onClick={startCreate}>{products.length ? "Add product" : "Add your first product"}</button> : undefined} />
       ) : (
-        <Card className="orders-register"><div className="table-wrap" style={{ border: 0, margin: 0 }}><table>
-          <thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Options</th><th>Status</th>{canManageCatalogue ? <th><span className="sr-only">Actions</span></th> : null}</tr></thead>
-          <tbody>{filtered.map((product) => {
-            const variants = Array.isArray(product.variants) ? (product.variants as Row[]) : [];
-            const images = Array.isArray(product.images) ? (product.images as Row[]) : [];
-            const price = variants[0]?.price_minor;
-            const categoryName = categories.find((entry) => entry.id === product.category_id)?.name;
-            return <tr key={String(product.id)}>
-              <td><div className="product-cell">{images[0]?.url ? <img src={String(images[0].url)} alt="" loading="lazy" /> : <span className="product-placeholder" aria-hidden="true">{String(product.name).slice(0,1)}</span>}<span>{canManageCatalogue ? <button className="table-record-link" type="button" onClick={() => startEdit(product)}>{String(product.name)}</button> : String(product.name)}</span></div></td>
-              <td>{String(categoryName || "Uncategorised")}</td><td>{price !== undefined ? money(price, String(variants[0]?.currency ?? "NGN")) : "No price"}</td><td>{variants.length}</td><td><Badge tone={product.status === "active" ? "success" : "neutral"}>{humanStatus(product.status)}</Badge></td>
-              {canManageCatalogue ? <td><button type="button" onClick={() => startEdit(product)} aria-label={`Edit ${product.name}`}>Edit</button></td> : null}
-            </tr>;
-          })}</tbody>
-        </table></div></Card>
+        <ul className="product-grid">{filtered.map((product) => {
+          const variants = Array.isArray(product.variants) ? (product.variants as Row[]) : [];
+          const images = Array.isArray(product.images) ? (product.images as Row[]) : [];
+          const price = variants[0]?.price_minor;
+          const categoryName = categories.find((entry) => entry.id === product.category_id)?.name;
+          return <li key={String(product.id)} className="product-tile">
+            <div className="product-tile__media">
+              {images[0]?.url ? <img src={String(images[0].url)} alt="" loading="lazy" /> : <span className="product-tile__placeholder" aria-hidden="true">{String(product.name).slice(0, 1).toUpperCase()}</span>}
+              <Badge tone={product.status === "active" ? "success" : "neutral"}>{humanStatus(product.status)}</Badge>
+            </div>
+            <div className="product-tile__body">
+              <span className="product-tile__category">{String(categoryName || "Uncategorised")}</span>
+              <strong className="product-tile__name">{canManageCatalogue ? <button className="table-record-link" type="button" onClick={() => startEdit(product)}>{String(product.name)}</button> : String(product.name)}</strong>
+              <div className="product-tile__meta">
+                <span className="product-tile__price">{price !== undefined ? money(price, String(variants[0]?.currency ?? "NGN")) : "No price"}</span>
+                <span>{variants.length} option{variants.length === 1 ? "" : "s"}</span>
+              </div>
+            </div>
+            {canManageCatalogue ? <button type="button" className="product-tile__edit" onClick={() => startEdit(product)} aria-label={`Edit ${product.name}`}>Edit</button> : null}
+          </li>;
+        })}</ul>
       )}
       <Drawer open={open} title={editing ? "Edit product" : "Add product"} onClose={() => setOpen(false)}>
         <FormGrid onSubmit={saveProduct}>
@@ -163,7 +170,7 @@ export function CataloguePage() {
             </select>
           </label>
           {editing ? <p className="help-text full">Change prices in Options below. Customers see published catalogue immediately; the assistant uses these products when they order.</p> : null}
-          <div className="full"><button type="submit">{editing ? "Save product" : "Create product"}</button></div>
+          <div className="full"><button type="submit" className="primary">{editing ? "Save product" : "Create product"}</button></div>
         </FormGrid>
         {editing && canManageCatalogue ? (
           <VariantEditor product={editing} onSaved={async () => { setFlash("Option saved."); await load(); }} />

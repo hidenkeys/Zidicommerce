@@ -1,17 +1,31 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { AlertTriangle, ArrowRight, Bot as BotIcon, Boxes, Check, ClipboardCheck, CreditCard, MessageSquareText, PackageCheck, ShoppingBag, Truck, Users, Wallet, type LucideIcon } from "lucide-react";
 import { apiGet } from "../api/client";
 import { useAuth } from "../auth";
-import { Badge, Card, EmptyState, Flash, LoadingState, Metric, Page, SectionHeader, StatusDot } from "../components/ui";
+import { Badge, Card, EmptyState, Flash, LoadingState, Metric, MetricStrip, Page, StatusDot } from "../components/ui";
 import { humanStatus, isToday, money, relativeTime, setupHref, type Row } from "../lib/format";
 import { hasPermission, isOrganizationAdmin } from "../lib/permissions";
-import { checklistProgress, type SetupStatus } from "../lib/readiness";
+import { checklistProgress, merchantReadinessItems, type SetupStatus } from "../lib/readiness";
 import { isUsableChannelStatus } from "../lib/channels";
 
 type Organization = Row & { name?: string; currency?: string; metadata?: string };
 type Channel = Row & { provider: string; display_name: string; display_number?: string; status: string };
 type PaymentConfiguration = Row & { provider: string; display_name: string; status: string; enabled: boolean };
 type Bot = Row & { name: string; status: string; published_version_id?: string };
+
+type AttentionItem = { key: string; icon: LucideIcon; tag: string; tone: "warning" | "info" | "danger" | "neutral"; title: string; to: string; action: string; required?: boolean };
+
+/** Splits a formatted amount so the currency symbol can sit small beside the figure. */
+function moneyParts(minor: unknown, currency: string) {
+  const formatted = money(minor, currency);
+  const match = formatted.match(/^([^\d\s-]+)\s?(.*)$/);
+  return match ? { symbol: match[1], amount: match[2] } : { symbol: "", amount: formatted };
+}
+
+function todayLabel() {
+  try { return new Intl.DateTimeFormat("en-NG", { weekday: "long", day: "numeric", month: "long" }).format(new Date()); } catch { return "Today"; }
+}
 
 export function OverviewPage() {
   const { user } = useAuth();
@@ -131,94 +145,129 @@ export function OverviewPage() {
 
   if (loading) {
     return (
-      <Page title={org?.name || "Overview"}>
+      <Page title={org?.name || "Overview"} eyebrow={todayLabel()}>
         <LoadingState label="Loading your day" />
       </Page>
     );
   }
 
-  if (message) return <Page title={org?.name || "Overview"}><Flash message={message}/><button onClick={()=>setReload(n=>n+1)}>Refresh overview</button></Page>;
+  if (message) return <Page title={org?.name || "Overview"} eyebrow={todayLabel()}><Flash message={message}/><button onClick={()=>setReload(n=>n+1)}>Refresh overview</button></Page>;
+
+  const assistantLive = Boolean(bot?.published_version_id) && bot?.status === "active";
+  const channelLive = isUsableChannelStatus(customerChannel?.status);
+  const paymentsLive = Boolean(paymentConfiguration?.enabled && paymentConfiguration.status === "active");
 
   if (fieldOverview) {
+    const fieldCurrency = String(org?.currency ?? "NGN");
+    const fees = moneyParts(fieldOverview.booking_fees_minor, fieldCurrency);
+    const revenue = moneyParts(fieldOverview.revenue_minor, fieldCurrency);
     return (
-      <Page title={org?.name || "Field service"} description="Requests, professionals, payments, and customer conversations at a glance.">
+      <Page title={org?.name || "Field service"} eyebrow={todayLabel()} description="Requests, professionals, payments, and customer conversations at a glance.">
         <Flash message={message} />
-        <div className="metrics">
-          <Metric label="Requests today" value={Number(fieldOverview.todays_requests ?? 0)} />
-          <Metric label="Active jobs" value={Number(fieldOverview.active_jobs ?? 0)} />
-          <Metric label="Available handymen" value={Number(fieldOverview.available_providers ?? 0)} />
-          <Metric label="Completed jobs" value={Number(fieldOverview.completed_jobs ?? 0)} />
-          <Metric label="Booking fees" value={money(fieldOverview.booking_fees_minor, String(org?.currency ?? "NGN"))} />
-          <Metric label="Total revenue" value={money(fieldOverview.revenue_minor, String(org?.currency ?? "NGN"))} />
-        </div>
-        <div className="split">
-          <Card>
-            <h3>Field operations</h3>
-            <p>Manage handymen, service categories, jobs, quotes, and conversations in the operations workspace.</p>
+        <MetricStrip label="Field service today" className="metric-strip--six">
+          <Metric icon={ClipboardCheck} tone="brand" label="Requests today" value={Number(fieldOverview.todays_requests ?? 0)} />
+          <Metric icon={Truck} tone="info" label="Active jobs" value={Number(fieldOverview.active_jobs ?? 0)} />
+          <Metric icon={Users} tone="success" label="Available handymen" value={Number(fieldOverview.available_providers ?? 0)} />
+          <Metric icon={Check} tone="neutral" label="Completed jobs" value={Number(fieldOverview.completed_jobs ?? 0)} />
+          <Metric icon={CreditCard} tone="neutral" label="Booking fees" prefix={fees.symbol} value={fees.amount} />
+          <Metric icon={Wallet} tone="success" label="Total revenue" prefix={revenue.symbol} value={revenue.amount} />
+        </MetricStrip>
+        <div className="overview-operations">
+          <Card className="overview-card">
+            <div className="panel-heading"><div><h3>Field operations</h3><p>Manage handymen, service categories, jobs, quotes, and conversations in the operations workspace.</p></div></div>
             {fieldPortalURL ? <a className="button primary" href={`${fieldPortalURL}/owner`}>Open field operations</a> : <p className="muted">The field operations URL has not been configured.</p>}
           </Card>
-          <Card>
-            <h3>Customer assistant</h3>
-            <p><StatusDot live={Boolean(bot?.published_version_id) && bot?.status === "active"} label={bot?.published_version_id ? "Live" : "Not published"} /></p>
-            <p><strong>{bot?.name || "No assistant yet"}</strong></p>
-            <p className="muted">{isUsableChannelStatus(customerChannel?.status) ? `Customer channel ${customerChannel?.display_number || "connected"}` : "Customer channel not connected"}</p>
-            <p className="muted">{paymentConfiguration?.enabled ? "Payments connected" : "Using platform payment settings"}</p>
-            <div className="page-actions"><Link to="/assistant">Open assistant</Link><Link to="/settings/whatsapp">Channels</Link><Link to="/settings/payments">Payments</Link></div>
-          </Card>
+          <AssistantCard name={bot?.name} live={assistantLive} published={Boolean(bot?.published_version_id)} channel={channelLive ? `Customer channel ${customerChannel?.display_number || "connected"}` : "Customer channel not connected"} payments={paymentConfiguration?.enabled ? "Payments connected" : "Using platform payment settings"} />
         </div>
       </Page>
     );
   }
 
+  const revenue = moneyParts(todayRevenue, currency);
+  const steps = merchantReadinessItems(setupStatus);
+  const attention: AttentionItem[] = [
+    awaitingPrep > 0 ? { key: "prep", icon: PackageCheck, tag: "Orders", tone: "warning", title: `${awaitingPrep} paid order${awaitingPrep === 1 ? "" : "s"} waiting to be prepared`, to: "/orders", action: "Prepare orders" } : null,
+    awaitingFulfilment > 0 ? { key: "fulfil", icon: Truck, tag: "Fulfilment", tone: "info", title: `${awaitingFulfilment} order${awaitingFulfilment === 1 ? "" : "s"} ready or in transit`, to: "/orders", action: "Track orders" } : null,
+    awaitingPayment > 0 ? { key: "payment", icon: Wallet, tag: "Payment", tone: "neutral", title: `${awaitingPayment} order${awaitingPayment === 1 ? " is" : "s are"} waiting for verified payment`, to: "/orders", action: "Review payments" } : null,
+    waitingConversations > 0 ? { key: "handoff", icon: MessageSquareText, tag: "Customers", tone: "danger", title: `${waitingConversations} conversation${waitingConversations === 1 ? "" : "s"} waiting for a person`, to: "/conversations", action: "Open inbox" } : null,
+    canSeeInventory && lowStock.length > 0 ? { key: "stock", icon: Boxes, tag: "Stock", tone: "warning", title: `${lowStock.length} product${lowStock.length === 1 ? "" : "s"} low or out of stock`, to: "/inventory", action: "Restock" } : null,
+    canSeeChannels && !channelLive ? { key: "channel", icon: MessageSquareText, tag: "Channel", tone: "neutral", title: "Customer messaging is not connected", to: "/settings/whatsapp", action: "Connect channel", required: true } : null,
+    canSeePayments && !paymentsLive ? { key: "payments", icon: CreditCard, tag: "Payments", tone: "neutral", title: "Payment collection is not ready", to: "/settings/payments", action: "Set up payments", required: true } : null,
+    canManageBot && !bot?.published_version_id ? { key: "assistant", icon: BotIcon, tag: "Assistant", tone: "neutral", title: "Review and publish the customer assistant", to: "/assistant", action: "Review assistant", required: true } : null,
+    canManageSetup && setupStatus && !setupStatus.ready ? { key: "setup", icon: ClipboardCheck, tag: "Setup", tone: "warning", title: "Complete required business readiness steps", to: "/setup", action: "Open checklist", required: true } : null,
+  ].filter((item): item is AttentionItem => Boolean(item));
+
   return (
     <Page
       title={org?.name ? `${org.name}` : "Overview"}
-      description="Orders, customer conversations and store operations."
+      eyebrow={todayLabel()}
+      description={description}
     >
       <Flash message={message} />
-      {canManageSetup && readiness.next && <section className="onboarding-readiness" data-tour-region="readiness" aria-label="Store readiness">
-        {readinessCollapsed ? <button type="button" onClick={() => setReadinessCollapsed(false)}>Setup: {readiness.done} of {readiness.total} complete</button> : <>
-          <h2>Get your store ready</h2><p>{readiness.done} of {readiness.total} complete · Next: {readiness.next.label}</p>
-          <progress aria-label="Store readiness" value={readiness.done} max={readiness.total} />
-          <div className="page-actions"><Link to={setupHref(readiness.next.key)}>{readiness.next.label}</Link><Link to="/setup">View setup checklist</Link><button type="button" onClick={() => setReadinessCollapsed(true)}>Minimise setup</button></div>
+      {canManageSetup && readiness.next && <section className={readinessCollapsed ? "onboarding-readiness setup-hero is-collapsed" : "onboarding-readiness setup-hero"} data-tour-region="readiness" aria-label="Store readiness">
+        {readinessCollapsed ? <button type="button" className="setup-hero__expand" onClick={() => setReadinessCollapsed(false)}>Setup: {readiness.done} of {readiness.total} complete</button> : <>
+          <div className="setup-hero__head">
+            <div>
+              <span className="setup-hero__eyebrow">Store setup · {readiness.done} of {readiness.total} complete</span>
+              <h2>Get your store ready</h2>
+              <p>Next: {readiness.next.label}. {readiness.next.description}</p>
+            </div>
+            <div className="setup-hero__actions">
+              <Link className="button primary" to={setupHref(readiness.next.key)}>{readiness.next.label}<ArrowRight size={16} aria-hidden="true" /></Link>
+              <Link className="button setup-hero__ghost" to="/setup">View setup checklist</Link>
+              <button type="button" className="setup-hero__link" onClick={() => setReadinessCollapsed(true)}>Minimise setup</button>
+            </div>
+          </div>
+          <progress className="sr-only" aria-label="Store readiness" value={readiness.done} max={readiness.total} />
+          <ol className="setup-hero__steps">
+            {steps.map((step, index) => (
+              <li key={step.key} className={step.complete ? "done" : step.key === readiness.next?.key ? "current" : undefined}>
+                <i aria-hidden="true" />
+                <Link to={setupHref(step.key)}><span aria-hidden="true">{step.complete ? <Check size={12} /> : index + 1}</span>{step.label}<em className="sr-only">{step.complete ? " (complete)" : " (to do)"}</em></Link>
+              </li>
+            ))}
+          </ol>
         </>}
       </section>}
-      <SectionHeader title="Today" />
-      <div className="metrics overview-summary">
-        <Metric label="Orders" value={todayOrders.length} to="/orders" hint={todayOrders.length === 0 ? "No orders yet" : "Created today"} />
-        <Metric label="Confirmed revenue" value={money(todayRevenue, currency)} to="/orders" hint="Excludes unpaid and cancelled" />
-        <Metric label="Pending fulfilment" value={awaitingPrep + awaitingFulfilment} to="/orders" hint="Paid through in transit" />
-        <Metric label="Unread messages" value={unreadConversations} to="/conversations" hint={waitingConversations ? `${waitingConversations} need a person` : "Inbox is covered"} />
-      </div>
+
+      <div className="overview-section-head"><h2>Today</h2></div>
+      <MetricStrip label="Today" className="overview-summary">
+        <Metric icon={ShoppingBag} tone="brand" label="Orders" value={todayOrders.length} to="/orders" dot={todayOrders.length ? "success" : "neutral"} hint={todayOrders.length === 0 ? "No orders yet" : "Created today"} />
+        <Metric icon={Wallet} tone="success" label="Confirmed revenue" prefix={revenue.symbol} value={revenue.amount} to="/orders" hint="Excludes unpaid and cancelled" />
+        <Metric icon={Truck} tone="info" label="Pending fulfilment" value={awaitingPrep + awaitingFulfilment} to="/orders" dot={awaitingPrep + awaitingFulfilment ? "warning" : "neutral"} hint="Paid through in transit" />
+        <Metric icon={MessageSquareText} tone="neutral" label="Unread messages" value={unreadConversations} to="/conversations" dot={waitingConversations ? "danger" : "success"} hint={waitingConversations ? `${waitingConversations} need a person` : "Inbox is covered"} />
+      </MetricStrip>
 
       <section data-tour-region="attention" className="attention-queue" aria-labelledby="attention-title">
-        <div>
-          <h2 id="attention-title">Needs attention</h2>
-          <p>Keep orders moving and customers informed.</p>
+        <div className="attention-queue__head">
+          <div>
+            <h2 id="attention-title">Needs attention{attention.length ? <span className="count-pill">{attention.length}</span> : null}</h2>
+            <p>Keep orders moving and customers informed.</p>
+          </div>
         </div>
-        {attentionClear ? (
+        {attentionClear || attention.length === 0 ? (
           <div className="attention-clear"><StatusDot live label="All caught up" /><span>New orders and conversations will appear here.</span></div>
         ) : (
-          <ul className="attention-links">
-            {awaitingPrep > 0 ? <li><Badge tone="warning">Orders</Badge><Link to="/orders">{awaitingPrep} paid order{awaitingPrep === 1 ? "" : "s"} waiting to be prepared</Link></li> : null}
-            {awaitingFulfilment > 0 ? <li><Badge tone="info">Fulfilment</Badge><Link to="/orders">{awaitingFulfilment} order{awaitingFulfilment === 1 ? "" : "s"} ready or in transit</Link></li> : null}
-            {awaitingPayment > 0 ? <li><Badge tone="neutral">Payment</Badge><Link to="/orders">{awaitingPayment} order{awaitingPayment === 1 ? " is" : "s are"} waiting for verified payment</Link></li> : null}
-            {waitingConversations > 0 ? <li><Badge tone="danger">Customers</Badge><Link to="/conversations">{waitingConversations} conversation{waitingConversations === 1 ? "" : "s"} waiting for a person</Link></li> : null}
-            {canSeeInventory && lowStock.length > 0 ? <li><Badge tone="warning">Stock</Badge><Link to="/inventory">{lowStock.length} product{lowStock.length === 1 ? "" : "s"} low or out of stock</Link></li> : null}
-            {canSeeChannels && !isUsableChannelStatus(customerChannel?.status) ? <li><Badge tone="neutral">Channel</Badge><Link to="/settings/whatsapp">Customer messaging is not connected</Link></li> : null}
-            {canSeePayments && !(paymentConfiguration?.enabled && paymentConfiguration.status === "active") ? <li><Badge tone="neutral">Payments</Badge><Link to="/settings/payments">Payment collection is not ready</Link></li> : null}
-            {canManageBot && !bot?.published_version_id ? <li><Badge tone="neutral">Assistant</Badge><Link to="/assistant">Review and publish the customer assistant</Link></li> : null}
-            {canManageSetup && setupStatus && !setupStatus.ready ? <li><Badge tone="warning">Setup</Badge><Link to="/setup">Complete required business readiness steps</Link></li> : null}
-          </ul>
+          <ol className="attention-links">
+            {attention.map((item, index) => (
+              <li key={item.key}>
+                <span className={`attention-tile tone-${item.tone}`} aria-hidden="true"><item.icon size={18} /><b>{index + 1}</b></span>
+                <span className="attention-text">
+                  <span className="attention-tags"><Badge tone={item.tone}>{item.tag}</Badge>{item.required ? <span className="required-tag"><AlertTriangle size={12} aria-hidden="true" />Required</span> : null}</span>
+                  <Link to={item.to}>{item.title}</Link>
+                </span>
+                <Link className={index === 0 ? "button primary attention-action" : "button attention-action"} to={item.to} tabIndex={-1} aria-hidden="true">{item.action}</Link>
+              </li>
+            ))}
+          </ol>
         )}
       </section>
-
 
       <div className="overview-operations">
         <Card className="recent-orders-panel">
           <div className="panel-heading"><div><h3>Recent orders</h3><p>Latest activity across permitted stores.</p></div><Link to="/orders">View all orders</Link></div>
           {orders.length === 0 ? (
-            <EmptyState title="No orders yet" body="Orders will appear here after customers complete checkout." action={canSeeBot ? <Link to="/assistant">Review your assistant</Link> : undefined} />
+            <EmptyState icon={ShoppingBag} title="No orders yet" body="Orders will appear here after customers complete checkout." action={canSeeBot ? <Link className="button" to="/assistant">Review your assistant</Link> : undefined} />
           ) : (
             <div className="table-wrap flush-table">
               <table>
@@ -235,22 +284,42 @@ export function OverviewPage() {
           )}
         </Card>
         <div className="operations-stack">
-          <Card>
+          <Card className="overview-card">
             <div className="panel-heading"><div><h3>Customer operations</h3><p>Current service readiness.</p></div></div>
+            <div className="ops-tiles">
+              {customerCount !== undefined && <Link to="/customers"><span>Customers</span><strong>{customerCount}</strong></Link>}
+              {storeCount !== undefined && <Link to="/stores"><span>Active stores</span><strong>{storeCount}</strong></Link>}
+              {hasPermission(user.role,"conversations.view") && <Link to="/conversations"><span>AI handling</span><strong>{conversations.filter(c => c.conversation_status === "ai_handling").length}</strong></Link>}
+            </div>
             <div className="health-list">
-              {customerCount !== undefined && <div><span>Customers</span><Link to="/customers">{customerCount}</Link></div>}
-              {storeCount !== undefined && <div><span>Active stores</span><Link to="/stores">{storeCount}</Link></div>}
-              {hasPermission(user.role,"conversations.view") && <div><span>AI handling</span><Link to="/conversations">{conversations.filter(c => c.conversation_status === "ai_handling").length}</Link></div>}
               <div><span>Human handoffs</span><StatusDot live={waitingConversations === 0} label={waitingConversations === 0 ? "Covered" : `${waitingConversations} need attention`} /></div>
-              {canSeeBot ? <div><span>Assistant</span><StatusDot live={Boolean(bot?.published_version_id) && bot?.status === "active"} label={bot?.published_version_id ? "Live" : "Not published"} /></div> : null}
-              {canSeeChannels ? <div><span>Customer channel</span><StatusDot live={isUsableChannelStatus(customerChannel?.status)} label={isUsableChannelStatus(customerChannel?.status) ? "Connected" : "Not connected"} /></div> : null}
+              {canSeeBot ? <div><span>Assistant</span><StatusDot live={assistantLive} label={bot?.published_version_id ? "Live" : "Not published"} /></div> : null}
+              {canSeeChannels ? <div><span>Customer channel</span><StatusDot live={channelLive} label={channelLive ? "Connected" : "Not connected"} /></div> : null}
               {canSeePayments ? <div><span>Payments</span><StatusDot live={Boolean(paymentConfiguration?.enabled)} label={paymentConfiguration?.enabled ? "Ready" : "Not ready"} /></div> : null}
             </div>
             <div className="page-actions compact-actions">{canSeeBot ? <Link className="button" to="/journeys">Flow Studio</Link> : null}<Link className="button" to="/conversations">Inbox</Link></div>
           </Card>
-
+          {canSeeBot ? <AssistantCard name={bot?.name} live={assistantLive} published={Boolean(bot?.published_version_id)} channel={canSeeChannels ? (channelLive ? `Customer channel ${customerChannel?.display_number || "connected"}` : "Customer channel not connected") : undefined} /> : null}
         </div>
       </div>
     </Page>
+  );
+}
+
+function AssistantCard({ name, live, published, channel, payments }: { name?: string; live: boolean; published: boolean; channel?: string; payments?: string }) {
+  return (
+    <article className="assistant-card">
+      <div className="assistant-card__head">
+        <span className="assistant-card__icon" aria-hidden="true"><BotIcon size={18} /></span>
+        <div><span>Your assistant</span><strong>{name || "No assistant yet"}</strong></div>
+      </div>
+      <StatusDot live={live} label={published ? (live ? "Live" : "Published, paused") : "Not published"} />
+      {channel ? <p>{channel}</p> : null}
+      {payments ? <p>{payments}</p> : null}
+      <div className="assistant-card__actions">
+        <Link className="button primary" to="/assistant">Open assistant</Link>
+        <Link to="/settings/whatsapp">Channels</Link>
+      </div>
+    </article>
   );
 }

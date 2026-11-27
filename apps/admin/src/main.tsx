@@ -6,6 +6,7 @@ import "./styles/global.css";
 
 import "../../../packages/shared/src/zidi-tokens.css";
 import "../../../packages/shared/src/access.css";
+import "./styles/zidi-brand.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

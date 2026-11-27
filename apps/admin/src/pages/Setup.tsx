@@ -169,16 +169,18 @@ export function SetupPage() {
 
   return (
     <Page
+      eyebrow="Store setup"
       title={ready ? "Ready for daily operations" : "Getting started"}
       description={ready ? "The required business, selling, and customer-service foundations are in place." : "Complete the required steps, then review the optional team and channel preparation."}
     >
       <Flash message={message} tone={messageTone} />
       {loading ? <LoadingState label="Checking business readiness" /> : null}
       {!loading && !setupStatus && message ? <div className="page-actions"><button type="button" onClick={() => setRetry((value) => value + 1)}>Try again</button></div> : null}
-      {!loading && setupStatus ? <Card>
+      {!loading && setupStatus ? <section className="setup-summary-hero" aria-label="Required setup">
         <div className="readiness-summary"><div><span className="section-kicker">Required setup</span><strong>{requiredDone} of {requiredItems.length || 7} ready</strong></div><Badge tone={ready ? "success" : "warning"}>{ready ? "Operationally ready" : `${requiredItems.length - requiredDone} remaining`}</Badge></div>
         <div className="progress-bar" role="progressbar" aria-label="Required setup completed" aria-valuemin={0} aria-valuemax={requiredItems.length} aria-valuenow={requiredDone}><span style={{ width: `${requiredItems.length ? (requiredDone / requiredItems.length) * 100 : 0}%` }} /></div>
-      </Card> : null}
+        <ol className="setup-summary-hero__steps" aria-hidden="true">{items.map((item) => <li key={item.key} className={item.complete ? "done" : undefined} title={item.label} />)}</ol>
+      </section> : null}
       <div data-tour-region="setup-checklist" className="readiness-grid">{!loading && setupStatus ? readinessSections.map((section) => {
         const sectionItems = items.filter((item) => item.group === section.key);
         if (sectionItems.length === 0) return null;
