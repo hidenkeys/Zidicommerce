@@ -64,8 +64,8 @@
 .z-access__card h1 {
   margin: 0;
   color: var(--z-ink);
-  font: 620 clamp(30px, 3vw, 40px)/1.1 var(--z-font);
-  letter-spacing: -0.055em;
+  font: 800 clamp(30px, 3vw, 40px)/1.08 var(--z-font);
+  letter-spacing: -0.04em;
 }
 .z-access__card p {
   margin: 0;
@@ -95,10 +95,13 @@
   padding: 0 12px;
   background: var(--z-surface);
   color: var(--z-ink);
-  border: 1px solid var(--z-line);
+  border: 1px solid var(--z-control-border);
   border-radius: var(--z-radius-control);
   font: 400 16px/1.4 var(--z-font);
   box-shadow: none;
+}
+.z-access__card input:focus-visible {
+  border-color: var(--z-focus);
 }
 .z-access__card :is(input, a, button):focus-visible {
   outline: 2px solid var(--z-focus);
@@ -109,14 +112,16 @@
   min-height: 46px;
   margin: 0;
   border: 0;
-  border-radius: var(--z-radius-control);
+  border-radius: 12px;
   background: var(--z-primary);
   color: var(--z-on-primary);
-  font: 600 14px/1.4 var(--z-font);
+  font: 700 15px/1.4 var(--z-font);
   cursor: pointer;
+  box-shadow: inset 0 -1px 0 rgba(23, 25, 26, 0.12);
+  transition: background-color var(--z-motion, 150ms) ease;
 }
 .z-access__card button[type="submit"]:hover:enabled {
-  opacity: 0.88;
+  background: var(--z-primary-hover);
 }
 .z-access__card button:disabled {
   opacity: 0.55;
@@ -168,10 +173,29 @@
   background: transparent;
   cursor: pointer;
 }
+/* Charcoal brand panel with the yellow geometry from zidihq.com. */
 .z-access__art {
-  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+  border-radius: 24px;
   min-height: 360px;
-  background: #a08564 url("./shop-workspace.webp") center 45% / cover no-repeat;
+  background:
+    radial-gradient(circle at 78% 18%, var(--z-brand) 0 64px, transparent 65px),
+    radial-gradient(circle at 18% 86%, transparent 0 92px, var(--z-brand) 93px 118px, transparent 119px),
+    linear-gradient(135deg, transparent 0 58%, var(--z-sidebar-card, #202422) 58% 100%),
+    var(--z-sidebar-bg, #17191A);
+}
+.z-access__art::before {
+  content: "";
+  position: absolute;
+  top: 38%;
+  left: 14%;
+  width: 46%;
+  height: 22%;
+  border-radius: 22px;
+  background: var(--z-brand);
+  transform: rotate(-8deg);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
 }
 .z-access__names {
   display: grid;

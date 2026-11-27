@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type HTMLAttributes, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import { AlertTriangle, Check, ChevronRight, LoaderCircle, Search, X, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Check, ChevronRight, Inbox, LoaderCircle, Search, X, type LucideIcon } from "lucide-react";
 
 export function Page({
   title,
@@ -9,9 +9,11 @@ export function Page({
   help,
   actions,
   breadcrumbs,
+  eyebrow,
   children,
 }: {
   title: string;
+  eyebrow?: string;
   description?: string;
   help?: string;
   actions?: ReactNode;
@@ -32,6 +34,7 @@ export function Page({
       ) : null}
       <div className="page-header">
         <div>
+          {eyebrow ? <span className="page-eyebrow">{eyebrow}</span> : null}
           <h1>{title}</h1>
           {description ? <p>{description}</p> : null}
           {help ? <p className="help-text">{help}</p> : null}
@@ -59,13 +62,16 @@ export function EmptyState({
   title,
   body,
   action,
+  icon: Icon = Inbox,
 }: {
   title: string;
   body?: string;
   action?: ReactNode;
+  icon?: LucideIcon;
 }) {
   return (
     <div className="empty-state">
+      <span className="empty-state__art" aria-hidden="true"><Icon size={22} /><i /></span>
       <strong>{title}</strong>
       {body ? <span>{body}</span> : null}
       {action}
@@ -267,22 +273,35 @@ export function FilterBar({ children }: { children: ReactNode }) {
   return <div className="filter-bar" role="search">{children}</div>;
 }
 
+export type MetricTone = "brand" | "success" | "info" | "neutral" | "warning";
+
 export function Metric({
   label,
   value,
   hint,
   to,
+  icon: Icon,
+  tone = "neutral",
+  prefix,
+  dot,
 }: {
   label: string;
   value: ReactNode;
   hint?: string;
   to?: string;
+  icon?: LucideIcon;
+  tone?: MetricTone;
+  prefix?: string;
+  dot?: "success" | "warning" | "danger" | "info" | "neutral";
 }) {
   const body = (
     <>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      {hint ? <p>{hint}</p> : null}
+      <span className="metric-card__label">
+        {Icon ? <span className={`metric-card__icon tone-${tone}`} aria-hidden="true"><Icon size={16} /></span> : null}
+        {label}
+      </span>
+      <strong>{prefix ? <small className="metric-card__prefix">{prefix}</small> : null}{value}</strong>
+      {hint ? <p>{dot ? <i className={`metric-card__dot tone-${dot}`} aria-hidden="true" /> : null}{hint}{to ? <ArrowUpRight className="metric-card__go" size={14} aria-hidden="true" /> : null}</p> : null}
     </>
   );
   if (to) {
@@ -293,6 +312,11 @@ export function Metric({
     );
   }
   return <article className="metric-card">{body}</article>;
+}
+
+/** Connected stat cells: four across, two-by-two on medium widths, one column on phones. */
+export function MetricStrip({ children, label, className = "" }: { children: ReactNode; label?: string; className?: string }) {
+  return <div className={`metric-strip ${className}`.trim()} role={label ? "group" : undefined} aria-label={label}>{children}</div>;
 }
 
 export function FormGrid({ children, onSubmit, title }: { children: ReactNode; onSubmit?: (event: FormEvent) => void | Promise<void>; title?: string }) {

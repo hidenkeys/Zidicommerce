@@ -107,9 +107,7 @@ export function OrdersPage() {
     <Page title="Orders" description="Manage payment, preparation and collection in one place.">
       <Flash message={message} />
       <Flash message={flash} tone="success" />
-      <FilterBar>
-        <SearchField value={query} onChange={setQuery} placeholder="Search order, name, or phone" />
-      </FilterBar>
+      <div className="list-toolbar">
       <Tabs label="Order status" value={status} onChange={setStatus} items={[
         { value: "all", label: "All", count: rows.length },
         { value: "attention", label: "Needs action", count: rows.filter((order) => ["paid", "processing", "ready", "out_for_delivery"].includes(String(order.status))).length },
@@ -117,12 +115,16 @@ export function OrdersPage() {
         { value: "completed", label: "Completed" },
         { value: "cancelled", label: "Cancelled" },
       ]} />
+      <FilterBar>
+        <SearchField value={query} onChange={setQuery} placeholder="Search order, name, or phone" />
+      </FilterBar>
+      </div>
       <div className="orders-workspace">
-        <Card className="orders-register">
+        <Card className="orders-register table-card">
           {loading ? <LoadingState label="Loading orders" /> : filtered.length === 0 ? (
             <EmptyState title={rows.length ? "No matching orders" : "No orders yet"} body={rows.length ? "Try another search or status." : "Add products to your catalogue so customers can place their first order."} action={!rows.length && hasPermission(user.role, "catalogue.view") ? <Link className="button" to="/catalogue">Open catalogue</Link> : undefined} />
           ) : (
-            <div className="table-wrap" style={{ border: 0, margin: 0 }}>
+            <div className="table-wrap">
               <table className="order-list-table">
                 <thead>
                   <tr>
@@ -140,9 +142,9 @@ export function OrdersPage() {
                     return (
                       <tr key={String(order.id)} className={selectedID === order.id ? "selected-row click-row" : "click-row"} onClick={() => setSelectedID(String(order.id))}>
                         <td><button type="button" className="table-record-link" aria-label={`Open order ${order.order_number}`}>{String(order.order_number)}</button></td>
-                        <td>{String(person.name || person.phone || "Customer")}</td>
+                        <td><span className="person-cell"><span className="person-avatar" aria-hidden="true">{String(person.name || person.phone || "C").trim().slice(0, 1).toUpperCase()}</span>{String(person.name || person.phone || "Customer")}</span></td>
                         <td><Badge tone={statusTone(String(order.status))}>{humanStatus(order.status)}</Badge></td>
-                        <td>{money(order.total_minor, String(order.currency ?? "NGN"))}</td>
+                        <td className="num-cell">{money(order.total_minor, String(order.currency ?? "NGN"))}</td>
                         <td>{String(((order.store ?? {}) as Row).name || "—")}</td>
                         <td>{relativeTime(order.created_at)}</td>
                       </tr>

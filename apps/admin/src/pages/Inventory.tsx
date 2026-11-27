@@ -1,9 +1,9 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { PackagePlus } from "lucide-react";
+import { PackageCheck, PackagePlus, PackageX, TriangleAlert } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "../api/client";
 import { useAuth } from "../auth";
-import { Badge, Button, Card, ConfirmButton, Drawer, EmptyState, FilterBar, Flash, FormGrid, LoadingState, Metric, Page, SearchField, Tabs } from "../components/ui";
+import { Badge, Button, Card, ConfirmButton, Drawer, EmptyState, FilterBar, Flash, FormGrid, LoadingState, Metric, MetricStrip, Page, SearchField, Tabs } from "../components/ui";
 import { type Row } from "../lib/format";
 import { hasPermission } from "../lib/permissions";
 
@@ -110,11 +110,11 @@ export function InventoryPage() {
     >
       <Flash message={message} />
       <Flash message={flash} tone="success" />
-      <div className="metrics overview-summary">
-        <Metric label="Healthy" value={healthyCount} hint="Above low-stock level" />
-        <Metric label="Low stock" value={lowCount} hint="Restock soon" />
-        <Metric label="Out of stock" value={outCount} hint="Needs attention" />
-      </div>
+      <MetricStrip label="Stock health" className="metric-strip--three">
+        <Metric icon={PackageCheck} tone="success" label="Healthy" value={healthyCount} dot="success" hint="Above low-stock level" />
+        <Metric icon={TriangleAlert} tone="warning" label="Low stock" value={lowCount} dot={lowCount ? "warning" : "neutral"} hint="Restock soon" />
+        <Metric icon={PackageX} tone="neutral" label="Out of stock" value={outCount} dot={outCount ? "danger" : "neutral"} hint="Needs attention" />
+      </MetricStrip>
       <Tabs
         value={statusFilter}
         onChange={setStatusFilter}
@@ -133,11 +133,11 @@ export function InventoryPage() {
           {stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}
         </select>
       </FilterBar>
-      <Card>
+      <Card className="table-card">
         {loading ? <LoadingState label="Loading inventory" /> : filtered.length === 0 ? (
           <EmptyState title={rows.length ? "No matching stock" : "No stock recorded"} body={rows.length ? "Try another product, store or status." : products.length && stores.length ? "Set opening quantities for the products at your store." : "Add products and a store before setting opening quantities."} action={!rows.length ? products.length && stores.length && canAdjustInventory ? <Button onClick={() => setCreating(true)}>Set stock</Button> : !products.length && hasPermission(user.role, "catalogue.view") ? <Link className="button" to="/catalogue">Open catalogue</Link> : !stores.length && hasPermission(user.role, "stores.view") ? <Link className="button" to="/stores">Open stores</Link> : undefined : undefined} />
         ) : (
-          <div className="table-wrap" style={{ border: 0, margin: 0 }}>
+          <div className="table-wrap">
             <table>
               <thead>
                 <tr>
@@ -163,7 +163,7 @@ export function InventoryPage() {
                       <td>{String(product.name || variant.name || "Product")}{variant.name && variant.name !== "Regular" ? ` · ${variant.name}` : ""}</td>
                       <td>{store?.name || "Store"}</td>
                       <td className={out ? "stock-out" : low ? "stock-low" : undefined}>
-                        {available} {out ? <Badge tone="danger">Out of stock</Badge> : low ? <Badge tone="warning">Low stock</Badge> : null}
+                        <span className="stock-cell"><strong>{available}</strong>{out ? <Badge tone="danger">Out of stock</Badge> : low ? <Badge tone="warning">Low stock</Badge> : <Badge tone="success">In stock</Badge>}</span>
                       </td>
                       <td>{Number(row.reserved ?? 0)}</td>
                       <td>{Number(row.on_hand ?? 0)}</td>

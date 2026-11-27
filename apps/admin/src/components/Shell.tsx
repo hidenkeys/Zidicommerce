@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
-import { PanelLeft, Search, Bell, Bot, Boxes, Building2, ClipboardCheck, CreditCard, FileClock, Home, LifeBuoy, LogOut, Menu, MessageSquareText, PackageSearch, Settings, ShieldCheck, ShoppingBag, Sparkles, Store, Users, X, type LucideIcon } from "lucide-react";
+import { ArrowRight, PanelLeft, Search, Bell, Bot, Boxes, Building2, ClipboardCheck, CreditCard, FileClock, Home, LifeBuoy, LogOut, Menu, MessageSquareText, PackageSearch, Settings, ShieldCheck, ShoppingBag, Sparkles, Store, Users, X, type LucideIcon } from "lucide-react";
 import { apiGet } from "../api/client";
 import { hasOrganization, useAuth } from "../auth";
 import { roleLabel } from "../lib/format";
-import { hasPermission, type Permission } from "../lib/permissions";
+import { hasPermission, isOrganizationAdmin, type Permission } from "../lib/permissions";
+import { checklistProgress, type SetupStatus } from "../lib/readiness";
 import { ZidiCommerceLogo } from "./brand/ZidiCommerceLogo";
 import { routeAliases } from "../lib/route-aliases";
 import { IconButton, Modal } from "./ui";
@@ -172,6 +173,20 @@ export function Shell() {
     }).catch(() => undefined).finally(() => setOrgLoaded(user.organization_id));
   }, [user.organization_id]);
   useEffect(() => setMobileOpen(false), [location.pathname]);
+  const [setup,setSetup] = useState<SetupStatus | null>(null);
+  const canSeeSetup = organizationReady && isOrganizationAdmin(user.role);
+  const onHome = activePath === "/" || activePath === "/setup";
+  useEffect(() => {
+    if (!canSeeSetup) { setSetup(null); return; }
+    let current = true;
+    apiGet<SetupStatus>("/bot-setup/status").then(r => { if (current) setSetup(r.data); }).catch(() => undefined);
+    return () => { current = false; };
+  }, [canSeeSetup, user.organization_id, onHome]);
+  useEffect(() => {
+    const open = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setQuery(""); setPanel("find"); } };
+    window.addEventListener("keydown", open);
+    return () => window.removeEventListener("keydown", open);
+  }, []);
   const visibleGroups = (organizationReady ? groups : [])
     .filter((group) => !group.roles || group.roles.includes(user.role))
     .filter((group) => !fieldService || group.label !== "Commerce")
@@ -182,15 +197,27 @@ export function Shell() {
   }
   const steps = availableTourSteps(visibleGroups.flatMap(group => group.items.map(item => item.path)));
   const meta = pageMeta(location.pathname);
+  const progress = checklistProgress(setup);
+  const showProgress = progress.total > 0 && progress.done < progress.total;
+  const workspaceName = organizationName || (organizationReady ? "Merchant workspace" : "Workspace setup");
+  const initials = workspaceName.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]).join("").toUpperCase() || "Z";
+  const accountInitial = String(user.email || roleLabel(user.role)).slice(0, 1).toUpperCase();
 
   return (
     <div className={compact ? "app-shell compact-sidebar" : "app-shell"}>
       {mobileOpen ? <button className="sidebar-scrim" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} /> : null}
       <aside className={mobileOpen ? "sidebar open" : "sidebar"} aria-label="Primary navigation">
         <div className="brand">
-          <ZidiCommerceLogo sidebar tone="dark" subtitle={organizationName || (organizationReady ? "Merchant workspace" : "Workspace setup")} />
+          <ZidiCommerceLogo sidebar tone="light" />
           <IconButton ref={closeNav} className="sidebar-close" label="Close navigation" icon={X} onClick={() => setMobileOpen(false)} />
         </div>
+        <div className="sidebar-workspace" title={workspaceName}>
+          <span className="sidebar-workspace__tile" aria-hidden="true">{initials}</span>
+          <span className="sidebar-workspace__text"><strong>{workspaceName}</strong><small>{roleLabel(user.role)}</small></span>
+        </div>
+        <button type="button" className="sidebar-search" title="Search pages" onClick={() => { setQuery(""); setPanel("find"); }}>
+          <Search size={16} aria-hidden="true" /><span>Search pages</span><kbd aria-hidden="true">⌘K</kbd>
+        </button>
 
         <nav className="nav-groups">
           {visibleGroups.map((group) => (
@@ -204,21 +231,30 @@ export function Shell() {
             </section>
           ))}
         </nav>
+        {showProgress ? <Link to="/setup" className="sidebar-progress" title={`Setup: ${progress.done} of ${progress.total} done`}>
+          <span className="sidebar-progress__head"><strong>Finish setup</strong><span>{progress.done}/{progress.total}</span></span>
+          <span className="sidebar-progress__bar" aria-hidden="true">{Array.from({ length: progress.total }, (_, i) => <i key={i} className={i < progress.done ? "done" : undefined} />)}</span>
+          {progress.next ? <span className="sidebar-progress__next">Next: {progress.next.label}<ArrowRight size={14} aria-hidden="true" /></span> : null}
+        </Link> : null}
+        <div className="sidebar-account" title={user.email}>
+          <span className="sidebar-account__avatar" aria-hidden="true">{accountInitial}</span>
+          <span className="sidebar-account__text"><strong>{user.email}</strong><small>{roleLabel(user.role)}</small></span>
+        </div>
       </aside>
 
       <main className="main-panel">
         <header className="topbar">
           <div className="topbar-context">
             <IconButton className="desktop-nav-toggle" label={compact ? "Expand navigation" : "Collapse navigation"} icon={PanelLeft} onClick={() => {localStorage.setItem("zidi.sidebar.compact",compact ? "no":"yes");setCompact(!compact);}} /><IconButton ref={menuButton} className="mobile-menu" label="Open navigation" icon={Menu} onClick={() => setMobileOpen(true)} />
-            <div>
-            <span className="topbar-group">{meta.eyebrow}</span>
+            <div className="topbar-crumbs">
+              <span className="topbar-group">{meta.eyebrow}</span>
               <strong>{meta.title}</strong>
             </div>
           </div>
           <div className="topbar-actions">
             <IconButton label="Find a page" icon={Search} onClick={()=>{setQuery("");setPanel("find");}} />
             {hasPermission(user.role,"conversations.view") && <IconButton label="Conversation activity" icon={Bell} onClick={()=>setPanel("notifications")} />}
-            <button className="account-button" onClick={()=>setPanel("account")} aria-label="Open account menu">{String(user.email || roleLabel(user.role)).slice(0,1).toUpperCase()}</button>
+            <button className="account-button" onClick={()=>setPanel("account")} aria-label="Open account menu">{accountInitial}</button>
           </div>
         </header>
         <div data-tour-region={tourSteps.find(step => step.path === activePath)?.id}><Outlet /></div>
